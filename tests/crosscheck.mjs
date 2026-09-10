@@ -1,8 +1,13 @@
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// 按脚本自身位置解析，保证从仓库根目录或 tests/ 目录跑都一样
+const HERE = dirname(fileURLToPath(import.meta.url));
 import { replay, ma, signal, nextTier, orderAmount, triggers, WEIGHTS }
   from '../shared/strategy.js';
 
-const cases = JSON.parse(readFileSync('fixtures.json', 'utf8'));
+const cases = JSON.parse(readFileSync(join(HERE, 'fixtures.json'), 'utf8'));
 let allOk = true;
 console.log('=== JS 核心 vs Python 引擎 对账 ===');
 for (const c of cases) {
