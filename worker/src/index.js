@@ -12,7 +12,7 @@
 
 import {
   ma, signal, nextTier, replay, plannedOrder, shares, triggers, auditLedger, beijingDate, nextTradingDay, validateState,
-  dayLabel, NO_EXEC_DATE,
+  dayLabel, NO_EXEC_DATE, CLOSE_TIP,
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
 
@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '3753203369';
+const BUILD = '581c1e65aa';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -674,7 +674,7 @@ export function execWording(today, execDay) {
   const L = dayLabel(execDay, today);
   return {
     short: `${L.label}收盘执行`,
-    long: `执行日 ${execDay}（${L.wd}）收盘前`
+    long: `执行日 ${execDay}（${L.wd}）收盘成交`
       + (L.diff > 1 ? `　·　距出信号 ${L.diff} 天，中间的休市日不用操作` : ''),
   };
 }
@@ -703,6 +703,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       title: `${isBuy ? '🔴 买入' : '🟢 卖出'}第 ${share} 份　${w.short}`,
       body: `档位 ${pending.tierFrom}/5 → ${pending.tierTo}/5，目标仓位 ${WEIGHTS[pending.tierTo] * 100}%${est}`
         + `\n${w.long}`
+        + `\n${CLOSE_TIP}`
         + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${doneLine}${warn}`,
       level: 'timeSensitive',
       group: '红利MA30·操作',
@@ -729,8 +730,8 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       ? `✅ ${td.md}已成交　${newState.tier}/5 档`
       : `红利MA30 · ${td.md}无操作　${newState.tier}/5 档`;
     const nextLine = nd
-      ? `\n${nd.label}收盘前无需操作`
-      : `\n${NO_EXEC_DATE}收盘前无需操作`;
+      ? `\n${nd.label}无需操作`
+      : `\n${NO_EXEC_DATE}无需操作`;
     await bark(env, {
       title,
       body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${doneLine}${warn}`,
@@ -798,9 +799,10 @@ async function remind(env) {
   const share = isBuy ? p.tierTo : p.tierFrom;
   const L = dayLabel(today, today);
   await bark(env, {
-    title: `⏰ ${L.md}收盘前${isBuy ? '买入' : '卖出'}第 ${share} 份`,
+    title: `⏰ ${L.md}收盘${isBuy ? '买入' : '卖出'}第 ${share} 份`,
     body: `档位 ${p.tierFrom}/5 → ${p.tierTo}/5，目标仓位 ${WEIGHTS[p.tierTo] * 100}%${est}`
-      + `\n信号出在 ${p.signalDate}，执行日就是 ${today}（${L.wd}），请在收盘前完成。`,
+      + `\n信号出在 ${p.signalDate}，执行日就是 ${today}（${L.wd}）。`
+      + `\n${CLOSE_TIP}`,
     level: 'timeSensitive',
     group: '红利MA30·操作',
   });

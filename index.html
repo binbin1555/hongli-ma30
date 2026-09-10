@@ -295,9 +295,9 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = 'd1df53d711';
+const CORE_VERSION = 'b2d49743f1';
 const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries, validateState,
-        nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, WEIGHTS, COMMISSION }
+        nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, CLOSE_TIP, WEIGHTS, COMMISSION }
   = await import(`./shared/strategy.js?v=${CORE_VERSION}`);
 
 const $ = (id) => document.getElementById(id);
@@ -328,15 +328,17 @@ function execInfo(signalDate) {
   // 日期整段裹上 .nb：否则手机上会从「9 月 11 日（今天，周」/「五）」中间断开，
   // 一个被劈成两半的日期比没有日期还难认。
   // lead/kick 是纯文本（要喂给 textContent），leadHtml 才带标签。
+  // 说的是「收盘成交」，不是「收盘前随便什么时候」——
+  // 账本按当日收盘价记账，上午十点买进来就和账本对不上了（见 CLOSE_TIP）。
   if (!day) {
     return { day: null, when: 'unknown', L: null,
-      lead: `${NO_EXEC_DATE}收盘前`, leadHtml: `${NO_EXEC_DATE}收盘前`, kick: `${NO_EXEC_DATE}收盘执行` };
+      lead: `${NO_EXEC_DATE}收盘`, leadHtml: `${NO_EXEC_DATE}收盘`, kick: `${NO_EXEC_DATE}收盘执行` };
   }
   const L = dayLabel(day, today);
   const nb = `<span class="nb">${L.label}</span>`;
-  if (day === today) return { day, when: 'today', L, lead: `${L.label}收盘前`, leadHtml: `${nb}收盘前`, kick: `${L.label}收盘前执行` };
-  if (day > today) return { day, when: 'future', L, lead: `${L.label}收盘前`, leadHtml: `${nb}收盘前`, kick: `${L.label}收盘执行` };
-  return { day, when: 'past', L, lead: `本应在 ${L.label}收盘前`, leadHtml: `本应在 ${nb}收盘前`, kick: `${L.label}收盘执行 · 已过期，请尽快补做` };
+  if (day === today) return { day, when: 'today', L, lead: `${L.label}收盘`, leadHtml: `${nb}收盘`, kick: `${L.label}收盘执行` };
+  if (day > today) return { day, when: 'future', L, lead: `${L.label}收盘`, leadHtml: `${nb}收盘`, kick: `${L.label}收盘执行` };
+  return { day, when: 'past', L, lead: `本应在 ${L.label}收盘`, leadHtml: `本应在 ${nb}收盘`, kick: `${L.label}收盘执行 · 已过期，请尽快补做` };
 }
 
 const applyTheme = (t) => {
@@ -518,11 +520,12 @@ function renderNext(behind) {
     $('nextSub').innerHTML = `档位 <b>${mv.from}/5</b> → <b>${mv.to}/5</b>，目标仓位 ${WEIGHTS[mv.to] * 100}%`
       + est + realLine
       + `<br>信号日 ${st.pending.signalDate}`
-      + (ex.when === 'today' ? `　·　<b style="color:var(--up)"><span class="nb">${ex.L.md}</span>收盘前必须完成</b>`
+      + (ex.when === 'today' ? `　·　<b style="color:var(--up)"><span class="nb">${ex.L.md}</span>尾盘必须完成</b>`
         : ex.when === 'past' ? `　·　执行日 ${ex.day}（${ex.L.wd}）已过，账本当日 21:00 已按规则记上，实盘请尽快补做`
         : ex.day ? `　·　执行日 ${ex.day}（${ex.L.wd}）`
           + (ex.L.diff > 1 ? `，距今 ${ex.L.diff} 天，中间的休市日不用操作` : '')
-          : '　·　交易日历暂时取不到，给不出执行日期');
+          : '　·　交易日历暂时取不到，给不出执行日期')
+      + `<br>${CLOSE_TIP}`;
   } else if (mv.kind === 'buy') {
     card.classList.add('buy');
     if (mv.need <= 0) {
@@ -534,7 +537,7 @@ function renderNext(behind) {
       $('nextLine').innerHTML = `距离下一次买入，还需中证红利<b style="color:var(--up)">跌 ${mv.need.toFixed(2)}%</b>`;
       $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　买入第 <b>${tier + 1}</b> 份（仓位 ${WEIGHTS[tier + 1] * 100}%）`
         + otherSide('buy', tier, i)
-        + `<br>触发当日 21:00 挂单，再下一个交易日收盘执行 —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
+        + `<br>触发当日 21:00 挂单，再下一个交易日<b>收盘成交</b> —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
         + `<br>百分比按 ${st.asof}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
     }
   } else if (mv.kind === 'sell') {
@@ -548,7 +551,7 @@ function renderNext(behind) {
       $('nextLine').innerHTML = `距离下一次卖出，还需中证红利<b style="color:var(--dn)">涨 ${mv.need.toFixed(2)}%</b>`;
       $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　卖出第 <b>${tier}</b> 份（仓位降到 ${WEIGHTS[tier - 1] * 100}%）`
         + otherSide('sell', tier, i)
-        + `<br>触发当日 21:00 挂单，再下一个交易日收盘执行 —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
+        + `<br>触发当日 21:00 挂单，再下一个交易日<b>收盘成交</b> —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
         + `<br>百分比按 ${st.asof}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
     }
   } else {
@@ -776,12 +779,12 @@ function renderTiming(behind) {
     tb.innerHTML = `✓ <b>这就是本次要执行的金额</b>　信号出在 ${p.signalDate}，`
       + (ex.when === 'past'
         ? `原定 <span class="nb">${ex.L.label}</span>收盘执行，时点已过`
-        : `需在 <b class="nb">${ex.day ? ex.L.label : NO_EXEC_DATE}</b>收盘前下单`)
-      + `（档位 ${p.tierFrom}/5 → ${p.tierTo}/5）。`;
+        : `需在 <b class="nb">${ex.day ? ex.L.label : NO_EXEC_DATE}</b>收盘成交`)
+      + `（档位 ${p.tierFrom}/5 → ${p.tierTo}/5）。${CLOSE_TIP}。`;
   } else {
     tb.className = 'timingbox';
     tb.innerHTML = `目前<b>尚未触发</b>，这是下次触发时的预估金额，${dl(bjToday())}不需要下单。`
-      + `真正触发时这里会变成蓝色，注明「本次要执行的金额」，并写出该在哪一天收盘前下单。`;
+      + `真正触发时这里会变成蓝色，注明「本次要执行的金额」，并写出该在哪一天收盘成交。`;
   }
 
 }

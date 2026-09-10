@@ -34,6 +34,13 @@ const bad = (msg) => { fails++; console.log(`  ✗ ${msg}`); };
  * 前者管已经跑到的分支，后者管那些平时跑不到的告警。
  * ================================================================ */
 const RELATIVE = /今天|今日|明天|明日|昨天|昨日|当晚|次日|下一?个交易日/g;
+/*
+ * 「收盘前」和「收盘」不是一回事。
+ * 说明文档 3.4 写的是「T+1 日收盘执行」，7 节「成交价用当日收盘价」——
+ * 账本按当日收盘价记账。写成「收盘前下单」，字面上允许你上午十点就买，
+ * 那天振幅 2% 你就和账本差 2%，这笔误差回测里根本没算过。
+ */
+const VAGUE_CLOSE = /收盘前(下单|成交|执行|完成|买入|卖出|必须)/g;
 const HAS_DATE = /\d+\s*月\s*\d+\s*日|\d{4}-\d{2}-\d{2}/;
 /** 括号里紧跟在日期后面的相对词是允许的：那是定位，不是信息 */
 const stripParen = (t) => t.replace(/(\d+\s*月\s*\d+\s*日)（[^）]*）/g, '$1');
@@ -244,6 +251,10 @@ for (const [name, over] of SCEN) {
   }
   // 每一处相对时间词都必须挨着具体日期
   for (const o of relativeOffenders(all)) bad(`${name}：相对时间词旁边没有日期 —— ${o}`);
+  // 执行时点必须说「收盘」，不能松成「收盘前」
+  VAGUE_CLOSE.lastIndex = 0;
+  const vague = all.match(VAGUE_CLOSE);
+  if (vague) bad(`${name}：写成了「${vague.join('/')}」——账本按收盘价记账，必须说「收盘成交」`);
   // 落后/超前的方向必须和实盘-账本的高低一致
   if (behind && /需一次性(买入|卖出)/.test(line)) {
     const saysBuy = /需一次性买入/.test(line);
@@ -277,6 +288,8 @@ for (const [sig, exec] of cases) {
   for (const o of relativeOffenders(`${w.short}。${w.long}`)) {
     bad(`${sig} → ${exec}：相对时间词旁边没有日期 —— ${o}`);
   }
+  VAGUE_CLOSE.lastIndex = 0;
+  if (`${w.short}${w.long}`.match(VAGUE_CLOSE)) bad(`${sig} → ${exec}：执行时点写成了「收盘前」`);
   // 规矩三：只有执行日确实是第二天时，括注里才准出现「明天」
   const isTomorrow = exec === nextCalDay(sig);
   if (w.short.includes('明天') !== isTomorrow) {
@@ -316,6 +329,12 @@ console.log('\n================ 源码里的写死相对词 ================\n')
       const excused = ln.includes('${') || ln.includes('具体日期') || HAS_DATE.test(ln)
         || ln.includes('NO_EXEC_DATE') || ln.includes('RELATIVE');
       if (!excused) bad(`${f}:${k + 1} 写死了相对时间词「${hit.join('/')}」 —— ${ln.trim().slice(0, 72)}`);
+    });
+    lines.forEach((raw, k) => {
+      const ln = stripComment(raw);
+      VAGUE_CLOSE.lastIndex = 0;
+      const v = ln.match(VAGUE_CLOSE);
+      if (v) bad(`${f}:${k + 1} 执行时点写成了「${v.join('/')}」 —— ${ln.trim().slice(0, 72)}`);
     });
   }
   console.log(`  扫过 ${scanned} 行含相对时间词的代码（注释已排除）`);
