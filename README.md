@@ -153,8 +153,9 @@ Worker 会自动向 GitHub 查询默认分支，`main` 还是 `master` 都不用
 ## 回归测试
 
 ```bash
-npm test            # 回归测试（含文案测试）
+npm test            # 回归测试（含文案与计算器测试）
 npm run wording     # 只跑文案：打印每种状态的真实句子
+npm run calc        # 只跑计算器：T 日／T+1 日／T+N 日的时间线
 npm run sweep       # 状态空间穷举（2808 组）
 npm run check:sources   # 三个外部数据源体检
 npm run check:deploy -- <worker 地址>   # 线上跑的是不是本地这一版
@@ -208,6 +209,15 @@ npm run check:deploy -- <worker 地址>   # 线上跑的是不是本地这一版
 措辞统一由 `shared/strategy.js` 的 `dayLabel(日期, 北京今天)` 生成，
 推送和面板共用同一个函数 —— 各写各的迟早会分家。
 `npm run wording` 会同时扫渲染出的真句子和源码里的字符串字面量，违规就报错。
+
+`npm run calc` 回答一个具体问题：**不管我是 T 日、T+1 日还是 T+N 日打开面板输入实际金额，
+它给的提示对不对**。六种时点各跑一遍，金额的预期值不用 `calcCatchUp` 算，
+而是按说明文档 3.5 的目标市值法**手写一遍公式**独立验算 ——
+拿被测代码去验被测代码，等于什么都没验。
+
+同时断言措辞：没到执行日不许说成「你欠着操作」（挂单还没到期，那是下一步要做的事，
+不是漏做的事）；有挂单时这个板块里必须看得见执行日期和尾盘提示
+（你正是在这里算金额、照着它下单的）。
 
 `npm run wording` 跑的是 `index.html` 里的真代码 —— 把 `<script type="module">`
 整段抠出来配 DOM 假件后 import 进来，穷举 15 种状态，打印「下一次操作」卡片、

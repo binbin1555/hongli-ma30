@@ -2,21 +2,17 @@
  * 文案回归测试：把「下一次操作」卡片、触发横幅、Bark 推送的每一种状态都跑一遍，
  * 打印出真实生成的句子，并对「会被误解」的写法直接断言拦截。
  *
- * 这个文件跑的是 index.html 里的真代码 —— 把 <script type="module"> 整段抠出来，
- * 配一套极简 DOM 假件后 import 进来，再开一个后门读写模块内部的 S。
- * 不是复刻一份逻辑，所以以后改了渲染函数这里会跟着变，不会悄悄失效。
+ * 跑的是 index.html 里的真代码（测试台见 harness.mjs），不是复刻一份逻辑 ——
+ * 以后改了渲染函数这里会跟着变，不会悄悄失效。
  *
  * 造场景时账本必须和档位对得上（tier 3 就得真有 0→1→2→3 三笔），
  * 否则重放出来的持仓和档位矛盾，测出来的方向也是假的。
  *
  * 用法：npm run wording（npm test 里也会跑）
  */
-import { readFileSync, writeFileSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 
 let fails = 0;
 const bad = (msg) => { fails++; console.log(`  ✗ ${msg}`); };
@@ -65,131 +61,14 @@ function relativeOffenders(text) {
   return out;
 }
 
-/* ---------------- 极简 DOM 假件 ---------------- */
-class El {
-  constructor(id = '') {
-    this.id = id; this._t = ''; this._h = '';
-    this.dataset = {}; this.style = {}; this.clientWidth = 880;
-    this.classes = new Set();
-    this.classList = {
-      add: (...c) => c.forEach((x) => this.classes.add(x)),
-      remove: (...c) => c.forEach((x) => this.classes.delete(x)),
-      toggle: (c, on) => (on ? this.classes.add(c) : this.classes.delete(c)),
-      contains: (c) => this.classes.has(c),
-    };
-  }
-  set textContent(v) { this._t = String(v); this._h = ''; }
-  get textContent() { return this._h ? this._h.replace(/<br\s*\/?>/g, ' ⏎ ').replace(/<[^>]*>/g, '') : this._t; }
-  set innerHTML(v) { this._h = String(v); this._t = ''; }
-  get innerHTML() { return this._h; }
-  setAttribute(k, v) { this[k] = v; }
-  getAttribute(k) { return this[k]; }
-  appendChild() {}
-  insertAdjacentHTML() {}
-  querySelectorAll() { return []; }
-  addEventListener() {}
-  getBoundingClientRect() { return { left: 0, top: 0, width: 880, height: 300 }; }
-}
-const els = new Map();
-const el = (id) => { if (!els.has(id)) els.set(id, new El(id)); return els.get(id); };
-const store = new Map();
+/* ---------------- 共享测试台 ---------------- */
+// DOM 假件、抠模块、造场景的工具都在 harness.mjs 里，和 calculator.mjs 共用。
+// 别在这里再写一份 —— 两份迟早分家（calc 曾经因此一直拿 0 在算）。
+import { H, el, store, ROOT, CAL, TODAY, CORE, put, at, pend, SIG } from './harness.mjs';
 
-globalThis.document = {
-  getElementById: el,
-  querySelector: () => el('__q'),
-  createElement: () => new El(),
-  documentElement: { setAttribute() {}, removeAttribute() {} },
-  body: new El('body'),
-  addEventListener() {},
-};
-globalThis.window = { addEventListener() {}, devicePixelRatio: 1 };
-globalThis.getComputedStyle = () => ({ getPropertyValue: () => '#000' });
-globalThis.localStorage = {
-  getItem: (k) => (store.has(k) ? store.get(k) : null),
-  setItem: (k, v) => store.set(k, String(v)),
-};
-globalThis.matchMedia = () => ({ matches: false, addEventListener() {} });
-globalThis.fetch = async (u) => {
-  const rel = String(u).split('?')[0].replace(/^\.\//, '');
-  try {
-    const txt = readFileSync(join(ROOT, rel), 'utf8');
-    return { ok: true, json: async () => JSON.parse(txt) };
-  } catch { return { ok: false, json: async () => { throw new Error('404 ' + rel); } }; }
-};
+const S_pendingNow = () => !!(H && H.S && H.S.state && H.S.state.pending);
 
-/* ---------------- 抠出页面模块并装上后门 ---------------- */
-const html = readFileSync(join(ROOT, 'index.html'), 'utf8');
-const m = html.match(/<script type="module">([\s\S]*?)<\/script>/);
-if (!m) { console.log('✗ index.html 里找不到 <script type="module">'); process.exit(1); }
-const core = pathToFileURL(join(ROOT, 'shared', 'strategy.js')).href;
-const src = m[1].replace('`./shared/strategy.js?v=', `\`${core}?v=`)
-  + '\nglobalThis.__H = { get S() { return S; }, set S(v) { S = v; },'
-  + ' renderInputDependent, execInfo, behindState, nextMove, LS };\n';
-const tmp = join(tmpdir(), `hlma30-wording-${process.pid}.mjs`);
-writeFileSync(tmp, src, 'utf8');
-await import(pathToFileURL(tmp).href);
-await new Promise((r) => setTimeout(r, 60));   // 等 load() 把真实数据读进来
-
-const S_pendingNow = () => !!(globalThis.__H && globalThis.__H.S && globalThis.__H.S.state
-  && globalThis.__H.S.state.pending);
-
-const H = globalThis.__H;
-if (!H || !H.S || !H.S.state) { console.log('✗ 页面模块没能加载出数据'); process.exit(1); }
-const BASE = JSON.parse(JSON.stringify(H.S.state));
-const CAL = H.S.cal;
-const ROWS = H.S.series.rows;
-const TODAY = (await import(core)).beijingDate();
-
-/* 从日历里挑出能让执行日落在「今天之前 / 正是今天 / 今天之后」的信号日 */
-const past = CAL.filter((d) => d < TODAY);
-const SIG = {
-  today: past[past.length - 1] ?? null,              // 上一个交易日出信号 → 今天执行
-  future: CAL.filter((d) => d >= TODAY)[0] ?? null,  // 今天出信号 → 下一个交易日执行
-  past: past[past.length - 4] ?? null,               // 几天前出信号 → 执行日已过
-  unknown: '2099-01-02',                             // 超出日历 → 算不出执行日
-};
-
-/* ---------------- 造场景 ---------------- */
-const LAUNCH = ROWS[ROWS.length - 60].d;
-const D = (k) => ROWS[ROWS.length - k].d;   // 倒数第 k 个交易日
-
-/** 按给定的档位路径造一份自洽账本：[[倒数第几天, from, to], ...] */
-function ledgerFor(path) {
-  return {
-    schema: 1, launchDate: LAUNCH,
-    entries: path.map(([k, from, to], n) => ({
-      seq: n + 1, date: D(k), signalDate: D(k + 1),
-      side: to > from ? 'BUY' : 'SELL', tierFrom: from, tierTo: to,
-      targetWeight: [0, .25, .5, .75, 1][to],
-      price: ROWS[ROWS.length - k].c, etfPrice: null, late: false, recordedAt: `${D(k)} 21:00:00`,
-    })),
-  };
-}
-const CHAIN = [[40, 0, 1], [30, 1, 2], [20, 2, 3]];   // 0→1→2→3
-
-const idx = BASE.index;
-// 让 close 落在买/卖线的某一侧
-const at = (ma30, close) => ({
-  ma30, close,
-  buyTrigger: +(ma30 * 0.97).toFixed(2), sellTrigger: +(ma30 * 1.02).toFixed(2),
-  pctToBuy: (ma30 * 0.97 - close) / close * 100,
-  pctToSell: (ma30 * 1.02 - close) / close * 100,
-  changePct: 0.31,
-});
-const pend = (sig, from, to) => ({ signalDate: sig, tierFrom: from, tierTo: to, side: to > from ? 'BUY' : 'SELL' });
-
-/** tier / pending / index / ledger 一起换掉，保证账本和档位自洽 */
-function put({ tier, pending = null, index, chain = null, calc = null }) {
-  const led = ledgerFor(chain ?? CHAIN.slice(0, tier));
-  const st = JSON.parse(JSON.stringify(BASE));
-  st.launchDate = LAUNCH;
-  st.tier = led.entries.length ? led.entries[led.entries.length - 1].tierTo : tier;
-  st.pending = pending;
-  st.index = { ...idx, ...index };
-  H.S = { ...H.S, state: st, ledger: led };
-  if (calc) store.set('hlma30.calc', JSON.stringify(calc)); else store.delete('hlma30.calc');
-}
-
+/* ---------------- 场景表 ---------------- */
 const M = 6000;
 const SCEN = [
   ['空仓等待买入', { tier: 0, index: at(M, M) }],

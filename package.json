@@ -5,7 +5,7 @@
   "type": "module",
   "description": "中证红利 MA30 停车策略：每交易日自动抓数、算信号、记账、推送 Bark",
   "scripts": {
-    "test": "node tests/crosscheck.mjs && node tests/wording.mjs",
+    "test": "node tests/crosscheck.mjs && node tests/wording.mjs && node tests/calculator.mjs",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "serve": "python -m http.server 8777",
@@ -13,7 +13,8 @@
     "check:sources": "node tools/check-sources.mjs",
     "check:deploy": "node tools/check-deploy.mjs",
     "sweep": "node tools/sweep.mjs",
-    "wording": "node tests/wording.mjs"
+    "wording": "node tests/wording.mjs",
+    "calc": "node tests/calculator.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.42.0"

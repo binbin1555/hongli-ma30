@@ -422,11 +422,21 @@ function behindState() {
   if (!man || !isFinite(man.cash) || !isFinite(man.hold)) return null;
   const r = calcStep(man.cash, man.hold, true);
   if (r.tier === undefined) return null;
-  const target = S.state.pending ? S.state.pending.tierTo : S.state.tier;
-  if (r.tier === target) return null;
+
+  // 「欠账」的判据是实盘对不上**账本**，不是对不上挂单。
+  // 挂单还没到执行日，那是「下一步要做的事」，不是「你漏做的事」——
+  // 拿它当欠账，T 日晚上刚出信号就会被骂「实盘和账本对不上」，
+  // 而那时候你根本无单可下。
+  const ledgerTier = S.state.tier;
+  if (r.tier === ledgerTier) return null;
+
+  const pendingTo = S.state.pending ? S.state.pending.tierTo : null;
+  const target = pendingTo === null ? ledgerTier : pendingTo;
   const cu = calcCatchUp(man.cash, man.hold, target);
   return {
-    actualTier: r.tier, target, gap: target - r.tier,
+    actualTier: r.tier, ledgerTier, pendingTo, target,
+    gap: target - r.tier,
+    owed: ledgerTier - r.tier,              // 真正漏做的档数
     missed: missedEntries(S.ledger.entries, r.tier),
     order: cu.ok && cu.side !== 'NONE' ? cu : null,
   };
@@ -472,17 +482,21 @@ function renderNext(behind) {
     // 笔数和金额说的不是一回事：账本可能来回走过 0→1→2→1 三笔，
     // 而你只需一次调仓就能落到最终档位。写「N 笔」再给一个金额会让人以为
     // 要下 N 单，所以金额这里必须点明是「一次性补到位」。
-    const head = nMissed
+    const head = (nMissed
       ? `你有 <b>${nMissed}</b> 笔操作还没做`
-      : `你填的实盘仓位和账本对不上`;
+      : `你填的实盘仓位和账本对不上`)
+      + (behind.pendingTo !== null && behind.pendingTo !== behind.ledgerTier ? '，另有 1 笔挂单待执行' : '');
     $('nextLine').innerHTML = head
       + (amt ? `，需一次性<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'} ${amt}</b>补到位` : '');
     const days = nMissed
       ? behind.missed.map((e) => `${e.date} ${e.side === 'BUY' ? '买' : '卖'}${e.tierFrom}→${e.tierTo}`).join('　')
       : '';
+    // 账本已经记下的档位、和挂单要去的档位，是两件事，不能混成一个数字说
+    const pendNote = behind.pendingTo !== null && behind.pendingTo !== behind.ledgerTier
+      ? `，加上挂单那一笔，目标 <b>${behind.target}/5</b> 档` : '';
     $('nextSub').innerHTML = `实盘 <b>${behind.actualTier}/5</b> 档`
       + (buy ? '，低于' : '，高于')
-      + `账本的 <b>${behind.target}/5</b> 档`
+      + `账本的 <b>${behind.ledgerTier}/5</b> 档${pendNote}`
       + (sh ? `　·　约 ${money(sh)} 股` : '')
       + (days ? `<br>漏掉的记录：${days}（${nMissed} 笔合起来只需这一次调仓）` : '')
       + (nMissed ? '' : '<br>账本里没有对得上的漏做记录 —— 可能是持仓涨跌跨过了档位边界，也可能是计算器里的数字填错了。')
@@ -702,14 +716,14 @@ function calc() {
   const pend = S.state.pending;
   const mv = nextMove();
   const wantBuy = mv.kind === 'pending' ? mv.side === 'BUY' : mv.kind !== 'sell';
+  const oneStep = calcStep(cash, hold, wantBuy);   // 真正只走一档的金额
   const r = pend
     ? (() => {
         const cu = calcCatchUp(cash, hold, pend.tierTo);
         if (!cu.ok) return cu;
-        const step = calcStep(cash, hold, wantBuy);
-        return { ...cu, tier: step.tier, to: pend.tierTo };
+        return { ...cu, tier: oneStep.tier, to: pend.tierTo };
       })()
-    : calcStep(cash, hold, wantBuy);
+    : oneStep;
 
   const setOut = (main, sub, color) => {
     $('oMain').textContent = main; $('oMain').style.color = color || 'var(--dm)';
@@ -726,9 +740,14 @@ function calc() {
     setOut(
       `补齐 ${Math.abs(behind.gap)} 档　${isBuy0 ? '买入' : '卖出'} ${money(behind.order.amount)} 元`
         + (sh0 ? `　约 ${money(sh0)} 股` : ''),
-      `你实盘在 <b>${behind.actualTier}/5</b> 档，账本已到 <b>${behind.target}/5</b> 档。`
+      `你实盘在 <b>${behind.actualTier}/5</b> 档，账本已到 <b>${behind.ledgerTier}/5</b> 档`
+        + (behind.pendingTo !== null && behind.pendingTo !== behind.ledgerTier
+          ? `，再加上挂单那一笔，目标 <b>${behind.target}/5</b> 档。` : '。')
         + `补完这一笔就对上了。`
-        + (r.ok ? `<br>若想按策略节奏一档一档补，本次只走一档是 <b>${money(r.amount)} 元</b>。` : ''),
+        // 只有真的差不止一档时才提「一档一档补」——
+        // 差一档时这个数就等于上面那个数，写出来只会让人以为是两笔
+        + (oneStep.ok && Math.abs(behind.gap) > 1
+          ? `<br>若想按策略节奏一档一档补，本次只走一档是 <b>${money(oneStep.amount)} 元</b>。` : ''),
       isBuy0 ? 'var(--up)' : 'var(--dn)');
     renderTiming(behind);
     renderMismatch(r, behind);
@@ -767,10 +786,20 @@ function renderTiming(behind) {
     tb.className = 'timingbox live';
     // 没有对得上的漏做记录时不能按档差编出「笔数」——
     // 顶部卡片上一轮已经改掉了，这里当时漏了，两处必须一致。
-    tb.innerHTML = (behind.missed.length
+    const head = behind.missed.length
       ? `⚠ <b>你还欠着 ${behind.missed.length} 笔操作</b>　账本已经记账，实盘没跟上。`
-      : `⚠ <b>实盘仓位和账本对不上</b>　账本在 ${behind.target}/5 档，你填的数字相当于 ${behind.actualTier}/5 档。`)
-      + `先把上面这笔补掉，再等下一次信号。`;
+      : `⚠ <b>实盘仓位和账本对不上</b>　账本在 ${behind.ledgerTier}/5 档，你填的数字相当于 ${behind.actualTier}/5 档。`;
+    // 欠账的同时还挂着单时，执行日不能消失 ——
+    // 你正是在这个板块算金额、照着它下单的，不知道哪天下就等于没说。
+    const p0 = S.state.pending;
+    if (p0 && behind.pendingTo !== behind.ledgerTier) {
+      const ex0 = execInfo(p0.signalDate);
+      tb.innerHTML = head
+        + `上面的金额已经把 ${p0.tierFrom}/5 → ${p0.tierTo}/5 那笔挂单一起算进去了，`
+        + `请在 <b class="nb">${ex0.day ? ex0.L.label : NO_EXEC_DATE}</b>收盘前一次做完。${CLOSE_TIP}。`;
+    } else {
+      tb.innerHTML = head + `先把上面这笔补掉，再等下一次信号。`;
+    }
     return;
   }
   if (S.state.pending) {
