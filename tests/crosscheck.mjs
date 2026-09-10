@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { coreHash, buildHash } from '../stamp.mjs';
+import { dayLabel } from '../shared/strategy.js';
 import { fileURLToPath } from 'node:url';
 
 // 按脚本自身位置解析，保证从仓库根目录或 tests/ 目录跑都一样
@@ -201,6 +202,41 @@ console.log('\n=== 执行日推算 nextTradingDay（用仓库里的真实 2026 �
   }
   allOk = allOk && bad === 0;
   console.log(`  ${bad === 0 ? 'OK ' : '!!!'} 遍历全年 ${cal.length} 个交易日，结果均晚于信号日且本身是交易日（违规 ${bad}）`);
+}
+
+
+console.log('\n=== 日期措辞 dayLabel（推送与面板共用同一句话）===');
+{
+  const cases = [
+    ['2026-09-11', '2026-09-11', '9 月 11 日（今天，周五）', '当天'],
+    ['2026-09-12', '2026-09-11', '9 月 12 日（明天，周六）', '第二天'],
+    ['2026-09-10', '2026-09-11', '9 月 10 日（昨天，周四）', '前一天'],
+    ['2026-09-14', '2026-09-11', '9 月 14 日（周一）', '周五出信号 → 下周一执行，不能叫「明日」'],
+    ['2026-10-08', '2026-09-30', '10 月 8 日（周四）', '国庆前，差 8 天'],
+    ['2027-01-04', '2026-12-31', '1 月 4 日（周一）', '跨年'],
+    ['2026-03-01', '2026-02-28', '3 月 1 日（明天，周日）', '跨月仍算「明天」'],
+    ['2026-01-01', '2025-12-31', '1 月 1 日（明天，周四）', '跨年仍算「明天」'],
+  ];
+  let bad = 0;
+  for (const [d, today, want, why] of cases) {
+    const got = dayLabel(d, today).label;
+    const ok = got === want;
+    if (!ok) bad++;
+    console.log(`  ${ok ? 'OK ' : '!!!'} ${today} 说 ${d} → ${got}　（${why}）`);
+  }
+  // 相对词只许在紧邻的那三天出现，其余一律只给日期＋星期
+  let leak = 0;
+  const base = '2026-06-15';
+  for (let k = -400; k <= 400; k++) {
+    const d = new Date(Date.parse(`${base}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10);
+    const L = dayLabel(d, base);
+    const hasRel = /今天|明天|昨天/.test(L.label);
+    if (hasRel !== (Math.abs(k) <= 1)) leak++;
+    if (L.diff !== k) leak++;
+  }
+  bad += leak;
+  console.log(`  ${leak === 0 ? 'OK ' : '!!!'} 前后各 400 天遍历：相对词只出现在相差 1 天以内，diff 全部正确`);
+  allOk = allOk && bad === 0;
 }
 
 

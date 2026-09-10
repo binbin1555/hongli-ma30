@@ -21,6 +21,38 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 let fails = 0;
 const bad = (msg) => { fails++; console.log(`  ✗ ${msg}`); };
 
+/* ================================================================
+ * 相对时间词的硬规矩
+ *
+ * 「明日」在周五是错的，「今天」在一张放了一夜的页面上是错的，
+ * 「下一个交易日」不看日历根本不知道是哪天。所以定死一条规矩：
+ *
+ *   凡出现相对时间词的那一句，要么同句给出具体日期，
+ *   要么明说「给不出具体日期」。
+ *
+ * 下面既扫渲染出来的真句子，也扫源码里的字符串字面量 ——
+ * 前者管已经跑到的分支，后者管那些平时跑不到的告警。
+ * ================================================================ */
+const RELATIVE = /今天|今日|明天|明日|昨天|昨日|当晚|次日|下一?个交易日/g;
+const HAS_DATE = /\d+\s*月\s*\d+\s*日|\d{4}-\d{2}-\d{2}/;
+/** 括号里紧跟在日期后面的相对词是允许的：那是定位，不是信息 */
+const stripParen = (t) => t.replace(/(\d+\s*月\s*\d+\s*日)（[^）]*）/g, '$1');
+
+/** @returns 违规的句子；空数组表示全部合规 */
+function relativeOffenders(text) {
+  const out = [];
+  for (const seg of stripParen(String(text)).split(/[。；\n]|⏎/)) {
+    if (!seg.trim()) continue;
+    RELATIVE.lastIndex = 0;
+    const hit = seg.match(RELATIVE);
+    if (!hit) continue;
+    // 同句有日期，或同句明说「给不出具体日期」，都算合规
+    if (HAS_DATE.test(seg) || seg.includes('具体日期')) continue;
+    out.push(`${hit.join('/')} → 「${seg.trim()}」`);
+  }
+  return out;
+}
+
 /* ---------------- 极简 DOM 假件 ---------------- */
 class El {
   constructor(id = '') {
@@ -210,6 +242,8 @@ for (const [name, over] of SCEN) {
   if (behind && !behind.missed.length && /\d+ 笔操作还没做/.test(line)) {
     bad(`${name}：账本里没有漏做记录，却说了「N 笔操作还没做」`);
   }
+  // 每一处相对时间词都必须挨着具体日期
+  for (const o of relativeOffenders(all)) bad(`${name}：相对时间词旁边没有日期 —— ${o}`);
   // 落后/超前的方向必须和实盘-账本的高低一致
   if (behind && /需一次性(买入|卖出)/.test(line)) {
     const saysBuy = /需一次性买入/.test(line);
@@ -236,15 +270,56 @@ for (const [sig, exec] of [cases[0], gap[0], gap[gap.length - 1]].filter(Boolean
 }
 for (const [sig, exec] of cases) {
   const w = execWording(sig, exec);
+  const md = `${+exec.slice(5, 7)} 月 ${+exec.slice(8, 10)} 日`;
+  // 规矩一：执行日的具体日期永远要出现在标题里，一个都不能少
+  if (!w.short.includes(md)) bad(`${sig} → ${exec}：标题里没有具体日期（「${w.short}」）`);
+  // 规矩二：相对词只许待在日期后面的括号里
+  for (const o of relativeOffenders(`${w.short}。${w.long}`)) {
+    bad(`${sig} → ${exec}：相对时间词旁边没有日期 —— ${o}`);
+  }
+  // 规矩三：只有执行日确实是第二天时，括注里才准出现「明天」
   const isTomorrow = exec === nextCalDay(sig);
-  if (w.short.includes('明日') !== isTomorrow) bad(`${sig} → ${exec}：「明日」用错了（标题「${w.short}」）`);
-  if (!isTomorrow && !w.short.includes(`${+exec.slice(5, 7)} 月 ${+exec.slice(8, 10)} 日`)) {
-    bad(`${sig} → ${exec}：不是第二天却没写出日期（标题「${w.short}」）`);
+  if (w.short.includes('明天') !== isTomorrow) {
+    bad(`${sig} → ${exec}：「明天」这个括注用错了（「${w.short}」）`);
   }
 }
 const wNull = execWording(TODAY, null);
-if (wNull.short.includes('明日')) bad('执行日算不出来时仍写了「明日」');
+if (/明天|明日/.test(wNull.short)) bad('执行日算不出来时仍写了「明天」');
+if (!wNull.short.includes('具体日期')) bad('执行日算不出来时没有明说「给不出具体日期」');
+for (const o of relativeOffenders(`${wNull.short}。${wNull.long}`)) bad(`执行日取不到：${o}`);
 console.log(`  执行日取不到 → 标题 …${wNull.short}\n    正文 ${wNull.long}`);
+
+/* ---------------- 源码静态扫描 ---------------- */
+/*
+ * 上面那 15 个场景跑不到告警分支（交易日历取不到、数据未到、明年日历没发布……），
+ * 而那些恰恰是最容易留下「今日」「明日」的地方 —— 平时不出现，出事那天才亮相，
+ * 亮相时又正是你最需要看懂它的时候。所以直接扫源码里的字符串字面量。
+ *
+ * 判定放宽一点：只要那一行带了插值（说明日期是算出来的），或者明说
+ * 「给不出具体日期」，就算合规；纯写死的相对词一律揪出来。
+ */
+console.log('\n================ 源码里的写死相对词 ================\n');
+{
+  const stripComment = (ln) => ln
+    .replace(/^\s*(\/\/|\*|\/\*).*$/, '')          // 整行注释
+    .replace(/(?<!:)\/\/.*$/, '');                  // 行尾注释（别误伤 https://）
+  let scanned = 0;
+  for (const f of ['worker/src/index.js', 'index.html']) {
+    const lines = readFileSync(join(ROOT, f), 'utf8').split('\n');
+    lines.forEach((raw, k) => {
+      const ln = stripComment(raw);
+      if (!ln.trim()) return;
+      RELATIVE.lastIndex = 0;
+      const hit = ln.match(RELATIVE);
+      if (!hit) return;
+      scanned++;
+      const excused = ln.includes('${') || ln.includes('具体日期') || HAS_DATE.test(ln)
+        || ln.includes('NO_EXEC_DATE') || ln.includes('RELATIVE');
+      if (!excused) bad(`${f}:${k + 1} 写死了相对时间词「${hit.join('/')}」 —— ${ln.trim().slice(0, 72)}`);
+    });
+  }
+  console.log(`  扫过 ${scanned} 行含相对时间词的代码（注释已排除）`);
+}
 
 console.log(`\n${fails ? `✗ ${fails} 处文案有问题` : '✓ 全部状态文案通过'}\n`);
 process.exit(fails ? 1 : 0);

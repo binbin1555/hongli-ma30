@@ -12,6 +12,7 @@
 
 import {
   ma, signal, nextTier, replay, plannedOrder, shares, triggers, auditLedger, beijingDate, nextTradingDay, validateState,
+  dayLabel, NO_EXEC_DATE,
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
 
@@ -19,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '1e68f51997';
+const BUILD = '3753203369';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -263,8 +264,10 @@ export function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar,
 
   // 1、2 在主流程里靠提前返回把关：走到这里就说明它们已经过了。
   // 之所以还要补记，是因为不记的话 state 里 total=8、页面却列 10 项，数字对不上。
-  add(1, '交易日历确认今天开市', true, `${today} 在交易所日历里`);
-  add(2, '中证今日数据已到位', true, `最新数据日期 ${today}`);
+  // 名字里不写「今天」：面板显示的是上一次运行的结果，隔夜再看「今天」就是假话。
+  // 具体是哪一天由 detail 里的日期负责。
+  add(1, '运行日在交易日历内', true, `${today} 在交易所日历里`);
+  add(2, '中证运行日数据已到位', true, `最新数据日期 ${today}`);
 
   // 3 结构：日期严格递增、无重复、清洗后每一天都在官方交易日历里
   let structOk = true, structMsg = '';
@@ -425,7 +428,7 @@ async function runDaily(env, { force = false } = {}) {
     return { ok: false, today, reason: 'state.json 不合法', problems: stBad };
   }
   if (state.asof === today && !force) {
-    return { ok: true, today, skipped: '今日已运行过（加 &force=1 可强制重跑）' };
+    return { ok: true, today, skipped: `${today} 已运行过（加 &force=1 可强制重跑）` };
   }
 
   // ---- 抓数据 ----
@@ -442,7 +445,7 @@ async function runDaily(env, { force = false } = {}) {
   const lastRow = idx[idx.length - 1];
   if (!lastRow || lastRow.d !== today) {
     await bark(env, {
-      title: '⚠️ 红利MA30 · 今日数据未到',
+      title: `⚠️ 红利MA30 · ${dayLabel(today, today).md}数据未到`,
       body: `交易日历显示 ${today} 开市，但中证接口最新数据只到 ${lastRow ? lastRow.d : '无'}。`
         + `本次未写入。若此刻尚未到 17:00，属正常；若已过 18:00 仍如此，请检查数据源。`,
       level: 'timeSensitive',
@@ -533,13 +536,11 @@ async function runDaily(env, { force = false } = {}) {
 
   // 挂单到底哪天执行 —— 周五出的信号要到下周一，节前能差十天。
   // 推送里绝不能笼统写"明日"，那是会让人在休市日空等的错话。
-  let execDay = null;
-  if (pending) {
-    execDay = nextTradingDay(cal.tradingDays, today);
-    if (!execDay) {   // 12 月底的信号会落到明年，当年日历里已经没有下一天了
-      const nextCal = await G.readJSON(`calendar/${+year + 1}.json`);
-      if (nextCal) execDay = nextTradingDay(nextCal.tradingDays, today);
-    }
+  // 无挂单时也要算：那条推送要说清「哪一天不用操作」，而不是笼统的「明日」。
+  let execDay = nextTradingDay(cal.tradingDays, today);
+  if (!execDay) {   // 12 月底的信号会落到次年，当年日历里已经没有下一天了
+    const nextCal = await G.readJSON(`calendar/${+year + 1}.json`);
+    if (nextCal) execDay = nextTradingDay(nextCal.tradingDays, today);
   }
 
   // ---- 10 项校验 ----
@@ -656,33 +657,36 @@ async function runDaily(env, { force = false } = {}) {
   };
 }
 
-const WD_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-const weekdayCN = (d) => WD_CN[new Date(`${d}T00:00:00Z`).getUTCDay()];
-
 /**
- * 挂单执行日的措辞。
- * 只有执行日正好是日历上的第二天时才能说「明日」。
- * 周五出的信号执行日是下周一，节前能差十天 —— 这时必须把日期说出来，
- * 否则你会在休市日盯着盘等一个不会来的成交。
+ * 挂单执行日的措辞。**一律先说日期**，「明天」只作括注。
+ *
+ * 早先这里写死「明日收盘执行」：周五出的信号执行日是下周一，
+ * 长假前能差十天，2026 年 241 个信号日里有 50 个不是第二天。
+ * 现在日期永远在，把括号删掉句子也依然正确。
  */
 export function execWording(today, execDay) {
   if (!execDay) {
-    return { short: '下一个交易日收盘执行', long: '执行日以交易日历为准（当前取不到，请到面板核对）' };
+    return {
+      short: `${NO_EXEC_DATE}收盘执行`,
+      long: '交易日历暂时取不到，给不出执行日期。请到面板核对后再下单。',
+    };
   }
-  const tomorrow = new Date(Date.parse(`${today}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
-  const d = `${+execDay.slice(5, 7)} 月 ${+execDay.slice(8, 10)} 日`;
-  if (execDay === tomorrow) {
-    return { short: '明日收盘执行', long: `执行日 ${execDay}（明天，${weekdayCN(execDay)}）收盘前` };
-  }
-  return { short: `${d}收盘执行`, long: `执行日 ${execDay}（${weekdayCN(execDay)}）收盘前，中间的休市日不用操作` };
+  const L = dayLabel(execDay, today);
+  return {
+    short: `${L.label}收盘执行`,
+    long: `执行日 ${execDay}（${L.wd}）收盘前`
+      + (L.diff > 1 ? `　·　距出信号 ${L.diff} 天，中间的休市日不用操作` : ''),
+  };
 }
 
-async function pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late }) {
+export async function pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late }) {
   const i = newState.index;
   const chg = i.changePct != null ? `${i.changePct > 0 ? '+' : ''}${i.changePct}%` : '';
   const warn = checks.some((c) => !c.ok) ? `\n⚠️ ${checks.filter((c) => !c.ok).map((c) => c.name).join('、')}` : '';
   const doneLine = executed
-    ? `\n已记账：${executed.date} ${executed.side === 'BUY' ? '买入' : '卖出'}，档位 ${executed.tierFrom}→${executed.tierTo}${executed.late ? '（迟到执行）' : ''}`
+    ? `\n已记账：${executed.date}（${dayLabel(executed.date, today).wd}）`
+      + `${executed.side === 'BUY' ? '买入' : '卖出'}，档位 ${executed.tierFrom}→${executed.tierTo}`
+      + `${executed.late ? '（迟到执行）' : ''}`
     : '';
 
   if (pending) {
@@ -716,21 +720,29 @@ async function pushDaily(env, { today, newState, pending, execDay, executed, pla
       : i.pctToSell <= 0
         ? `　已涨破卖出线（${i.sellTrigger}）`
         : `　距卖出还需涨 ${i.pctToSell.toFixed(2)}%（${i.sellTrigger}）`;
-    // 今天刚成交过就不能叫「无操作」—— 那会让人以为白跑一趟。
-    // 「无操作」说的是明天不用动，标题必须把这层意思写清楚。
+    // 刚成交过就不能叫「无操作」—— 那会让人以为白跑一趟。
+    // 「无操作」说的是下一个交易日不用动，而那一天是哪天必须写出来：
+    // 周五发出的「明日无需操作」，字面上指的是周六。
+    const td = dayLabel(today, today);
+    const nd = execDay ? dayLabel(execDay, today) : null;
     const title = executed
-      ? `✅ 今日已成交　${newState.tier}/5 档　明日无需操作`
-      : `红利MA30 · 明日无需操作　${newState.tier}/5 档`;
+      ? `✅ ${td.md}已成交　${newState.tier}/5 档`
+      : `红利MA30 · ${td.md}无操作　${newState.tier}/5 档`;
+    const nextLine = nd
+      ? `\n${nd.label}收盘前无需操作`
+      : `\n${NO_EXEC_DATE}收盘前无需操作`;
     await bark(env, {
       title,
-      body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${doneLine}${warn}`,
+      body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${doneLine}${warn}`,
       level: 'passive',
     });
   }
-  if (late) {
+  if (late && executed) {
     await bark(env, {
       title: '⚠️ 红利MA30 · 挂单迟到执行',
-      body: '上一次的挂单晚于 T+1 才成交，可能是某个交易日漏跑。请核对账本。',
+      body: `信号出在 ${executed.signalDate}，本该在它的下一个交易日收盘成交，`
+        + `实际拖到 ${executed.date}（${dayLabel(executed.date, today).wd}）才记上。`
+        + '\n中间可能有交易日漏跑，请核对账本。',
       level: 'timeSensitive',
     });
   }
@@ -762,7 +774,7 @@ async function remind(env) {
   if (nextCal) days = days.concat(nextCal.tradingDays).sort();
   const execDay = nextTradingDay(days, state.pending.signalDate);
   if (execDay !== today) {
-    return { ok: true, today, skipped: `执行日是 ${execDay}，不是今天，静默` };
+    return { ok: true, today, skipped: `执行日是 ${execDay}，不是 ${today}，静默` };
   }
 
   // 金额按本金和账本重放得出，和晚上那条推送同源
@@ -784,10 +796,11 @@ async function remind(env) {
   }
   const isBuy = side === 'BUY';
   const share = isBuy ? p.tierTo : p.tierFrom;
+  const L = dayLabel(today, today);
   await bark(env, {
-    title: `⏰ 今天收盘前${isBuy ? '买入' : '卖出'}第 ${share} 份`,
+    title: `⏰ ${L.md}收盘前${isBuy ? '买入' : '卖出'}第 ${share} 份`,
     body: `档位 ${p.tierFrom}/5 → ${p.tierTo}/5，目标仓位 ${WEIGHTS[p.tierTo] * 100}%${est}`
-      + `\n信号出在 ${p.signalDate}，今天（${today}）收盘前完成。`,
+      + `\n信号出在 ${p.signalDate}，执行日就是 ${today}（${L.wd}），请在收盘前完成。`,
     level: 'timeSensitive',
     group: '红利MA30·操作',
   });
@@ -836,7 +849,7 @@ async function refreshCalendar(env) {
   const nextYear = String(+today.slice(0, 4) + 1);
   if (mm >= 12 && !byYear.has(nextYear)) {
     await bark(env, {
-      title: '📅 红利MA30 · 明年日历尚未发布',
+      title: `📅 红利MA30 · ${nextYear} 年日历尚未发布`,
       body: `${nextYear} 年交易日历在深交所还查不到。通常国务院公布节假日安排后才有，请留意。`,
       level: 'active',
     });

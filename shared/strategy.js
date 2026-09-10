@@ -195,6 +195,40 @@ export function beijingDate(nowMs = Date.now()) {
  * 用来把「T 日出信号 → T+1 日执行」里的 T+1 算成具体日期：
  * 周五出的信号要到下周一才执行，节假日同理，不能简单地加一天。
  */
+export const WEEKDAY_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+/**
+ * 把一个日期说成不会被误解的话：**具体日期永远打头，相对说法只放进括号**。
+ *
+ * 为什么不许直接写相对词 ——
+ *   「明日」  周五出的信号执行日是下周一，长假前差十天；
+ *   「今天」  一张在手机上放了一夜的页面，它说的「今天」是昨天；
+ *   「下一个交易日」  不看日历根本不知道是哪天。
+ * 相对词只在括号里做定位，不承担信息量；把括号整个删掉，句子依然完全正确。
+ *
+ * @param {string} d      要说的日期，YYYY-MM-DD
+ * @param {string} today  北京日期，YYYY-MM-DD
+ * @returns {{md:string, wd:string, rel:string|null, diff:number, label:string}}
+ *   md     '9 月 14 日'
+ *   wd     '周一'
+ *   rel    '今天' | '明天' | '昨天' | null —— 只在日历上紧邻时才给
+ *   diff   相差几个自然日（负数表示已经过去）
+ *   label  '9 月 14 日（周一）' / '9 月 11 日（今天，周五）'
+ */
+export function dayLabel(d, today) {
+  const md = `${+d.slice(5, 7)} 月 ${+d.slice(8, 10)} 日`;
+  const wd = WEEKDAY_CN[new Date(`${d}T00:00:00Z`).getUTCDay()];
+  const diff = Math.round((Date.parse(`${d}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000);
+  const rel = diff === 0 ? '今天' : diff === 1 ? '明天' : diff === -1 ? '昨天' : null;
+  return { md, wd, rel, diff, label: `${md}（${rel ? `${rel}，` : ''}${wd}）` };
+}
+
+/**
+ * 算不出执行日时的统一说法。
+ * 只写「下一个交易日」会被当成「明天」，所以必须把「给不出日期」这件事直说。
+ */
+export const NO_EXEC_DATE = '下一个交易日（交易日历暂时取不到，给不出具体日期）';
+
 export function nextTradingDay(tradingDays, afterDate) {
   if (!Array.isArray(tradingDays)) return null;
   for (const d of tradingDays) if (d > afterDate) return d;

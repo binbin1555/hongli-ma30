@@ -124,6 +124,7 @@ td.side{font-family:var(--sans);font-weight:600}
 tr:last-child td{border-bottom:none}
 
 .note{font-size:11.5px;color:var(--dm);margin:12px 0 0;line-height:1.65}
+.nb{white-space:nowrap}
 .timingbox{border-radius:8px;padding:11px 13px;font-size:12.5px;line-height:1.6;margin:14px 0 0;
   background:var(--chip);color:var(--dm)}
 .timingbox.live{background:color-mix(in srgb,var(--ac) 14%,transparent);border:1px solid var(--ac);
@@ -172,7 +173,7 @@ tr:last-child td{border-bottom:none}
 
   <div id="banner">
     <div class="bm">
-      <p class="bk" id="bKick">触发 · 明日收盘执行</p>
+      <p class="bk" id="bKick">触发 · 执行日以面板为准</p>
       <p class="bt" id="bText">—</p>
       <p class="bs" id="bSub"></p>
     </div>
@@ -294,9 +295,9 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = '417b3dc32f';
+const CORE_VERSION = 'd1df53d711';
 const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries, validateState,
-        nextMove: nextMoveFn, nextTradingDay, beijingDate, WEIGHTS, COMMISSION }
+        nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, WEIGHTS, COMMISSION }
   = await import(`./shared/strategy.js?v=${CORE_VERSION}`);
 
 const $ = (id) => document.getElementById(id);
@@ -309,23 +310,33 @@ const int = (n) => (isFinite(n) ? Math.round(n).toLocaleString('zh-CN') : '–')
 const num = (s) => { const v = Number(String(s).replace(/[^\d.]/g, '')); return isFinite(v) ? v : 0; };
 const pct = (n) => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(2)}%`;
 const bjToday = () => beijingDate();   // 实现在 shared/strategy.js，受测试覆盖
-const md = (d) => `${+d.slice(5, 7)} 月 ${+d.slice(8, 10)} 日`;
-const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-const wd = (d) => WD[new Date(`${d}T00:00:00Z`).getUTCDay()];
+// 日期措辞全部走 shared/strategy.js 的 dayLabel：
+// 页面和推送必须说同一句话，各写各的迟早会分家。
+const md = (d) => dayLabel(d, bjToday()).md;
+const wd = (d) => dayLabel(d, bjToday()).wd;
+const dl = (d) => dayLabel(d, bjToday()).label;   // '9 月 14 日（周一）'
 /**
- * 挂单该在哪天执行、相对今天是什么位置。
- * 文案必须随日期变：T 日晚上说「明天」，到了 T+1 当天就得说「今天」，
- * 否则你上午看到「下一个交易日」会以为还要再等一天。
+ * 挂单该在哪天执行。
+ *
+ * lead 会原样拼在「买入第 N 份」前面，kick 是横幅顶上那行 ——
+ * 两处都以**具体日期**打头，「今天」只在括号里做定位。
+ * 手机上放了一夜的页面，它说的「今天」是昨天；日期不会骗人。
  */
 function execInfo(signalDate) {
   const day = nextTradingDay(S.cal, signalDate);
   const today = bjToday();
-  // lead 会原样拼在「买入第 N 份」前面，四种情况都必须读得通顺；
-  // kick 是横幅顶上那行，短，但同样不能和卡片说的时点打架。
-  if (!day) return { day: null, when: 'unknown', lead: '下一个交易日收盘前', kick: '下一个交易日收盘执行' };
-  if (day === today) return { day, when: 'today', lead: '今天收盘前', kick: '今天收盘前执行' };
-  if (day > today) return { day, when: 'future', lead: `${md(day)}（${wd(day)}）收盘前`, kick: `${md(day)}（${wd(day)}）收盘执行` };
-  return { day, when: 'past', lead: `本应在 ${md(day)}收盘前`, kick: '执行日已过 · 请尽快补做' };
+  // 日期整段裹上 .nb：否则手机上会从「9 月 11 日（今天，周」/「五）」中间断开，
+  // 一个被劈成两半的日期比没有日期还难认。
+  // lead/kick 是纯文本（要喂给 textContent），leadHtml 才带标签。
+  if (!day) {
+    return { day: null, when: 'unknown', L: null,
+      lead: `${NO_EXEC_DATE}收盘前`, leadHtml: `${NO_EXEC_DATE}收盘前`, kick: `${NO_EXEC_DATE}收盘执行` };
+  }
+  const L = dayLabel(day, today);
+  const nb = `<span class="nb">${L.label}</span>`;
+  if (day === today) return { day, when: 'today', L, lead: `${L.label}收盘前`, leadHtml: `${nb}收盘前`, kick: `${L.label}收盘前执行` };
+  if (day > today) return { day, when: 'future', L, lead: `${L.label}收盘前`, leadHtml: `${nb}收盘前`, kick: `${L.label}收盘执行` };
+  return { day, when: 'past', L, lead: `本应在 ${L.label}收盘前`, leadHtml: `本应在 ${nb}收盘前`, kick: `${L.label}收盘执行 · 已过期，请尽快补做` };
 }
 
 const applyTheme = (t) => {
@@ -364,7 +375,8 @@ async function load() {
       + `<ul style="font-size:13px;line-height:1.8;color:var(--up)">`
       + stProblems.map((x) => `<li>${x}</li>`).join('') + `</ul>`
       + `<p class="note">这通常意味着写入过程出了问题。可以在 GitHub 的提交历史里回看上一版 state.json，`
-      + `或等下一个交易日 21:00 系统自动重算。若持续出现，请检查 Worker 日志。</p></div>`;
+      + `或等下一个交易日 21:00 系统自动重算 —— 状态文件已经读不出来，这里给不出具体日期。`
+      + `若持续出现，请检查 Worker 日志。</p></div>`;
     return;
   }
   S = { state, ledger, series, cal: [] };
@@ -501,47 +513,50 @@ function renderNext(behind) {
       }
     }
     const ex = execInfo(st.pending.signalDate);
-    $('nextLine').innerHTML = ex.lead
+    $('nextLine').innerHTML = ex.leadHtml
       + `<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'}第 ${share} 份</b>`;
     $('nextSub').innerHTML = `档位 <b>${mv.from}/5</b> → <b>${mv.to}/5</b>，目标仓位 ${WEIGHTS[mv.to] * 100}%`
       + est + realLine
       + `<br>信号日 ${st.pending.signalDate}`
-      + (ex.when === 'today' ? '　·　<b style="color:var(--up)">就是今天，别错过收盘</b>'
-        : ex.when === 'past' ? '　·　执行日已过，账本当晚已按规则记上，实盘请尽快补做'
-        : ex.day ? `　·　执行日 ${ex.day}（${wd(ex.day)}），中间的休市日不用操作`
-          : '　·　执行日待交易日历确认');
+      + (ex.when === 'today' ? `　·　<b style="color:var(--up)"><span class="nb">${ex.L.md}</span>收盘前必须完成</b>`
+        : ex.when === 'past' ? `　·　执行日 ${ex.day}（${ex.L.wd}）已过，账本当日 21:00 已按规则记上，实盘请尽快补做`
+        : ex.day ? `　·　执行日 ${ex.day}（${ex.L.wd}）`
+          + (ex.L.diff > 1 ? `，距今 ${ex.L.diff} 天，中间的休市日不用操作` : '')
+          : '　·　交易日历暂时取不到，给不出执行日期');
   } else if (mv.kind === 'buy') {
     card.classList.add('buy');
     if (mv.need <= 0) {
-      $('nextLine').innerHTML = `中证红利收盘已跌破买入线，<b style="color:var(--up)">等系统当晚确认</b>`;
-      $('nextSub').innerHTML = `${st.asof} 收盘 <b>${int(i.close)}</b> 已在买入线 <b>${int(i.buyTrigger)}</b> 之下`
+      $('nextLine').innerHTML = `${dl(st.asof)}收盘已跌破买入线，<b style="color:var(--up)">但还没生成挂单</b>`;
+      $('nextSub').innerHTML = `${st.asof}（${wd(st.asof)}）收盘 <b>${int(i.close)}</b> 已在买入线 <b>${int(i.buyTrigger)}</b> 之下`
         + `　·　按规则应挂单买入第 ${tier + 1} 份`
-        + `<br>面板上还没出现挂单，说明当晚 21:00 的运行还没跑到，稍后再看。`;
+        + `<br>若 ${st.asof} 21:00 的运行还没跑完，稍等再刷新；若已过 ${st.asof} 22:00 仍是这样，请看下方「系统自检」。`;
     } else {
       $('nextLine').innerHTML = `距离下一次买入，还需中证红利<b style="color:var(--up)">跌 ${mv.need.toFixed(2)}%</b>`;
-      $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　届时买入第 <b>${tier + 1}</b> 份（仓位 ${WEIGHTS[tier + 1] * 100}%）`
+      $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　买入第 <b>${tier + 1}</b> 份（仓位 ${WEIGHTS[tier + 1] * 100}%）`
         + otherSide('buy', tier, i)
-        + `<br>百分比按 ${st.asof} 收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
+        + `<br>触发当日 21:00 挂单，再下一个交易日收盘执行 —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
+        + `<br>百分比按 ${st.asof}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
     }
   } else if (mv.kind === 'sell') {
     card.classList.add('sell');
     if (mv.need <= 0) {
-      $('nextLine').innerHTML = `中证红利收盘已涨破卖出线，<b style="color:var(--dn)">等系统当晚确认</b>`;
-      $('nextSub').innerHTML = `${st.asof} 收盘 <b>${int(i.close)}</b> 已在卖出线 <b>${int(i.sellTrigger)}</b> 之上`
+      $('nextLine').innerHTML = `${dl(st.asof)}收盘已涨破卖出线，<b style="color:var(--dn)">但还没生成挂单</b>`;
+      $('nextSub').innerHTML = `${st.asof}（${wd(st.asof)}）收盘 <b>${int(i.close)}</b> 已在卖出线 <b>${int(i.sellTrigger)}</b> 之上`
         + `　·　按规则应挂单卖出第 ${tier} 份`
-        + `<br>面板上还没出现挂单，说明当晚 21:00 的运行还没跑到，稍后再看。`;
+        + `<br>若 ${st.asof} 21:00 的运行还没跑完，稍等再刷新；若已过 ${st.asof} 22:00 仍是这样，请看下方「系统自检」。`;
     } else {
       $('nextLine').innerHTML = `距离下一次卖出，还需中证红利<b style="color:var(--dn)">涨 ${mv.need.toFixed(2)}%</b>`;
-      $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　届时卖出第 <b>${tier}</b> 份（仓位降到 ${WEIGHTS[tier - 1] * 100}%）`
+      $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　卖出第 <b>${tier}</b> 份（仓位降到 ${WEIGHTS[tier - 1] * 100}%）`
         + otherSide('sell', tier, i)
-        + `<br>百分比按 ${st.asof} 收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
+        + `<br>触发当日 21:00 挂单，再下一个交易日收盘执行 —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
+        + `<br>百分比按 ${st.asof}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
     }
   } else {
     // 档位在 0–4 之间时这一支到不了（0 档能买、4 档能卖），
     // 真到了这里说明状态不对劲，别只写一句「暂无」让人干瞪眼。
     $('nextLine').innerHTML = '<b>算不出下一步操作</b>';
     $('nextSub').innerHTML = `当前档位 ${tier}/5 既不能加仓也不能减仓，这不正常。`
-      + `<br>请查看下方「系统自检」，或稍后重开页面；若持续如此，说明状态文件需要人工核对。`;
+      + `<br>请查看下方「系统自检」，或重开页面；若持续如此，说明状态文件需要人工核对。`;
   }
 
 }
@@ -746,8 +761,12 @@ function renderTiming(behind) {
   const tb = $('timing');
   if (behind) {
     tb.className = 'timingbox live';
-    tb.innerHTML = `⚠ <b>你还欠着 ${behind.missed.length || Math.abs(behind.gap)} 笔操作</b>　`
-      + `账本已经记账，实盘没跟上。先把上面这笔补掉，再等下一次信号。`;
+    // 没有对得上的漏做记录时不能按档差编出「笔数」——
+    // 顶部卡片上一轮已经改掉了，这里当时漏了，两处必须一致。
+    tb.innerHTML = (behind.missed.length
+      ? `⚠ <b>你还欠着 ${behind.missed.length} 笔操作</b>　账本已经记账，实盘没跟上。`
+      : `⚠ <b>实盘仓位和账本对不上</b>　账本在 ${behind.target}/5 档，你填的数字相当于 ${behind.actualTier}/5 档。`)
+      + `先把上面这笔补掉，再等下一次信号。`;
     return;
   }
   if (S.state.pending) {
@@ -755,14 +774,14 @@ function renderTiming(behind) {
     const ex = execInfo(p.signalDate);
     tb.className = 'timingbox live';
     tb.innerHTML = `✓ <b>这就是本次要执行的金额</b>　信号出在 ${p.signalDate}，`
-      + (ex.when === 'today' ? '<b>就在今天收盘前下单</b>'
-        : ex.when === 'past' ? `原定 ${md(ex.day)} 执行，已过时点`
-        : `需在 ${ex.day ? md(ex.day) : '下一个交易日'} 收盘前下单`)
+      + (ex.when === 'past'
+        ? `原定 <span class="nb">${ex.L.label}</span>收盘执行，时点已过`
+        : `需在 <b class="nb">${ex.day ? ex.L.label : NO_EXEC_DATE}</b>收盘前下单`)
       + `（档位 ${p.tierFrom}/5 → ${p.tierTo}/5）。`;
   } else {
     tb.className = 'timingbox';
-    tb.innerHTML = `目前<b>尚未触发</b>，这是下次触发时的预估金额，今天不需要下单。`
-      + `真正触发时这里会变成蓝色，并注明「本次要执行的金额」。`;
+    tb.innerHTML = `目前<b>尚未触发</b>，这是下次触发时的预估金额，${dl(bjToday())}不需要下单。`
+      + `真正触发时这里会变成蓝色，注明「本次要执行的金额」，并写出该在哪一天收盘前下单。`;
   }
 
 }
@@ -1072,7 +1091,7 @@ function renderHealth() {
   pill.onclick = () => $('checks').scrollIntoView({ behavior: 'smooth', block: 'center' });
 
   const names = {
-    1: '交易日历确认今天开市', 2: '中证今日数据已到位', 3: '结构：日期递增且都是官方交易日',
+    1: '运行日在交易日历内', 2: '中证运行日数据已到位', 3: '结构：日期递增且都是官方交易日',
     4: '幽灵行已清除', 5: '涨跌幅与收盘价对账', 6: '单日波动在 ±11% 内',
     7: 'MA30 有满 30 个交易日', 8: 'ETF 报价日期与指数一致', 9: '档位一天最多动一档',
     10: '账本自审：日期与档位链完整',
