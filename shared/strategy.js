@@ -130,6 +130,28 @@ export function shares(amount, etfPrice) {
 }
 
 /**
+ * 北京日期 YYYY-MM-DD。
+ *
+ * 只需要在绝对时间上加 8 小时 —— Date.now() 已经是 UTC 纪元毫秒，
+ * 再叠一次 getTimezoneOffset() 会多偏一个时区（在国内表现为
+ * 每天 0:00–8:00 显示成前一天）。Worker 和网页共用这一份实现。
+ */
+export function beijingDate(nowMs = Date.now()) {
+  return new Date(nowMs + 8 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * 交易日历里 afterDate 之后的第一个交易日。
+ * 用来把「T 日出信号 → T+1 日执行」里的 T+1 算成具体日期：
+ * 周五出的信号要到下周一才执行，节假日同理，不能简单地加一天。
+ */
+export function nextTradingDay(tradingDays, afterDate) {
+  if (!Array.isArray(tradingDays)) return null;
+  for (const d of tradingDays) if (d > afterDate) return d;
+  return null;
+}
+
+/**
  * 下一次操作：距离触发还差多远，以及是哪个方向。
  *
  * 边界规则：

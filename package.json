@@ -8,7 +8,8 @@
     "test": "node tests/crosscheck.mjs",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "serve": "python -m http.server 8777"
+    "serve": "python -m http.server 8777",
+    "stamp": "node stamp.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.42.0"

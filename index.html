@@ -282,8 +282,13 @@ tr:last-child td{border-bottom:none}
 </div>
 
 <script type="module">
-import { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, nextMove as nextMoveFn, WEIGHTS, COMMISSION }
-  from './shared/strategy.js';
+// 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
+// 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
+// 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
+const CORE_VERSION = 'f356adb60b';
+const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep,
+        nextMove: nextMoveFn, nextTradingDay, beijingDate, WEIGHTS, COMMISSION }
+  = await import(`./shared/strategy.js?v=${CORE_VERSION}`);
 
 const $ = (id) => document.getElementById(id);
 const LS = {
@@ -294,6 +299,21 @@ const money = (n) => (isFinite(n) ? Math.round(n).toLocaleString('zh-CN') : '–
 const int = (n) => (isFinite(n) ? Math.round(n).toLocaleString('zh-CN') : '–');
 const num = (s) => { const v = Number(String(s).replace(/[^\d.]/g, '')); return isFinite(v) ? v : 0; };
 const pct = (n) => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(2)}%`;
+const bjToday = () => beijingDate();   // 实现在 shared/strategy.js，受测试覆盖
+const md = (d) => `${+d.slice(5, 7)} 月 ${+d.slice(8, 10)} 日`;
+/**
+ * 挂单该在哪天执行、相对今天是什么位置。
+ * 文案必须随日期变：T 日晚上说「明天」，到了 T+1 当天就得说「今天」，
+ * 否则你上午看到「下一个交易日」会以为还要再等一天。
+ */
+function execInfo(signalDate) {
+  const day = nextTradingDay(S.cal, signalDate);
+  const today = bjToday();
+  if (!day) return { day: null, when: 'unknown', text: '下一个交易日收盘' };
+  if (day === today) return { day, when: 'today', text: '就在今天收盘前' };
+  if (day > today) return { day, when: 'future', text: `${md(day)}（下一个交易日）收盘` };
+  return { day, when: 'past', text: `${md(day)} 收盘（执行日已过）` };
+}
 
 const applyTheme = (t) => {
   if (t === 'auto') document.documentElement.removeAttribute('data-theme');
@@ -322,7 +342,12 @@ async function load() {
     fetch('./data/ledger.json' + bust).then((r) => r.json()),
     fetch('./data/series.json' + bust).then((r) => r.json()),
   ]);
-  S = { state, ledger, series };
+  S = { state, ledger, series, cal: [] };
+  // 交易日历用来把「下一个交易日」算成具体日期（周五出信号要到下周一）
+  const yrs = [...new Set([state.asof.slice(0, 4), String(+state.asof.slice(0, 4) + 1)])];
+  const cals = await Promise.all(yrs.map((y) =>
+    fetch(`./calendar/${y}.json` + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null)));
+  S.cal = cals.filter(Boolean).flatMap((c) => c.tradingDays || []).sort();
   render();
 }
 
@@ -372,9 +397,13 @@ function render() {
       const o = plannedOrder(M.V, M.cash, mv.to);
       if (o.side !== 'NONE') amt = `，约 ${money(o.amount)} 元`;
     }
-    $('nextLine').innerHTML = `已触发：下一个交易日收盘<b style="color:var(--${buy ? 'up' : 'dn'})">`
-      + `${buy ? '买入' : '卖出'}</b>${amt}`;
-    $('nextSub').innerHTML = `档位 <b>${mv.from}/5</b> → <b>${mv.to}/5</b>　·　信号日 ${st.pending.signalDate}`;
+    const ex = execInfo(st.pending.signalDate);
+    $('nextLine').innerHTML = (ex.when === 'today' ? '今天收盘前' : ex.text.replace('收盘', '收盘'))
+      + `<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'}</b>${amt}`;
+    $('nextSub').innerHTML = `档位 <b>${mv.from}/5</b> → <b>${mv.to}/5</b>　·　信号日 ${st.pending.signalDate}`
+      + (ex.when === 'today' ? '　·　<b style="color:var(--up)">就是今天，别错过收盘</b>'
+        : ex.when === 'past' ? '　·　执行日已过，系统当晚会自动记账'
+        : ex.day ? `　·　执行日 ${ex.day}` : '');
   } else if (mv.kind === 'buy') {
     card.classList.add('buy');
     if (mv.need <= 0) {
@@ -505,9 +534,13 @@ function calc() {
   const tb = $('timing');
   if (S.state.pending) {
     const p = S.state.pending;
+    const ex = execInfo(p.signalDate);
     tb.className = 'timingbox live';
     tb.innerHTML = `✓ <b>这就是本次要执行的金额</b>　信号出在 ${p.signalDate}，`
-      + `需在下一个交易日收盘前下单（档位 ${p.tierFrom}/5 → ${p.tierTo}/5）。`;
+      + (ex.when === 'today' ? '<b>就在今天收盘前下单</b>'
+        : ex.when === 'past' ? `原定 ${md(ex.day)} 执行，已过时点`
+        : `需在 ${ex.day ? md(ex.day) : '下一个交易日'} 收盘前下单`)
+      + `（档位 ${p.tierFrom}/5 → ${p.tierTo}/5）。`;
   } else {
     tb.className = 'timingbox';
     tb.innerHTML = `目前<b>尚未触发</b>，这是下次触发时的预估金额，今天不需要下单。`

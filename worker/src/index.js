@@ -11,7 +11,7 @@
  */
 
 import {
-  ma, signal, nextTier, replay, plannedOrder, shares, triggers, auditLedger,
+  ma, signal, nextTier, replay, plannedOrder, shares, triggers, auditLedger, beijingDate,
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
 
@@ -22,10 +22,6 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 // ---------------------------------------------------------------- 基础工具
 
-/** 北京时间的 YYYY-MM-DD */
-function beijingDate(d = new Date()) {
-  return new Date(d.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10);
-}
 function beijingStamp(d = new Date()) {
   return new Date(d.getTime() + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
 }

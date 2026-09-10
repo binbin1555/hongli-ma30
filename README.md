@@ -192,7 +192,14 @@ Fetch  →  Pull origin  →  改代码  →  Commit  →  Push origin
 | `data/` `calendar/` `audit/` | Worker 写，只读 |
 | `index.html` `worker/` `shared/` `tests/` | 你改 |
 
-改完 `shared/strategy.js` 一定要跑 `npm test`——它会和独立的 Python 回测引擎逐笔对账。
+改完 `shared/strategy.js` 要跑两条命令：
+
+```bash
+npm run stamp   # 更新前端模块的版本指纹，否则浏览器会用缓存的旧模块导致白屏
+npm test        # 和独立的 Python 回测引擎逐笔对账 + 全部单元测试
+```
+
+忘了 stamp 的话 `npm test` 会直接报错提醒你。
 
 ---
 
