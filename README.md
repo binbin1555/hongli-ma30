@@ -147,7 +147,7 @@ Worker 会自动向 GitHub 查询默认分支，`main` 还是 `master` 都不用
 ## 回归测试
 
 ```bash
-cd tests && node crosscheck.mjs
+npm test
 ```
 
 这个测试把 `shared/strategy.js` 的重放结果和独立的 Python 回测引擎逐笔对账，

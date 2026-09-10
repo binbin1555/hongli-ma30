@@ -1,0 +1,16 @@
+{
+  "name": "hongli-ma30",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "中证红利 MA30 停车策略：每交易日自动抓数、算信号、记账、推送 Bark",
+  "scripts": {
+    "test": "node tests/crosscheck.mjs",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "serve": "python -m http.server 8777"
+  },
+  "devDependencies": {
+    "wrangler": "^4.42.0"
+  }
+}
