@@ -214,6 +214,26 @@ export function calcStep(cash, hold, wantBuy) {
 }
 
 /**
+ * 找出账本里已经记账、但你实盘还没做的那几笔。
+ *
+ * 做法：从最后一笔往回找，找到第一笔「起始档位 == 你实盘档位」的记录，
+ * 它和它之后的全部记录，就是你欠着的操作。
+ * 找不到对应起点时返回空数组 —— 宁可不说，也不瞎猜。
+ *
+ * @param {Array<{tierFrom:number,tierTo:number,date:string}>} entries 账本（升序）
+ * @param {number} actualTier 按你填的实盘数字反推出的档位
+ */
+export function missedEntries(entries, actualTier) {
+  const es = entries || [];
+  if (!es.length) return [];
+  if (es[es.length - 1].tierTo === actualTier) return [];   // 已经对上了
+  for (let i = es.length - 1; i >= 0; i--) {
+    if (es[i].tierFrom === actualTier) return es.slice(i);
+  }
+  return [];
+}
+
+/**
  * 补齐：从当前实盘位置一次性调到指定档位要动多少钱。
  *
  * 用在漏做的时候。calcStep 只算「走一档」，如果你连着几天没操作，

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 // 按脚本自身位置解析，保证从仓库根目录或 tests/ 目录跑都一样
 const HERE = dirname(fileURLToPath(import.meta.url));
-import { replay, ma, signal, nextTier, orderAmount, triggers, calcStep, calcCatchUp, nextMove, nextTradingDay, beijingDate, WEIGHTS, COMMISSION }
+import { replay, ma, signal, nextTier, orderAmount, triggers, calcStep, calcCatchUp, missedEntries, nextMove, nextTradingDay, beijingDate, WEIGHTS, COMMISSION }
   from '../shared/strategy.js';
 
 const cases2 = JSON.parse(readFileSync(join(HERE, 'fixtures.json'), 'utf8'));
@@ -358,6 +358,46 @@ console.log('\n=== 校验体系 runChecks（含改造后的第 9 项）===');
   ok = !stale.ok && stale.fatal === false;
   allOk = allOk && ok;
   console.log(`  ${ok ? 'OK ' : '!!!'} 第8项抓到「ETF 报价是昨天的」且标记为非致命`);
+}
+
+
+console.log('\n=== 漏做识别 missedEntries ===');
+{
+  const es = [
+    { date: '2026-09-08', tierFrom: 0, tierTo: 1, side: 'BUY' },
+    { date: '2026-09-09', tierFrom: 1, tierTo: 2, side: 'BUY' },
+    { date: '2026-09-10', tierFrom: 2, tierTo: 3, side: 'BUY' },
+  ];
+  const t = [
+    [0, ['2026-09-08', '2026-09-09', '2026-09-10'], '一笔没做 → 三笔全欠'],
+    [1, ['2026-09-09', '2026-09-10'], '做了第一笔 → 欠后两笔'],
+    [2, ['2026-09-10'], '做了两笔 → 欠最后一笔'],
+    [3, [], '全做完 → 不欠'],
+  ];
+  for (const [actual, want, name] of t) {
+    const got = missedEntries(es, actual).map((e) => e.date);
+    const ok = JSON.stringify(got) === JSON.stringify(want);
+    allOk = allOk && ok;
+    console.log(`  ${ok ? 'OK ' : '!!!'} ${name}　实盘${actual}档 → [${got.join(', ')}]`);
+  }
+  // 有买有卖的往返路径
+  const mix = [
+    { date: '2026-06-01', tierFrom: 0, tierTo: 1, side: 'BUY' },
+    { date: '2026-06-02', tierFrom: 1, tierTo: 2, side: 'BUY' },
+    { date: '2026-07-01', tierFrom: 2, tierTo: 1, side: 'SELL' },
+  ];
+  let got = missedEntries(mix, 2).map((e) => e.date);
+  let ok = JSON.stringify(got) === JSON.stringify(['2026-07-01']);
+  allOk = allOk && ok;
+  console.log(`  ${ok ? 'OK ' : '!!!'} 买买卖路径，实盘2档 → 只欠那笔卖出 [${got.join(', ')}]`);
+  // 找不到对应起点时不瞎猜
+  got = missedEntries(mix, 4);
+  ok = got.length === 0;
+  allOk = allOk && ok;
+  console.log(`  ${ok ? 'OK ' : '!!!'} 实盘档位在账本里找不到起点 → 返回空，不瞎猜`);
+  ok = missedEntries([], 0).length === 0 && missedEntries(null, 0).length === 0;
+  allOk = allOk && ok;
+  console.log(`  ${ok ? 'OK ' : '!!!'} 空账本 / null 输入安全返回`);
 }
 
 console.log(`\n总判定：${allOk ? '全部通过 ✓' : '有不一致 ✗'}`);

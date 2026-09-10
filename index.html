@@ -291,8 +291,8 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = '6fe3c9a554';
-const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp,
+const CORE_VERSION = '0db32f5738';
+const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries,
         nextMove: nextMoveFn, nextTradingDay, beijingDate, WEIGHTS, COMMISSION }
   = await import(`./shared/strategy.js?v=${CORE_VERSION}`);
 
@@ -350,7 +350,11 @@ async function load() {
   ]);
   S = { state, ledger, series, cal: [] };
   // 交易日历用来把「下一个交易日」算成具体日期（周五出信号要到下周一）
-  const yrs = [...new Set([state.asof.slice(0, 4), String(+state.asof.slice(0, 4) + 1)])];
+  // 次年日历只在临近年底才取：平时它必然 404，白发一次请求还在控制台留红字
+  const nearYearEnd = +state.asof.slice(5, 7) >= 11;
+  const yrs = nearYearEnd
+    ? [state.asof.slice(0, 4), String(+state.asof.slice(0, 4) + 1)]
+    : [state.asof.slice(0, 4)];
   const cals = await Promise.all(yrs.map((y) =>
     fetch(`./calendar/${y}.json` + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null)));
   S.cal = cals.filter(Boolean).flatMap((c) => c.tradingDays || []).sort();
@@ -375,9 +379,29 @@ function accountMoney() {
 // 距离触发还有多远 —— 逻辑在 shared/strategy.js，受回归测试覆盖
 const nextMove = () => nextMoveFn(S.state.index, S.state.tier, S.state.pending);
 
+/**
+ * 实盘是否落后于账本。
+ * 只有你在计算器里真的填过数字才判定 —— 默认值就是账本推算值，永远不会误报。
+ */
+function behindState() {
+  const man = LS.get('calc', null);
+  if (!man || !isFinite(man.cash) || !isFinite(man.hold)) return null;
+  const r = calcStep(man.cash, man.hold, true);
+  if (r.tier === undefined) return null;
+  const target = S.state.pending ? S.state.pending.tierTo : S.state.tier;
+  if (r.tier === target) return null;
+  const cu = calcCatchUp(man.cash, man.hold, target);
+  return {
+    actualTier: r.tier, target, gap: target - r.tier,
+    missed: missedEntries(S.ledger.entries, r.tier),
+    order: cu.ok && cu.side !== 'NONE' ? cu : null,
+  };
+}
+
 function render() {
   const st = S.state, i = st.index, tier = st.tier;
   const M = accountMoney();
+  const behind = behindState();
 
   // ---- 档位 ----
   $('tierNum').textContent = tier;
@@ -395,7 +419,24 @@ function render() {
   const mv = nextMove();
   const card = $('nextCard');
   card.classList.remove('buy', 'sell');
-  if (mv.kind === 'pending') {
+
+  // 你欠着操作时，最显眼的位置就该说这件事。
+  // 否则顶部按账本档位推演「下一次卖出」，而你实盘空仓根本没得卖 —— 自相矛盾。
+  if (behind) {
+    const buy = behind.gap > 0;
+    card.classList.add(buy ? 'buy' : 'sell');
+    const amt = behind.order ? `${money(behind.order.amount)} 元` : '';
+    const sh = behind.order && st.etf && st.etf.close ? shares(behind.order.amount, st.etf.close) : null;
+    $('nextLine').innerHTML = `你有 <b>${behind.missed.length || Math.abs(behind.gap)}</b> 笔操作还没做`
+      + (amt ? `，需<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'} ${amt}</b>` : '');
+    const days = behind.missed.length
+      ? behind.missed.map((e) => `${e.date} ${e.side === 'BUY' ? '买' : '卖'}${e.tierFrom}→${e.tierTo}`).join('　')
+      : '';
+    $('nextSub').innerHTML = `实盘 <b>${behind.actualTier}/5</b> 档，账本已到 <b>${behind.target}/5</b> 档`
+      + (sh ? `　·　约 ${money(sh)} 股` : '')
+      + (days ? `<br>漏掉的记录：${days}` : '')
+      + `<br>补完之后才会回到正常的信号节奏。详见下方「每份该是多少钱」。`;
+  } else if (mv.kind === 'pending') {
     const buy = mv.side === 'BUY';
     card.classList.add(buy ? 'buy' : 'sell');
     let amt = '';
@@ -514,6 +555,25 @@ function calc() {
     $('oSub').innerHTML = sub;
   };
 
+  // 欠着操作时，主位显示「补齐」而不是「下一档」——
+  // 否则空仓的人会看到「已空仓，无可卖出」，等于告诉他什么都不用做。
+  const behind = behindState();
+  if (behind && behind.order) {
+    const px0 = S.state.etf && S.state.etf.close;
+    const sh0 = px0 ? shares(behind.order.amount, px0) : null;
+    const isBuy0 = behind.order.side === 'BUY';
+    setOut(
+      `补齐 ${Math.abs(behind.gap)} 档　${isBuy0 ? '买入' : '卖出'} ${money(behind.order.amount)} 元`
+        + (sh0 ? `　约 ${money(sh0)} 股` : ''),
+      `你实盘在 <b>${behind.actualTier}/5</b> 档，账本已到 <b>${behind.target}/5</b> 档。`
+        + `补完这一笔就对上了。`
+        + (r.ok ? `<br>若想按策略节奏一档一档补，本次只走一档是 <b>${money(r.amount)} 元</b>。` : ''),
+      isBuy0 ? 'var(--up)' : 'var(--dn)');
+    renderTiming(behind);
+    renderMismatch(r, behind);
+    return;
+  }
+
   if (!r.ok && r.reason === 'NO_INPUT') {
     setOut('先填可用资金', '两栏加起来要大于 0');
     $('mismatch').hidden = true;
@@ -535,9 +595,19 @@ function calc() {
       isBuy ? 'var(--up)' : 'var(--dn)');
   }
 
-  // 这笔金额到底是「现在就要下的单」还是「下次触发时的预估」——必须说清楚，
-  // 否则 T+1 日照着算出来的数字下单，很可能下的是下一次的量。
+  renderTiming(behind);
+  renderMismatch(r, null);
+}
+
+/** 这笔金额到底是「现在就要下的单」还是「下次触发时的预估」 */
+function renderTiming(behind) {
   const tb = $('timing');
+  if (behind) {
+    tb.className = 'timingbox live';
+    tb.innerHTML = `⚠ <b>你还欠着 ${behind.missed.length || Math.abs(behind.gap)} 笔操作</b>　`
+      + `账本已经记账，实盘没跟上。先把上面这笔补掉，再等下一次信号。`;
+    return;
+  }
   if (S.state.pending) {
     const p = S.state.pending;
     const ex = execInfo(p.signalDate);
@@ -553,9 +623,15 @@ function calc() {
       + `真正触发时这里会变成蓝色，并注明「本次要执行的金额」。`;
   }
 
-  // 实盘和账本对不上时，除了提醒，还要直接给出「一次补齐」的金额。
-  // 上面那个数字只走一档 —— 落后两档时它只有实际需要量的一半。
+}
+
+/** 实盘与账本档位不一致时的详细说明与两个可选金额 */
+function renderMismatch(r, behind) {
+  const cash = num($('inCash').value), hold = num($('inHold').value);
   const box = $('mismatch');
+  // 落后态下主结果已经把补齐金额、一档金额、档位对比全说完了，
+  // 这个框再说一遍只会重复，而且「上面那个数字」的指代已经变了。
+  if (behind) { box.hidden = true; return; }
   // 有已触发的挂单时，补齐目标取挂单执行后的档位 —— 补到那儿今晚就正好对上
   const ledgerTier = S.state.pending ? S.state.pending.tierTo : S.state.tier;
   // 注意用 r.tier 而不是 r.ok：实盘空仓而账本要卖出时 calcStep 会返回
