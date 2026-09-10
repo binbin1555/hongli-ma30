@@ -636,13 +636,16 @@ async function pushDaily(env, { today, newState, pending, executed, plan, etf, c
   if (pending) {
     // 方向以公式实际算出来的为准，不按档位方向假设
     const isBuy = (plan && plan.side !== 'NONE' ? plan.side : pending.side) === 'BUY';
-    const amt = plan ? `${money(plan.amount)} 元` : `目标仓位 ${WEIGHTS[pending.tierTo] * 100}%`;
-    const sh = plan && plan.shares ? `　约 ${money(plan.shares)} 股` : '';
-    const px = etf ? `\n${newState.etf.code} 收盘 ${etf.c}${newState.etf.stale ? '（非当日价，股数仅供参考）' : ''}` : '';
+    const share = isBuy ? pending.tierTo : pending.tierFrom;   // 买入第几份 / 卖出第几份
+    // 金额是按本金重放出来的估算：实盘和理论账本一旦有偏差它就不准，
+    // 所以只当量级参考放在副行，真正下单以面板计算器为准。
+    const est = plan
+      ? `\n估算约 ${money(plan.amount)} 元${plan.shares ? `（约 ${money(plan.shares)} 股）` : ''}，按本金推算，下单以面板为准`
+      : '';
     await bark(env, {
-      title: `${isBuy ? '🔴 买入' : '🟢 卖出'}　明日收盘执行`,
-      body: `${isBuy ? '买入' : '卖出'} ${amt}${sh}\n档位 ${pending.tierFrom}/5 → ${pending.tierTo}/5`
-        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${px}${doneLine}${warn}`,
+      title: `${isBuy ? '🔴 买入' : '🟢 卖出'}第 ${share} 份　明日收盘执行`,
+      body: `档位 ${pending.tierFrom}/5 → ${pending.tierTo}/5，目标仓位 ${WEIGHTS[pending.tierTo] * 100}%${est}`
+        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${doneLine}${warn}`,
       level: 'timeSensitive',
       group: '红利MA30·操作',
     });
@@ -697,7 +700,7 @@ async function remind(env) {
 
   // 金额按本金和账本重放得出，和晚上那条推送同源
   const p = state.pending;
-  let amtTxt = `目标仓位 ${WEIGHTS[p.tierTo] * 100}%`;
+  let est = '';
   let side = p.side;
   const principal = Number(env.PRINCIPAL || 0);
   if (principal > 0) {
@@ -709,16 +712,15 @@ async function remind(env) {
     if (o.side !== 'NONE') {
       side = o.side;
       const sh = state.etf && state.etf.close ? shares(o.amount, state.etf.close) : null;
-      amtTxt = `${money(o.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : '');
+      est = `\n估算约 ${money(o.amount)} 元${sh ? `（约 ${money(sh)} 股）` : ''}，按本金推算，下单以面板为准`;
     }
   }
   const isBuy = side === 'BUY';
+  const share = isBuy ? p.tierTo : p.tierFrom;
   await bark(env, {
-    title: `⏰ 今天收盘前${isBuy ? '买入' : '卖出'}`,
-    body: `${isBuy ? '买入' : '卖出'} ${amtTxt}
-档位 ${p.tierFrom}/5 → ${p.tierTo}/5`
-      + `
-信号出在 ${p.signalDate}，今天（${today}）收盘前完成。`,
+    title: `⏰ 今天收盘前${isBuy ? '买入' : '卖出'}第 ${share} 份`,
+    body: `档位 ${p.tierFrom}/5 → ${p.tierTo}/5，目标仓位 ${WEIGHTS[p.tierTo] * 100}%${est}`
+      + `\n信号出在 ${p.signalDate}，今天（${today}）收盘前完成。`,
     level: 'timeSensitive',
     group: '红利MA30·操作',
   });

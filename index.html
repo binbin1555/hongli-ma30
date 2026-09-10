@@ -432,15 +432,31 @@ function renderNext(behind) {
   } else if (mv.kind === 'pending') {
     const buy = mv.side === 'BUY';
     card.classList.add(buy ? 'buy' : 'sell');
-    let amt = '';
+    const share = buy ? mv.to : mv.from;
+    // 金额是按本金推算的估算值，实盘有偏差时它就不准 —— 只放副行当量级参考。
+    // 实盘数字差得明显时，这里也要给出正确值：横幅点过「已完成」就收起了，
+    // 那句校正不能只挂在横幅上。
+    let est = '', realLine = '';
     if (M) {
       const o = plannedOrder(M.V, M.cash, mv.to);
-      if (o.side !== 'NONE') amt = `，约 ${money(o.amount)} 元`;
+      if (o.side !== 'NONE') {
+        est = `<br>估算约 <b>${money(o.amount)}</b> 元（按本金推算，仅供估量）`;
+        const man = LS.get('calc', null);
+        if (man && isFinite(man.cash) && isFinite(man.hold) && (man.cash + man.hold) > 0) {
+          const rr = calcCatchUp(man.cash, man.hold, mv.to);
+          if (rr.ok && rr.side !== 'NONE' && Math.abs(rr.amount - o.amount) / o.amount > 0.02) {
+            realLine = `<br><b style="color:var(--${rr.side === 'BUY' ? 'up' : 'dn'})">`
+              + `按你填的实盘数字应为 ${rr.side === 'BUY' ? '买入' : '卖出'} ${money(rr.amount)} 元 —— 以这个为准</b>`;
+          }
+        }
+      }
     }
     const ex = execInfo(st.pending.signalDate);
-    $('nextLine').innerHTML = (ex.when === 'today' ? '今天收盘前' : ex.text.replace('收盘', '收盘'))
-      + `<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'}</b>${amt}`;
-    $('nextSub').innerHTML = `档位 <b>${mv.from}/5</b> → <b>${mv.to}/5</b>　·　信号日 ${st.pending.signalDate}`
+    $('nextLine').innerHTML = (ex.when === 'today' ? '今天收盘前' : ex.text)
+      + `<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'}第 ${share} 份</b>`;
+    $('nextSub').innerHTML = `档位 <b>${mv.from}/5</b> → <b>${mv.to}/5</b>，目标仓位 ${WEIGHTS[mv.to] * 100}%`
+      + est + realLine
+      + `<br>信号日 ${st.pending.signalDate}`
       + (ex.when === 'today' ? '　·　<b style="color:var(--up)">就是今天，别错过收盘</b>'
         : ex.when === 'past' ? '　·　执行日已过，系统当晚会自动记账'
         : ex.day ? `　·　执行日 ${ex.day}` : '');
@@ -479,17 +495,19 @@ function renderBanner(behind) {
   const bn = $('banner');
   const ackKey = st.pending ? `ack.${st.pending.signalDate}` : null;
   if (st.pending && !LS.get(ackKey, false)) {
-    let side = st.pending.side, amtTxt = `目标仓位 ${WEIGHTS[st.pending.tierTo] * 100}%`;
+    let side = st.pending.side, estTxt = '';
     if (M) {
       const o = plannedOrder(M.V, M.cash, st.pending.tierTo);
       if (o.side !== 'NONE') side = o.side;
       const sh = st.etf && st.etf.close ? shares(o.amount, st.etf.close) : null;
-      amtTxt = o.side === 'NONE' ? '无需调整' : `${money(o.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : '');
+      estTxt = o.side === 'NONE' ? '' : `估算约 ${money(o.amount)} 元` + (sh ? `（约 ${money(sh)} 股）` : '')
+        + '，按本金推算';
     }
     const buy = side === 'BUY';
     bn.classList.add('on'); bn.classList.toggle('sell', !buy);
     $('bKick').textContent = `触发 · 下一个交易日收盘执行　档位 ${st.pending.tierFrom}/5 → ${st.pending.tierTo}/5`;
-    $('bText').textContent = `${buy ? '买入' : '卖出'}　${amtTxt}`;
+    const bShare = buy ? st.pending.tierTo : st.pending.tierFrom;
+    $('bText').textContent = `${buy ? '买入' : '卖出'}第 ${bShare} 份　目标仓位 ${WEIGHTS[st.pending.tierTo] * 100}%`;
 
     // 这里的金额是按本金重放出来的理论值，推送里也是同一个数。
     // 如果你在计算器里填过真实数字且差得明显，必须以真实数字为准 ——
@@ -505,8 +523,10 @@ function renderBanner(behind) {
           + `${money(rr.amount)} 元 —— 以这个为准。</b>上面是按本金推算的理论值。`;
       }
     }
-    $('bSub').innerHTML = '此横幅仅供你确认已下单。<b>无论是否点击，系统都已按规则把这笔操作写入不可更改的记录。</b>'
-      + realNote;
+    $('bSub').innerHTML = (estTxt ? estTxt + '，下单以下方计算器为准。<br>' : '')
+      + realNote.replace(/^<br>/, '')
+      + (realNote ? '<br>' : '')
+      + '此横幅仅供你确认已下单。<b>无论是否点击，系统都已按规则把这笔操作写入不可更改的记录。</b>';
     $('bDone').onclick = () => { LS.set(ackKey, true); bn.classList.remove('on'); };
   } else {
     bn.classList.remove('on');
