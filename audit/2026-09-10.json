@@ -1,0 +1,108 @@
+{
+  "today": "2026-09-10",
+  "ranAt": "2026-09-10 21:00:45",
+  "checks": [
+    {
+      "id": 3,
+      "name": "结构：日期递增且都是官方交易日",
+      "ok": true,
+      "detail": "105 行，逐日核对交易所日历一致",
+      "fatal": true
+    },
+    {
+      "id": 4,
+      "name": "幽灵行已清除",
+      "ok": true,
+      "detail": "剔除 0 行（幽灵 0／周末 0／元旦 0／重复 0）",
+      "fatal": true
+    },
+    {
+      "id": 5,
+      "name": "涨跌幅与收盘价对账",
+      "ok": true,
+      "detail": "逐行一致",
+      "fatal": true
+    },
+    {
+      "id": 6,
+      "name": "单日波动在 ±11% 内",
+      "ok": true,
+      "detail": "通过",
+      "fatal": true
+    },
+    {
+      "id": 7,
+      "name": "MA30 有满 30 个交易日",
+      "ok": true,
+      "detail": "105 / 30",
+      "fatal": true
+    },
+    {
+      "id": 8,
+      "name": "ETF 报价日期与指数一致",
+      "ok": false,
+      "detail": "未取到 ETF 报价",
+      "fatal": false
+    },
+    {
+      "id": 9,
+      "name": "档位一天最多动一档",
+      "ok": true,
+      "detail": "0 → 0",
+      "fatal": true
+    },
+    {
+      "id": 10,
+      "name": "账本自审：日期与档位链完整",
+      "ok": true,
+      "detail": "0 笔全部自洽",
+      "fatal": true
+    }
+  ],
+  "cleaning": {
+    "rawCount": 105,
+    "removed": {
+      "dup": [],
+      "weekend": [],
+      "newyear": [],
+      "ghost": []
+    }
+  },
+  "rawTail": [
+    {
+      "d": "2026-09-04",
+      "c": 12239.09,
+      "pct": 0.25
+    },
+    {
+      "d": "2026-09-07",
+      "c": 12091.59,
+      "pct": -1.21
+    },
+    {
+      "d": "2026-09-08",
+      "c": 12250.47,
+      "pct": 1.31
+    },
+    {
+      "d": "2026-09-09",
+      "c": 12387.45,
+      "pct": 1.12
+    },
+    {
+      "d": "2026-09-10",
+      "c": 12304.81,
+      "pct": -0.67
+    }
+  ],
+  "etf": null,
+  "ma30": 12095.429,
+  "signal": null,
+  "tierBefore": 0,
+  "tierAfter": 0,
+  "pending": null,
+  "executed": null,
+  "log": [
+    "ETF 报价获取失败：东方财富 515180 请求失败：HTTP 520"
+  ]
+}

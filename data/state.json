@@ -1,19 +1,20 @@
 {
   "schema": 1,
   "launchDate": "2026-09-10",
-  "asof": "2026-09-09",
-  "lastRun": null,
+  "asof": "2026-09-10",
+  "lastRun": "2026-09-10 21:00:45",
   "tier": 0,
   "pending": null,
   "index": {
     "code": "H00922",
-    "close": 12387.45,
-    "ma30": 12087.24,
-    "ratio": 1.0248,
-    "buyTrigger": 11724.62,
-    "sellTrigger": 12328.98,
-    "pctToBuy": -5.35,
-    "pctToSell": -0.47
+    "close": 12304.81,
+    "ma30": 12095.43,
+    "ratio": 1.0173,
+    "changePct": -0.67,
+    "buyTrigger": 11732.57,
+    "sellTrigger": 12337.34,
+    "pctToBuy": -4.65,
+    "pctToSell": 0.26
   },
   "bond": {
     "code": "H11001",
@@ -21,15 +22,22 @@
   },
   "etf": {
     "code": "515180",
-    "name": "红利ETF易方达",
     "close": null,
-    "asof": null
+    "asof": null,
+    "stale": true
   },
   "checks": {
-    "passed": 0,
-    "total": 10,
-    "failed": [],
-    "note": "引导数据，Worker 尚未运行过"
+    "passed": 7,
+    "total": 8,
+    "failed": [
+      {
+        "id": 8,
+        "name": "ETF 报价日期与指数一致",
+        "detail": "未取到 ETF 报价"
+      }
+    ],
+    "ranAt": "2026-09-10 21:00:45"
   },
-  "consecutiveTradingDays": 0
+  "consecutiveTradingDays": 0,
+  "lastExecuted": null
 }
