@@ -128,6 +128,11 @@ tr:last-child td{border-bottom:none}
   background:var(--chip);color:var(--dm)}
 .timingbox.live{background:color-mix(in srgb,var(--ac) 14%,transparent);border:1px solid var(--ac);
   color:var(--ac);font-weight:600}
+.warnbox .cu{display:flex;flex-direction:column;gap:3px;margin:10px 0 0;padding:10px 12px;
+  border-radius:7px;background:var(--pan)}
+.warnbox .cu span{font-size:11.5px;opacity:.9}
+.warnbox .cu b{font-family:var(--mono);font-size:15.5px;line-height:1.35}
+.warnbox .cunote{margin:10px 0 0;font-size:11.5px;opacity:.85;line-height:1.55}
 .warnbox{background:color-mix(in srgb,var(--warn) 14%,transparent);border:1px solid var(--warn);
   color:var(--warn);border-radius:8px;padding:11px 13px;font-size:12.5px;line-height:1.6;margin:14px 0 0}
 .errbox{background:color-mix(in srgb,var(--up) 12%,transparent);border:1px solid var(--up);
@@ -285,8 +290,8 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = 'f356adb60b';
-const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep,
+const CORE_VERSION = '6fe3c9a554';
+const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp,
         nextMove: nextMoveFn, nextTradingDay, beijingDate, WEIGHTS, COMMISSION }
   = await import(`./shared/strategy.js?v=${CORE_VERSION}`);
 
@@ -547,12 +552,36 @@ function calc() {
       + `真正触发时这里会变成蓝色，并注明「本次要执行的金额」。`;
   }
 
-  // 与账本档位不一致只提示，不改变上面的计算结果
+  // 实盘和账本对不上时，除了提醒，还要直接给出「一次补齐」的金额。
+  // 上面那个数字只走一档 —— 落后两档时它只有实际需要量的一半。
   const box = $('mismatch');
-  if (r.tier !== S.state.tier) {
+  // 有已触发的挂单时，补齐目标取挂单执行后的档位 —— 补到那儿今晚就正好对上
+  const ledgerTier = S.state.pending ? S.state.pending.tierTo : S.state.tier;
+  // 注意用 r.tier 而不是 r.ok：实盘空仓而账本要卖出时 calcStep 会返回
+  // EMPTY（ok=false），但那恰恰是最需要补齐提示的时候。
+  if (r.tier !== undefined && r.tier !== ledgerTier) {
+    const cu = calcCatchUp(cash, hold, ledgerTier);
+    const px = S.state.etf && S.state.etf.close;
+    const behind = ledgerTier - r.tier;
+    let line = '';
+    if (cu.ok && cu.side !== 'NONE') {
+      const csh = px ? shares(cu.amount, px) : null;
+      const col = cu.side === 'BUY' ? 'var(--up)' : 'var(--dn)';
+      line = `<div class="cu"><span>一次补齐到账本 ${ledgerTier}/5 档</span>`
+        + `<b style="color:${col}">${cu.side === 'BUY' ? '买入' : '卖出'} ${money(cu.amount)} 元`
+        + (csh ? `　约 ${money(csh)} 股` : '') + `</b></div>`;
+    }
     box.hidden = false;
-    box.innerHTML = `<b>提示：</b>按你填的数字你在 <b>${r.tier}/5</b> 档，账本记录的是 <b>${S.state.tier}/5</b> 档。`
-      + `上面的计算已按你填的数字来。如果不是随手试算，说明实盘和账本不同步，建议核对一下。`;
+    box.innerHTML = `<b>实盘${behind > 0 ? '落后' : '超前'}账本 ${Math.abs(behind)} 档。</b>`
+      + `按你填的数字你在 <b>${r.tier}/5</b> 档，`
+      + (S.state.pending
+          ? `账本今晚执行完会是 <b>${ledgerTier}/5</b> 档。`
+          : `账本记录的是 <b>${ledgerTier}/5</b> 档。`)
+      + `<div class="cu"><span>只走一档（上面那个数字）</span><b>`
+      + (r.ok ? `${money(r.amount)} 元` : (r.reason === 'FULL' ? '已满仓' : '已空仓，走不了')) + `</b></div>`
+      + line
+      + `<div class="cunote">两个都可以：走一档更贴合策略「一天最多动一档」的节奏，补齐则立刻和账本对上。`
+      + `账本记的是理论价，补齐时的成交价会和它有出入，这部分差异系统不追踪。</div>`;
   } else box.hidden = true;
 }
 function onCalcInput() {

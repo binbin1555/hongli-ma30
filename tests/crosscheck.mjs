@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 // 按脚本自身位置解析，保证从仓库根目录或 tests/ 目录跑都一样
 const HERE = dirname(fileURLToPath(import.meta.url));
-import { replay, ma, signal, nextTier, orderAmount, triggers, calcStep, nextMove, nextTradingDay, beijingDate, WEIGHTS, COMMISSION }
+import { replay, ma, signal, nextTier, orderAmount, triggers, calcStep, calcCatchUp, nextMove, nextTradingDay, beijingDate, WEIGHTS, COMMISSION }
   from '../shared/strategy.js';
 
 const cases2 = JSON.parse(readFileSync(join(HERE, 'fixtures.json'), 'utf8'));
@@ -238,6 +238,56 @@ console.log('\n=== 北京日期换算（曾经多叠了一次时区偏移）==='
   const ok = beijingDate(fixed) === '2026-09-10';
   allOk = allOk && ok;
   console.log(`  ${ok ? 'OK ' : '!!!'} 与运行环境时区无关（本机 offset=${new Date().getTimezoneOffset()} 分钟）`);
+}
+
+
+console.log('\n=== 补齐 calcCatchUp（漏做几天后一次性追上账本）===');
+{
+  const C3 = COMMISSION;
+  const t = [
+    [1000000,       0, 2, 'BUY',  (0.50*1000000-0)/(1+0.50*C3),        '空仓补到 2/5 档'],
+    [1000000,       0, 4, 'BUY',  (1.00*1000000-0)/(1+1.00*C3),        '空仓补到满仓'],
+    [      0, 1000000, 1, 'SELL', (1000000-0.25*1000000)/(1-0.25*C3),  '满仓补到 1/5 档'],
+    [ 750000,  250000, 3, 'BUY',  (0.75*1000000-250000)/(1+0.75*C3),   '1档补到 3/5 档'],
+  ];
+  for (const [cash, hold, tgt, side, amt, name] of t) {
+    const r = calcCatchUp(cash, hold, tgt);
+    const ok = r.ok && r.side === side && Math.abs(r.amount - amt) < 0.01;
+    allOk = allOk && ok;
+    console.log(`  ${ok ? 'OK ' : '!!!'} ${name}　→ ${r.side} ${r.amount.toFixed(2)}　期望 ${side} ${amt.toFixed(2)}`);
+  }
+  for (const [cash, hold, tgt, reason, name] of [
+    [0, 0, 2, 'NO_INPUT', '两栏都空'],
+    [1000000, 0, 5, 'BAD_TIER', '档位越界'],
+    [1000000, 0, -1, 'BAD_TIER', '档位为负'],
+  ]) {
+    const r = calcCatchUp(cash, hold, tgt);
+    const ok = !r.ok && r.reason === reason;
+    allOk = allOk && ok;
+    console.log(`  ${ok ? 'OK ' : '!!!'} ${name} → ${r.reason} 期望 ${reason}`);
+  }
+
+  console.log('\n  强不变量：成交后仓位必须精确落在目标档位上');
+  let n = 0, bad = 0, worst = 0, eg = null;
+  for (let total = 5000; total <= 3000000; total *= 4.3) {
+    for (let i = 0; i <= 100; i++) {
+      const hold = total * i / 100, cash = total - hold;
+      for (let tgt = 0; tgt <= 4; tgt++) {
+        const r = calcCatchUp(cash, hold, tgt);
+        n++;
+        if (!r.ok) continue;
+        // 按目标市值法成交：买入付佣金，卖出扣佣金，总资产各减少 X*c
+        let V = hold, S = total;
+        if (r.side === 'BUY')  { V += r.amount; S -= r.amount * COMMISSION; }
+        if (r.side === 'SELL') { V -= r.amount; S -= r.amount * COMMISSION; }
+        const err = Math.abs(V / S - WEIGHTS[tgt]);
+        if (err > worst) { worst = err; eg = { cash, hold, tgt, err }; }
+        if (err > 1e-9) bad++;
+      }
+    }
+  }
+  allOk = allOk && bad === 0;
+  console.log(`  ${bad === 0 ? 'OK ' : '!!!'} 穷举 ${n} 组，偏离目标仓位超过 1e-9 的有 ${bad} 组（最大偏差 ${worst.toExponential(2)}）`);
 }
 
 console.log(`\n总判定：${allOk ? '全部通过 ✓' : '有不一致 ✗'}`);

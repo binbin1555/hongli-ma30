@@ -214,6 +214,29 @@ export function calcStep(cash, hold, wantBuy) {
 }
 
 /**
+ * 补齐：从当前实盘位置一次性调到指定档位要动多少钱。
+ *
+ * 用在漏做的时候。calcStep 只算「走一档」，如果你连着几天没操作，
+ * 账本已经往前走了两三档，走一档远远不够 —— 落后两档时它只给一半的量。
+ *
+ * @param {number} cash 可用资金
+ * @param {number} hold 已持有红利市值
+ * @param {number} targetTier 要补到的档位 0–4（一般就是账本记录的档位）
+ */
+export function calcCatchUp(cash, hold, targetTier) {
+  const c = Number(cash) || 0;
+  const h = Number(hold) || 0;
+  const total = c + h;
+  if (!(total > 0) || c < 0 || h < 0) return { ok: false, reason: 'NO_INPUT' };
+  if (!(targetTier >= 0 && targetTier <= MAX_TIER)) return { ok: false, reason: 'BAD_TIER' };
+  const o = orderAmount(total, h, WEIGHTS[targetTier]);
+  return {
+    ok: true, side: o.side, amount: o.amount, total,
+    targetTier, targetWeight: WEIGHTS[targetTier], weight: h / total,
+  };
+}
+
+/**
  * 账本自审：重放之前先确认账本本身是自洽的。
  *
  * 存在的理由：只要有一条记录的日期不在行情序列里（比如误写成休市日），

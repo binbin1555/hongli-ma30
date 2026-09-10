@@ -11,7 +11,7 @@
  */
 
 import {
-  ma, signal, nextTier, replay, plannedOrder, shares, triggers, auditLedger, beijingDate,
+  ma, signal, nextTier, replay, plannedOrder, shares, triggers, auditLedger, beijingDate, nextTradingDay,
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
 
@@ -568,6 +568,65 @@ async function pushDaily(env, { today, newState, pending, executed, plan, etf, c
   }
 }
 
+/**
+ * T+1 盘中提醒（默认 14:30，收盘前半小时）。
+ *
+ * 只读不写：不碰账本、不改 state、不做任何校验写入。
+ * 只有「今天正是某笔挂单的执行日」时才推送，其余情况一律静默，避免变成骚扰。
+ */
+async function remind(env) {
+  const today = beijingDate();
+  const G = gh(env);
+
+  const cal = await G.readJSON(`calendar/${today.slice(0, 4)}.json`);
+  if (!cal || !cal.tradingDays.includes(today)) {
+    return { ok: true, today, skipped: '非交易日，静默' };
+  }
+
+  const state = await G.readJSON('data/state.json');
+  if (!state || !state.pending) {
+    return { ok: true, today, skipped: '没有待执行的挂单，静默' };
+  }
+
+  // 挂单该在哪天执行 —— 周五出的信号要到下周一，不能简单加一天
+  let days = [...cal.tradingDays];
+  const nextCal = await G.readJSON(`calendar/${+today.slice(0, 4) + 1}.json`);
+  if (nextCal) days = days.concat(nextCal.tradingDays).sort();
+  const execDay = nextTradingDay(days, state.pending.signalDate);
+  if (execDay !== today) {
+    return { ok: true, today, skipped: `执行日是 ${execDay}，不是今天，静默` };
+  }
+
+  // 金额按本金和账本重放得出，和晚上那条推送同源
+  const p = state.pending;
+  let amtTxt = `目标仓位 ${WEIGHTS[p.tierTo] * 100}%`;
+  let side = p.side;
+  const principal = Number(env.PRINCIPAL || 0);
+  if (principal > 0) {
+    const series = await G.readJSON('data/series.json');
+    const ledger = await G.readJSON('data/ledger.json');
+    const rows = series.rows.filter((r) => r.d <= state.asof);
+    const st = replay(rows, ledger.entries, principal, state.launchDate);
+    const o = plannedOrder(st.V, st.cash, p.tierTo);
+    if (o.side !== 'NONE') {
+      side = o.side;
+      const sh = state.etf && state.etf.close ? shares(o.amount, state.etf.close) : null;
+      amtTxt = `${money(o.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : '');
+    }
+  }
+  const isBuy = side === 'BUY';
+  await bark(env, {
+    title: `⏰ 今天收盘前${isBuy ? '买入' : '卖出'}`,
+    body: `${isBuy ? '买入' : '卖出'} ${amtTxt}
+档位 ${p.tierFrom}/5 → ${p.tierTo}/5`
+      + `
+信号出在 ${p.signalDate}，今天（${today}）收盘前完成。`,
+    level: 'timeSensitive',
+    group: '红利MA30·操作',
+  });
+  return { ok: true, today, reminded: true, side, tierTo: p.tierTo };
+}
+
 /** 每月刷新交易日历：把未来 4 个月的官方日历并进仓库 */
 async function refreshCalendar(env) {
   const G = gh(env);
@@ -642,11 +701,15 @@ export default {
         if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
         return json(await runDaily(env, { force: url.searchParams.get('force') === '1' }));
       }
+      if (path === '/remind') {
+        if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
+        return json(await remind(env));
+      }
       if (path === '/calendar/refresh') {
         if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
         return json(await refreshCalendar(env));
       }
-      return json({ ok: false, error: '未知路径', paths: ['/run', '/calendar/refresh', '/health'] }, 404);
+      return json({ ok: false, error: '未知路径', paths: ['/run', '/remind', '/calendar/refresh', '/health'] }, 404);
     } catch (e) {
       await bark(env, {
         title: '❌ 红利MA30 · 运行异常',
