@@ -294,8 +294,8 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = '0db32f5738';
-const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries,
+const CORE_VERSION = '417b3dc32f';
+const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries, validateState,
         nextMove: nextMoveFn, nextTradingDay, beijingDate, WEIGHTS, COMMISSION }
   = await import(`./shared/strategy.js?v=${CORE_VERSION}`);
 
@@ -351,6 +351,18 @@ async function load() {
     fetch('./data/ledger.json' + bust).then((r) => r.json()),
     fetch('./data/series.json' + bust).then((r) => r.json()),
   ]);
+  // 状态损坏时整页报错，绝不硬着头皮画 —— 一个看似正常的错数字比一屏红字危险得多
+  const stProblems = validateState(state);
+  if (stProblems.length) {
+    document.querySelector('.wrap').innerHTML =
+      `<div class="card"><p class="k" style="color:var(--up)">数据异常，已停止显示</p>`
+      + `<p style="font-size:14px;line-height:1.7">data/state.json 的内容不合法，为避免显示出错误的数字，页面不再往下渲染。</p>`
+      + `<ul style="font-size:13px;line-height:1.8;color:var(--up)">`
+      + stProblems.map((x) => `<li>${x}</li>`).join('') + `</ul>`
+      + `<p class="note">这通常意味着写入过程出了问题。可以在 GitHub 的提交历史里回看上一版 state.json，`
+      + `或等下一个交易日 21:00 系统自动重算。若持续出现，请检查 Worker 日志。</p></div>`;
+    return;
+  }
   S = { state, ledger, series, cal: [] };
   // 交易日历用来把「下一个交易日」算成具体日期（周五出信号要到下周一）
   // 次年日历只在临近年底才取：平时它必然 404，白发一次请求还在控制台留红字

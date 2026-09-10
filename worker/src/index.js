@@ -11,7 +11,7 @@
  */
 
 import {
-  ma, signal, nextTier, replay, plannedOrder, shares, triggers, auditLedger, beijingDate, nextTradingDay,
+  ma, signal, nextTier, replay, plannedOrder, shares, triggers, auditLedger, beijingDate, nextTradingDay, validateState,
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
 
@@ -230,7 +230,7 @@ async function etfEastmoney(code) {
     d: new Date((d0.f86 + 8 * 3600) * 1000).toISOString().slice(0, 10),
   };
 }
-async function fetchETF(code) {
+export async function fetchETF(code) {
   const sources = [['腾讯', etfTencent], ['新浪', etfSina], ['东财', etfEastmoney]];
   const tried = [];
   for (const [name, fn] of sources) {
@@ -408,6 +408,16 @@ async function runDaily(env, { force = false } = {}) {
   // ---- 幂等：同一天不重复跑 ----
   const state = await G.readJSON('data/state.json');
   if (!state) throw new Error('data/state.json 不存在，请先完成仓库初始化');
+  // 读到损坏的状态就停手：基于它算出来的信号和账本都会是错的
+  const stBad = validateState(state);
+  if (stBad.length) {
+    await bark(env, {
+      title: '⚠️ 红利MA30 · 状态文件异常',
+      body: `${today} 读到的 state.json 不合法，本次未运行：\n` + stBad.slice(0, 4).join('\n'),
+      level: 'timeSensitive',
+    });
+    return { ok: false, today, reason: 'state.json 不合法', problems: stBad };
+  }
   if (state.asof === today && !force) {
     return { ok: true, today, skipped: '今日已运行过（加 &force=1 可强制重跑）' };
   }

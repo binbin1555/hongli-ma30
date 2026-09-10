@@ -130,6 +130,56 @@ export function shares(amount, etfPrice) {
 }
 
 /**
+ * 校验 state.json 的形状。
+ *
+ * 存在的理由：损坏的状态会被界面「硬着头皮画出来」而不是报错。
+ * 实测把 tier 改成 7 之后，档位显示 7、格子亮满 5 个、计算器却说已空仓，
+ * 页面上还出现了 NaN —— 全程没有任何提示。
+ * 宁可整页报错让人一眼看见，也不能显示一个看似正常的错数字。
+ *
+ * @returns {string[]} 问题列表，空数组表示通过
+ */
+export function validateState(st) {
+  const bad = [];
+  if (!st || typeof st !== 'object') return ['state.json 不是对象'];
+
+  if (!Number.isInteger(st.tier) || st.tier < 0 || st.tier > MAX_TIER) {
+    bad.push(`档位 ${JSON.stringify(st.tier)} 不是 0–${MAX_TIER} 的整数`);
+  }
+  const d = /^\d{4}-\d{2}-\d{2}$/;
+  if (!d.test(st.asof || '')) bad.push(`数据日期 ${JSON.stringify(st.asof)} 格式不对`);
+  if (!d.test(st.launchDate || '')) bad.push(`起算日 ${JSON.stringify(st.launchDate)} 格式不对`);
+
+  const i = st.index;
+  if (!i || typeof i !== 'object') {
+    bad.push('缺少 index 字段');
+  } else {
+    for (const k of ['close', 'ma30', 'buyTrigger', 'sellTrigger']) {
+      if (!(Number(i[k]) > 0) || !isFinite(Number(i[k]))) bad.push(`index.${k} = ${JSON.stringify(i[k])} 不是正数`);
+    }
+    if (Number(i.buyTrigger) >= Number(i.sellTrigger)) bad.push('买入线不低于卖出线');
+  }
+
+  const p = st.pending;
+  if (p != null) {
+    if (typeof p !== 'object') bad.push('pending 不是对象');
+    else {
+      for (const k of ['tierFrom', 'tierTo']) {
+        if (!Number.isInteger(p[k]) || p[k] < 0 || p[k] > MAX_TIER) bad.push(`pending.${k} = ${JSON.stringify(p[k])} 越界`);
+      }
+      if (Number.isInteger(p.tierFrom) && Number.isInteger(p.tierTo) && Math.abs(p.tierTo - p.tierFrom) !== 1) {
+        bad.push(`挂单跨了 ${Math.abs(p.tierTo - p.tierFrom)} 档，一次只能动一档`);
+      }
+      if (!d.test(p.signalDate || '')) bad.push(`pending.signalDate ${JSON.stringify(p.signalDate)} 格式不对`);
+      if (Number.isInteger(st.tier) && Number.isInteger(p.tierFrom) && p.tierFrom !== st.tier) {
+        bad.push(`挂单起始档 ${p.tierFrom} 与当前档位 ${st.tier} 对不上`);
+      }
+    }
+  }
+  return bad;
+}
+
+/**
  * 北京日期 YYYY-MM-DD。
  *
  * 只需要在绝对时间上加 8 小时 —— Date.now() 已经是 UTC 纪元毫秒，

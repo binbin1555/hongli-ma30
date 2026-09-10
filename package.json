@@ -9,7 +9,9 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "serve": "python -m http.server 8777",
-    "stamp": "node stamp.mjs"
+    "stamp": "node stamp.mjs",
+    "check:sources": "node tools/check-sources.mjs",
+    "sweep": "node tools/sweep.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.42.0"

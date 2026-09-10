@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 // 按脚本自身位置解析，保证从仓库根目录或 tests/ 目录跑都一样
 const HERE = dirname(fileURLToPath(import.meta.url));
-import { replay, ma, signal, nextTier, orderAmount, triggers, calcStep, calcCatchUp, missedEntries, nextMove, nextTradingDay, beijingDate, WEIGHTS, COMMISSION }
+import { replay, ma, signal, nextTier, orderAmount, triggers, calcStep, calcCatchUp, missedEntries, validateState, nextMove, nextTradingDay, beijingDate, WEIGHTS, COMMISSION }
   from '../shared/strategy.js';
 
 const cases2 = JSON.parse(readFileSync(join(HERE, 'fixtures.json'), 'utf8'));
@@ -422,6 +422,41 @@ console.log('\n=== 有挂单时该用哪个目标（曾经用错，导致多买�
   const land = Math.abs(V / S2 - WEIGHTS[pendingTierTo]) < 1e-9;
   allOk = allOk && land;
   console.log(`  ${land ? 'OK ' : '!!!'} 成交后仓位 ${(V / S2 * 100).toFixed(4)}% ，挂单目标 ${WEIGHTS[pendingTierTo] * 100}%`);
+}
+
+
+console.log('\n=== 状态文件校验 validateState（防止损坏数据被硬画出来）===');
+{
+  const good = {
+    tier: 2, asof: '2026-09-10', launchDate: '2026-09-01',
+    index: { close: 12300, ma30: 12000, buyTrigger: 11640, sellTrigger: 12240 },
+    pending: { side: 'SELL', tierFrom: 2, tierTo: 1, signalDate: '2026-09-10' },
+  };
+  // 断言「坏输入必须被拦下，且报出关键那条」，不锁死问题条数 —— 条数是实现细节
+  const t = [
+    [{ ...good, tier: 7 }, '档位 7', '档位越界 7'],
+    [{ ...good, tier: 1.5 }, '档位 1.5', '档位是小数'],
+    [{ ...good, tier: null }, '档位 null', '档位为 null'],
+    [{ ...good, asof: '20260910' }, '数据日期', '日期格式不对'],
+    [{ ...good, index: { ...good.index, ma30: 0 } }, 'index.ma30', 'MA30 为 0（会导致除零）'],
+    [{ ...good, index: { ...good.index, buyTrigger: 99999 } }, '买入线不低于卖出线', '买入线高于卖出线'],
+    [{ ...good, index: undefined }, '缺少 index', '缺少 index'],
+    [{ ...good, pending: { ...good.pending, tierTo: 4 } }, '一次只能动一档', '挂单一次跨 2 档'],
+    [{ ...good, pending: { ...good.pending, tierFrom: 0 } }, '对不上', '挂单起始档与当前档位对不上'],
+    [null, '不是对象', 'state 为 null'],
+    [{ ...good, launchDate: 'x' }, '起算日', '起算日格式不对'],
+    [{ ...good, pending: { ...good.pending, signalDate: '' } }, 'signalDate', '挂单缺信号日'],
+  ];
+  for (const [st, key, name] of t) {
+    const p = validateState(st);
+    const ok = p.length > 0 && p.some((x) => x.includes(key));
+    allOk = allOk && ok;
+    console.log(`  ${ok ? 'OK ' : '!!!'} ${name}　→ ${p.length} 条：${p[0] || '（没报错，漏了）'}`);
+  }
+  // 完好状态不能误报
+  const clean = validateState(good).length === 0 && validateState({ ...good, pending: null }).length === 0;
+  allOk = allOk && clean;
+  console.log(`  ${clean ? 'OK ' : '!!!'} 完好状态（含/不含挂单）均无误报`);
 }
 
 console.log(`\n总判定：${allOk ? '全部通过 ✓' : '有不一致 ✗'}`);
