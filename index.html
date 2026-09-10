@@ -355,8 +355,10 @@ function calc() {
   const tb = Math.min(4, tier + 1), ts = Math.max(0, tier - 1);
   const ob = tier < 4 ? orderAmount(Sv, Vv, WEIGHTS[tb]) : null;
   const os = tier > 0 ? orderAmount(Sv, Vv, WEIGHTS[ts]) : null;
-  $('oBuy').textContent = ob ? `${money(ob.amount)} 元` : '已满仓';
-  $('oSell').textContent = os ? `${money(os.amount)} 元` : '已空仓';
+  // 总资产为 0 时不要显示「0 元」——那看着像算错了，而不是「还没填」
+  const noInput = !(Sv > 0);
+  $('oBuy').textContent = tier >= 4 ? '已满仓' : noInput ? '先填总资产' : `${money(ob.amount)} 元`;
+  $('oSell').textContent = tier <= 0 ? '已空仓' : noInput ? '先填总资产' : `${money(os.amount)} 元`;
   const px = S.state.etf && S.state.etf.close;
   const target = st.pending ? (st.pending.side === 'BUY' ? ob : os) : ob;
   const sh = target && px ? shares(target.amount, px) : null;
