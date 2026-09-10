@@ -102,6 +102,23 @@ td.side{font-family:var(--sans);font-weight:600}
 tr:last-child td{border-bottom:none}
 
 .note{font-size:11.5px;color:var(--dm);margin:12px 0 0;line-height:1.65}
+.cardhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}
+.chip{font-size:10.5px;padding:3px 9px;border-radius:999px;background:var(--chip);color:var(--dm);
+  letter-spacing:.04em;white-space:nowrap}
+.chip.manual{background:color-mix(in srgb,var(--ac) 16%,transparent);color:var(--ac);font-weight:600}
+.linkbtn{font-family:inherit;font-size:11.5px;background:none;border:none;color:var(--ac);
+  cursor:pointer;padding:2px 4px;text-decoration:underline;text-underline-offset:2px}
+.linkbtn:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:4px}
+.setrow{display:flex;align-items:flex-start;gap:14px;margin:0 0 20px;padding:0 0 18px;
+  border-bottom:1px solid var(--ln)}
+.setmain{flex:1 1 auto;min-width:0}
+.setmain input{font-family:var(--mono);font-size:19px;padding:8px 11px;border-radius:7px;width:100%;
+  max-width:230px;background:var(--bg);border:1px solid var(--ac);color:var(--tx)}
+.setmain input:focus-visible{outline:2px solid var(--ac);outline-offset:1px}
+.setbtn{font-family:inherit;font-size:13px;font-weight:600;padding:9px 20px;border-radius:7px;
+  border:1px solid var(--ln);background:var(--bg);color:var(--tx);cursor:pointer;flex:none}
+.setbtn.done{background:var(--ac);border-color:var(--ac);color:#fff}
+.setbtn:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 .checks{display:flex;flex-direction:column;gap:7px;margin:4px 0 0}
 .chk{display:flex;gap:9px;align-items:flex-start;font-size:12.5px}
 .chk i{flex:none;width:16px;font-style:normal}
@@ -174,7 +191,11 @@ tr:last-child td{border-bottom:none}
   </div>
 
   <div class="card">
-    <p class="k">每份该是多少钱</p>
+    <div class="cardhead">
+      <p class="k" style="margin:0">每份该是多少钱</p>
+      <span class="chip" id="basisChip">自动推算</span>
+      <button class="linkbtn" id="resetBasis" type="button" hidden>恢复自动推算</button>
+    </div>
     <div class="calc">
       <div><label for="inS">当前总资产（元）</label><input id="inS" type="text" inputmode="decimal"></div>
       <div><label for="inV">其中股票市值（元）</label><input id="inV" type="text" inputmode="decimal"></div>
@@ -184,8 +205,11 @@ tr:last-child td{border-bottom:none}
       <div><p class="k">下一次卖出</p><p class="v" style="color:var(--dn)" id="oSell">–</p></div>
       <div><p class="k">参考股数</p><p class="v" id="oShares">–</p></div>
     </div>
-    <p class="note">目标市值法（说明文档 3.5）：买 X =（w×S − V）÷（1 + w×c），卖 X =（V − w×S）÷（1 − w×c），佣金 c = 万分之 0.45。
-      默认值由本金和账本自动推导，你也可以改成实盘的真实数字来试算。股数按 <span id="etfLabel">ETF</span> 收盘价向下取整到 100 股。</p>
+    <p id="mismatch" hidden style="background:color-mix(in srgb,var(--warn) 14%,transparent);
+      border:1px solid var(--warn);color:var(--warn);border-radius:8px;padding:11px 13px;
+      font-size:12.5px;line-height:1.6;margin:14px 0 0"></p>
+    <p class="note">这两个数字默认由本金和账本自动推算。<b>如果和你券商 App 里的真实数字对不上，直接改这里</b>——改完上方的账户盈亏也会跟着按你填的数字算，随时可以点「恢复自动推算」还原。<br>
+      算法是目标市值法（说明文档 3.5）：买 X =（w×S − V）÷（1 + w×c），卖 X =（V − w×S）÷（1 − w×c），佣金 c = 万分之 0.45。股数按 <span id="etfLabel">ETF</span> 收盘价向下取整到 100 股。</p>
   </div>
 
   <div class="card">
@@ -202,9 +226,14 @@ tr:last-child td{border-bottom:none}
 
   <div class="card">
     <p class="k">设置与数据健康</p>
-    <div class="calc" style="margin-bottom:16px">
-      <div><label for="inP">本金（元）</label><input id="inP" type="text" inputmode="decimal" placeholder="例如 1000000"></div>
-      <div><label for="inReal">实际总资产（可选，覆盖推导值）</label><input id="inReal" type="text" inputmode="decimal" placeholder="留空则用理论值"></div>
+    <div class="setrow">
+      <div class="setmain">
+        <p class="k" style="margin:0 0 4px">本金 · 起算金额</p>
+        <p class="mid" id="pView">未设置</p>
+        <input id="inP" type="text" inputmode="decimal" placeholder="例如 1000000" hidden>
+        <p class="sm" id="pHint">只填一次。系统从这个数字出发，按账本逐笔重放算出你现在应该有多少钱。</p>
+      </div>
+      <button class="setbtn" id="pBtn" type="button">设置</button>
     </div>
     <div class="checks" id="checks"></div>
     <p class="note" id="dataNote">–</p>
@@ -254,13 +283,29 @@ async function load() {
   render();
 }
 
+/**
+ * 资金状态只有一个来源：本金 + 账本重放。
+ * 如果实盘和推算对不上，用户可以在计算器里改成真实数字——那个覆盖值
+ * 同时作用于盈亏显示和下单金额，不存在"两处各管一半"的情况。
+ */
+function getManual() {
+  const m = LS.get('manual', null);
+  return (m && isFinite(m.S) && m.S > 0 && isFinite(m.V) && m.V >= 0) ? m : null;
+}
 function computeMoney() {
   const principal = num(LS.get('principal', 0));
   if (!principal) return null;
   const rows = S.series.rows.filter((r) => r.d <= S.state.asof);
-  const st = replay(rows, S.ledger.entries, principal, S.state.launchDate);
-  const override = num(LS.get('realTotal', 0));
-  return { principal, ...st, override: override > 0 ? override : null };
+  const d = replay(rows, S.ledger.entries, principal, S.state.launchDate);
+  const man = getManual();
+  return {
+    principal,
+    derivedTotal: d.total, derivedV: d.V,
+    total: man ? man.S : d.total,
+    V: man ? man.V : d.V,
+    cash: man ? Math.max(0, man.S - man.V) : d.cash,
+    manual: !!man,
+  };
 }
 
 function render() {
@@ -303,13 +348,13 @@ function render() {
     $('pnl').style.color = 'var(--dm)';
     $('pnlSub').textContent = '在下方「设置」里填入本金后显示';
   } else {
-    const total = M.override ?? M.total;
-    const p = total - M.principal, pct = p / M.principal * 100;
+    const p = M.total - M.principal, pct = p / M.principal * 100;
     const col = p >= 0 ? 'var(--up)' : 'var(--dn)';
     $('pnl').textContent = (p >= 0 ? '+' : '−') + money(Math.abs(p));
     $('pnl').style.color = col;
     $('pnlSub').innerHTML = `<span style="color:${col}">${p >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%</span>`
-      + `　总资产 ${money(total)}　本金 ${money(M.principal)}${M.override ? '　（手填）' : ''}`;
+      + `　总资产 ${money(M.total)}　本金 ${money(M.principal)}`
+      + (M.manual ? '　<b style="color:var(--ac)">按实盘数字</b>' : '');
   }
 
   // 横幅
@@ -331,13 +376,21 @@ function render() {
     bn.classList.remove('on');
   }
 
-  // 计算器默认值
+  // 计算器：输入框始终反映当前生效的数字（自动推算值，或你填的实盘值）
   if (M) {
-    if (!$('inS').dataset.touched) $('inS').value = money(M.override ?? M.total);
-    if (!$('inV').dataset.touched) $('inV').value = money(M.V);
+    $('inS').value = money(M.total);
+    $('inV').value = money(M.V);
+  } else {
+    $('inS').value = ''; $('inV').value = '';
   }
   $('etfLabel').textContent = st.etf?.code || 'ETF';
+  syncBasisChip(M);
   calc();
+
+  // 本金显示
+  const pv = num(LS.get('principal', 0));
+  $('pView').textContent = pv ? money(pv) + ' 元' : '未设置';
+  $('pView').style.color = pv ? 'var(--tx)' : 'var(--dm)';
 
   // 账本
   renderLedger(M);
@@ -363,14 +416,80 @@ function calc() {
   const target = st.pending ? (st.pending.side === 'BUY' ? ob : os) : ob;
   const sh = target && px ? shares(target.amount, px) : null;
   $('oShares').textContent = sh ? `${money(sh)} 股` : (px ? '–' : '无报价');
+
+  // 实盘股票占比和记录的档位对不上 —— 说明实盘和账本不同步，
+  // 不提示的话后面每一笔下单金额都会算错，而界面上完全看不出来。
+  const box = $('mismatch');
+  const man = getManual();
+  if (man && Sv > 0) {
+    const impliedW = Vv / Sv;
+    const expectW = WEIGHTS[tier];
+    if (Math.abs(impliedW - expectW) > 0.125) {
+      const near = WEIGHTS.reduce((a, b) => Math.abs(b - impliedW) < Math.abs(a - impliedW) ? b : a);
+      box.hidden = false;
+      box.innerHTML = `<b>实盘和账本对不上。</b>你填的股票占比是 ${(impliedW * 100).toFixed(1)}%`
+        + `（接近 ${WEIGHTS.indexOf(near)}/5 档），但账本记录的当前档位是 ${tier}/5，应为 ${(expectW * 100).toFixed(0)}%。<br>`
+        + `如果不是笔误，说明你的实际持仓和系统记录的不一致——按现在这两个数字算出来的下单金额会把仓位带偏。建议先核对账本，或把持仓调回 ${(expectW * 100).toFixed(0)}% 再继续。`;
+      return;
+    }
+  }
+  box.hidden = true;
 }
-for (const id of ['inS', 'inV']) {
-  $(id).addEventListener('input', (e) => { e.target.dataset.touched = '1'; calc(); });
+function syncBasisChip(M) {
+  const chip = $('basisChip'), btn = $('resetBasis');
+  const manual = M && M.manual;
+  chip.textContent = manual ? '已按实盘数字' : '自动推算';
+  chip.classList.toggle('manual', !!manual);
+  btn.hidden = !manual;
+  if (manual) {
+    chip.title = `自动推算值为 总资产 ${money(M.derivedTotal)} / 股票 ${money(M.derivedV)}`;
+  } else {
+    chip.title = '由本金和账本逐笔重放算出';
+  }
 }
-$('inP').value = LS.get('principal', '') ? money(num(LS.get('principal', 0))) : '';
-$('inReal').value = LS.get('realTotal', '') ? money(num(LS.get('realTotal', 0))) : '';
-$('inP').addEventListener('input', (e) => { LS.set('principal', num(e.target.value)); delete $('inS').dataset.touched; delete $('inV').dataset.touched; render(); });
-$('inReal').addEventListener('input', (e) => { LS.set('realTotal', num(e.target.value)); delete $('inS').dataset.touched; render(); });
+
+// 改计算器里的数字 = 用实盘值覆盖推算值。只更新结果，不重写输入框（否则光标会跳）
+function onBasisInput() {
+  const Sv = num($('inS').value), Vv = num($('inV').value);
+  if (Sv > 0) LS.set('manual', { S: Sv, V: Vv });
+  const M = computeMoney();
+  syncBasisChip(M);
+  calc();
+  if (M) {
+    const p = M.total - M.principal, pct = p / M.principal * 100;
+    const col = p >= 0 ? 'var(--up)' : 'var(--dn)';
+    $('pnl').textContent = (p >= 0 ? '+' : '−') + money(Math.abs(p));
+    $('pnl').style.color = col;
+    $('pnlSub').innerHTML = `<span style="color:${col}">${p >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%</span>`
+      + `　总资产 ${money(M.total)}　本金 ${money(M.principal)}`
+      + (M.manual ? '　<b style="color:var(--ac)">按实盘数字</b>' : '');
+  }
+}
+$('inS').addEventListener('input', onBasisInput);
+$('inV').addEventListener('input', onBasisInput);
+$('resetBasis').addEventListener('click', () => { LS.set('manual', null); render(); });
+
+// 本金：平时是文本，点「设置」才变输入框，点「完成」保存并立即重算
+$('pBtn').addEventListener('click', () => {
+  const editing = !$('inP').hidden;
+  if (!editing) {
+    const pv = num(LS.get('principal', 0));
+    $('inP').value = pv ? money(pv) : '';
+    $('inP').hidden = false; $('pView').hidden = true;
+    $('pBtn').textContent = '完成'; $('pBtn').classList.add('done');
+    $('pHint').textContent = '填完点「完成」保存，盈亏和下单金额会立刻重算。';
+    $('inP').focus(); $('inP').select();
+  } else {
+    const v = num($('inP').value);
+    LS.set('principal', v);
+    LS.set('manual', null);            // 换了本金，之前的实盘覆盖值就不作数了
+    $('inP').hidden = true; $('pView').hidden = false;
+    $('pBtn').textContent = '设置'; $('pBtn').classList.remove('done');
+    $('pHint').textContent = '只填一次。系统从这个数字出发，按账本逐笔重放算出你现在应该有多少钱。';
+    render();
+  }
+});
+$('inP').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pBtn').click(); });
 
 function renderLedger(M) {
   const tb = $('ledger').querySelector('tbody');
