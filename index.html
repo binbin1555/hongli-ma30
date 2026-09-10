@@ -32,6 +32,10 @@ body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-
   font-weight:600;margin:0 0 8px}
 .big{font-family:var(--mono);font-size:32px;font-weight:600;margin:0;line-height:1.12;letter-spacing:-.02em}
 .sm{font-size:12.5px;margin:6px 0 0;color:var(--dm)}
+.pnlrows{display:flex;flex-direction:column;gap:5px;margin:14px 0 0;font-size:12.5px}
+.pnlrows>div{display:flex;justify-content:space-between;gap:14px}
+.pnlrows span{color:var(--dm)}
+.pnlrows b{font-family:var(--mono);font-weight:600}
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
 
 .top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:2px 4px}
@@ -56,13 +60,15 @@ body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-
 #banner button:focus-visible{outline:3px solid #fff;outline-offset:3px}
 
 /* 下一次操作 —— 页面的主角 */
-#nextCard{background:var(--pan);border-radius:14px;padding:26px 24px;
-  border-left:5px solid var(--ac)}
+#nextCard{background:var(--pan);border-radius:14px;padding:30px 26px;
+  border-left:7px solid var(--ac);box-shadow:0 3px 18px rgba(0,0,0,.07)}
 #nextCard.buy{border-left-color:var(--up)}
 #nextCard.sell{border-left-color:var(--dn)}
-#nextLine{font-size:clamp(19px,4.6vw,27px);font-weight:700;margin:0;line-height:1.35;
-  letter-spacing:-.01em;text-wrap:balance}
-#nextSub{font-size:13px;margin:12px 0 0;color:var(--dm);line-height:1.6}
+#nextCard .k{font-size:12px;letter-spacing:.16em;margin-bottom:12px}
+#nextLine{font-size:clamp(24px,6.2vw,36px);font-weight:700;margin:0;line-height:1.3;
+  letter-spacing:-.02em;text-wrap:balance}
+#nextLine b{font-size:1.12em}
+#nextSub{font-size:14px;margin:16px 0 0;color:var(--dm);line-height:1.65}
 #nextSub b{color:var(--tx);font-family:var(--mono);font-weight:600}
 
 .pips{display:flex;gap:6px;margin:14px 0 0}
@@ -79,8 +85,8 @@ body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-
   background:var(--pan);border:1px solid var(--ln);color:var(--dm);font-family:inherit}
 .ranges button[aria-pressed="true"]{background:var(--ac);border-color:var(--ac);color:#fff}
 .ranges button:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
-.chartbox{width:100%;overflow-x:auto;position:relative;touch-action:pan-y}
-svg.ch{display:block;width:100%;height:auto;min-width:520px}
+.chartbox{width:100%;position:relative;touch-action:none;-webkit-user-select:none;user-select:none}
+svg.ch{display:block;width:100%;height:auto}
 #tip{position:absolute;pointer-events:none;background:var(--pan);border:1px solid var(--ln);
   border-radius:9px;padding:10px 12px;font-size:12px;line-height:1.65;white-space:nowrap;
   box-shadow:0 6px 22px rgba(0,0,0,.18);opacity:0;transition:opacity .1s;z-index:5}
@@ -118,6 +124,10 @@ td.side{font-family:var(--sans);font-weight:600}
 tr:last-child td{border-bottom:none}
 
 .note{font-size:11.5px;color:var(--dm);margin:12px 0 0;line-height:1.65}
+.timingbox{border-radius:8px;padding:11px 13px;font-size:12.5px;line-height:1.6;margin:14px 0 0;
+  background:var(--chip);color:var(--dm)}
+.timingbox.live{background:color-mix(in srgb,var(--ac) 14%,transparent);border:1px solid var(--ac);
+  color:var(--ac);font-weight:600}
 .warnbox{background:color-mix(in srgb,var(--warn) 14%,transparent);border:1px solid var(--warn);
   color:var(--warn);border-radius:8px;padding:11px 13px;font-size:12.5px;line-height:1.6;margin:14px 0 0}
 .errbox{background:color-mix(in srgb,var(--up) 12%,transparent);border:1px solid var(--up);
@@ -172,14 +182,19 @@ tr:last-child td{border-bottom:none}
 
   <div class="grid2">
     <div class="card">
+      <p class="k">账户盈亏</p>
+      <p class="big" id="pnl">–</p>
+      <div class="pnlrows">
+        <div><span>累计</span><b id="pnlCum">–</b></div>
+        <div><span>年化</span><b id="pnlAnn">–</b></div>
+        <div><span>总资产</span><b id="pnlTot">–</b></div>
+        <div><span>已运行</span><b id="pnlDays">–</b></div>
+      </div>
+    </div>
+    <div class="card">
       <p class="k">当前档位</p>
       <p class="big"><span id="tierNum">–</span> <span style="font-size:19px;color:var(--dm)">/ 5 份</span></p>
       <div class="pips" id="pips"></div>
-    </div>
-    <div class="card">
-      <p class="k">账户盈亏</p>
-      <p class="big" id="pnl">–</p>
-      <p class="sm" id="pnlSub">–</p>
     </div>
   </div>
 
@@ -227,6 +242,7 @@ tr:last-child td{border-bottom:none}
       <p class="v" id="oMain">–</p>
       <p class="s" id="oSub">–</p>
     </div>
+    <p id="timing" class="timingbox"></p>
     <p id="mismatch" hidden class="warnbox"></p>
     <p class="note"><b>可用资金</b>＝还没买红利 ETF 的钱（现金、债基）。<b>已持有红利</b>＝已经买了的红利 ETF 现在值多少钱。
       两者相加就是你的总资产。<br>
@@ -381,26 +397,26 @@ function render() {
     $('nextLine').textContent = '暂无可执行的操作';
     $('nextSub').textContent = '';
   }
-  // 空仓时补一句：另一个方向为什么不显示
-  if (mv.kind === 'buy' && tier === 0) {
-    $('nextSub').innerHTML += `<br>当前 0/5 空仓，没有可卖的份额。`;
-  } else if (mv.kind === 'sell' && tier === 4) {
-    $('nextSub').innerHTML += `<br>当前 5/5 满仓，不再加仓。`;
-  }
 
   // ---- 账户盈亏 ----
   if (!M) {
     $('pnl').textContent = '未设本金';
     $('pnl').style.color = 'var(--dm)';
-    $('pnlSub').textContent = '在下方「设置」里填入本金后显示';
+    ['pnlCum', 'pnlAnn', 'pnlTot', 'pnlDays'].forEach((k) => { $(k).textContent = '–'; $(k).style.color = ''; });
+    $('pnlCum').textContent = '设本金后显示';
   } else {
     const p = M.total - M.principal;
     const col = p >= 0 ? 'var(--up)' : 'var(--dn)';
     $('pnl').textContent = (p >= 0 ? '+' : '−') + money(Math.abs(p));
     $('pnl').style.color = col;
-    const ann = M.annual == null ? '运行不足一天' : `年化 ${pct(M.annual)}`;
-    $('pnlSub').innerHTML = `<span style="color:${col}">${pct(M.cumPct)}</span>　${ann}`
-      + `<br>总资产 ${money(M.total)}　已运行 ${Math.round(M.days)} 天`;
+    $('pnlCum').textContent = pct(M.cumPct); $('pnlCum').style.color = col;
+    if (M.annual == null) {
+      $('pnlAnn').textContent = '满 1 天后显示'; $('pnlAnn').style.color = 'var(--dm)';
+    } else {
+      $('pnlAnn').textContent = pct(M.annual); $('pnlAnn').style.color = col;
+    }
+    $('pnlTot').textContent = money(M.total);
+    $('pnlDays').textContent = Math.round(M.days) + ' 天';
   }
 
   // ---- 横幅 ----
@@ -482,6 +498,20 @@ function calc() {
       `按你填的数字：总资产 ${money(r.total)}，${wTxt}，相当于 <b>${r.tier}/5</b> 档 → 目标 <b>${r.to}/5</b> 档（${r.targetWeight * 100}%）`
         + (px ? '' : '　·　暂无 ETF 报价，只给金额'),
       isBuy ? 'var(--up)' : 'var(--dn)');
+  }
+
+  // 这笔金额到底是「现在就要下的单」还是「下次触发时的预估」——必须说清楚，
+  // 否则 T+1 日照着算出来的数字下单，很可能下的是下一次的量。
+  const tb = $('timing');
+  if (S.state.pending) {
+    const p = S.state.pending;
+    tb.className = 'timingbox live';
+    tb.innerHTML = `✓ <b>这就是本次要执行的金额</b>　信号出在 ${p.signalDate}，`
+      + `需在下一个交易日收盘前下单（档位 ${p.tierFrom}/5 → ${p.tierTo}/5）。`;
+  } else {
+    tb.className = 'timingbox';
+    tb.innerHTML = `目前<b>尚未触发</b>，这是下次触发时的预估金额，今天不需要下单。`
+      + `真正触发时这里会变成蓝色，并注明「本次要执行的金额」。`;
   }
 
   // 与账本档位不一致只提示，不改变上面的计算结果
@@ -615,7 +645,9 @@ function drawChart(from) {
         up = g_('--up'), dn = g_('--dn'), pan = g_('--pan');
   const rows = S.series.rows.slice(from);
   if (rows.length < 2) { svg.innerHTML = ''; GEO = null; return; }
-  const W = 880, H = 300, L = 64, R = 18, T = 18, B = 32;
+  const box = $('chartbox');
+  const W = Math.max(320, Math.round(box.clientWidth || 880));
+  const H = 300, L = 56, R = 14, T = 18, B = 32;
   const vals = [];
   for (const r of rows) { vals.push(r.c); if (r.m != null) vals.push(r.m); }
   let lo = Math.min(...vals), hi = Math.max(...vals);
@@ -630,7 +662,8 @@ function drawChart(from) {
     g += `<line x1="${L}" y1="${y.toFixed(1)}" x2="${W - R}" y2="${y.toFixed(1)}" stroke="${ln}" stroke-width="1"/>`;
     g += `<text x="${L - 8}" y="${(y + 4).toFixed(1)}" fill="${dm}" font-size="11" text-anchor="end" font-family="monospace">${Math.round(v)}</text>`;
   }
-  const step = Math.max(1, Math.floor(rows.length / 6));
+  const nLab = W < 430 ? 4 : 6;
+  const step = Math.max(1, Math.floor(rows.length / nLab));
   for (let k = 0; k < rows.length; k += step) {
     g += `<text x="${X(k).toFixed(1)}" y="${H - 10}" fill="${dm}" font-size="11" text-anchor="middle" font-family="monospace">${rows[k].d.slice(2).replace(/-/g, '/')}</text>`;
   }
@@ -684,11 +717,11 @@ function onHover(clientX, clientY) {
   tip.classList.add('on');
 
   // 定位：跟着手指，靠边时自动翻到另一侧
-  const px = GEO.X(k) / GEO.W * rect.width + (rect.left - box.getBoundingClientRect().left) + box.scrollLeft;
+  const px = GEO.X(k) / GEO.W * rect.width;
   const tw = tip.offsetWidth;
   let left = px + 14;
-  if (left + tw > box.scrollLeft + box.clientWidth) left = px - tw - 14;
-  tip.style.left = Math.max(box.scrollLeft + 4, left) + 'px';
+  if (left + tw > box.clientWidth) left = px - tw - 14;
+  tip.style.left = Math.max(4, Math.min(box.clientWidth - tw - 4, left)) + 'px';
   tip.style.top = '10px';
 
   const guide = svg.querySelector('#guide'), dC = svg.querySelector('#gdotC'), dM = svg.querySelector('#gdotM');
@@ -703,11 +736,30 @@ function hideHover() {
 }
 {
   const box = $('chartbox');
-  box.addEventListener('pointermove', (e) => onHover(e.clientX, e.clientY));
-  box.addEventListener('pointerdown', (e) => onHover(e.clientX, e.clientY));
-  box.addEventListener('pointerleave', hideHover);
-  box.addEventListener('pointercancel', hideHover);
-  box.addEventListener('touchend', hideHover);
+  let dragging = false;
+  // setPointerCapture + touch-action:none 是关键：
+  // 不捕获的话，手指一滑出元素或浏览器判定为滚动，就会收到 pointercancel，浮窗随之消失。
+  box.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    try { box.setPointerCapture(e.pointerId); } catch {}
+    onHover(e.clientX, e.clientY);
+  });
+  box.addEventListener('pointermove', (e) => {
+    if (dragging || e.pointerType === 'mouse') onHover(e.clientX, e.clientY);
+  });
+  const end = (e) => {
+    dragging = false;
+    try { box.releasePointerCapture(e.pointerId); } catch {}
+    if (e.pointerType !== 'mouse') hideHover();
+  };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
+  box.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hideHover(); });
+  let rsz;
+  window.addEventListener('resize', () => {
+    clearTimeout(rsz);
+    rsz = setTimeout(() => { if (S.series) drawChart(curFrom); }, 160);
+  });
 }
 
 /* ==================== 数据健康 ==================== */
@@ -741,6 +793,8 @@ function renderHealth() {
     `数据截至 <b>${S.state.asof}</b>，最近一次运行 <b>${S.state.lastRun || '尚未运行'}</b>。`
     + `　行情 ${S.series.rows.length} 个交易日。`
     + `<br>信号源 中证指数 H00922（全收益）／ 闲钱基准 中证全债 H11001 ／ 交易日历 深交所官方接口 ／ ETF 报价 ${S.state.etf?.code || '—'}。`
+    + `<br><b>MA30 由本系统计算，不是抓来的</b>：中证接口只提供收盘价，均线是取最近 30 个交易日收盘价的算术平均`
+    + `（含当日）实时算出。图上和这里显示的均线保留两位小数，但<b>判断买卖信号时用的是不经舍入的完整精度值</b>。`
     + `<br>账本按<b>理论口径</b>记账：股票腿用全收益指数、闲钱用全债指数推算。实盘会有跟踪误差和税费，通常略低于这里显示的数字。`;
 }
 
