@@ -174,6 +174,27 @@ npm test
 
 ---
 
+## 日常维护
+
+**Worker 会自己往仓库提交。** 每个交易日 21:00 它会写 `data/`、`calendar/`、`audit/`，所以远端经常比你本地新。GitHub Desktop 弹「Newer commits on remote」是正常的，不是故障。
+
+改代码的固定动作：
+
+```
+Fetch  →  Pull origin  →  改代码  →  Commit  →  Push origin
+```
+
+**不要在本地手动改这三个目录**，它们属于 Worker，改了才会真冲突：
+
+| 目录 | 归谁 |
+|---|---|
+| `data/` `calendar/` `audit/` | Worker 写，只读 |
+| `index.html` `worker/` `shared/` `tests/` | 你改 |
+
+改完 `shared/strategy.js` 一定要跑 `npm test`——它会和独立的 Python 回测引擎逐笔对账。
+
+---
+
 ## 数据来源
 
 | 用途 | 来源 |
