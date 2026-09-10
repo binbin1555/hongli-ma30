@@ -290,5 +290,75 @@ console.log('\n=== 补齐 calcCatchUp（漏做几天后一次性追上账本）=
   console.log(`  ${bad === 0 ? 'OK ' : '!!!'} 穷举 ${n} 组，偏离目标仓位超过 1e-9 的有 ${bad} 组（最大偏差 ${worst.toExponential(2)}）`);
 }
 
+
+console.log('\n=== 校验体系 runChecks（含改造后的第 9 项）===');
+{
+  const { runChecks } = await import('../worker/src/index.js');
+  const cal = ['2026-09-08', '2026-09-09', '2026-09-10'];
+  const good = [
+    { d: '2026-09-08', c: 12250.47, pct: 1.31 },
+    { d: '2026-09-09', c: 12387.45, pct: 1.12 },
+    { d: '2026-09-10', c: 12304.81, pct: -0.67 },
+  ];
+  const noRemoved = { dup: [], weekend: [], newyear: [], ghost: [] };
+  const etfOk = { c: 1.46, d: '2026-09-10' };
+
+  const run = (rows, tf, tt, entries, etf = etfOk) =>
+    runChecks(rows, noRemoved, '2026-09-10', etf, tf, tt, cal, entries);
+
+  // 全绿场景要够 30 个交易日，否则第 7 项本来就该失败
+  const many = [], manyCal = [];
+  for (let k = 0; k < 40; k++) {
+    const day = new Date(Date.UTC(2026, 6, 1) + k * 86400000).toISOString().slice(0, 10);
+    manyCal.push(day);
+    many.push({ d: day, c: 12000 + k, pct: k === 0 ? null : +((( 12000 + k) / (11999 + k) - 1) * 100).toFixed(2) });
+  }
+  const last = manyCal[manyCal.length - 1];
+  const green = runChecks(many, noRemoved, last, { c: 1.46, d: last }, 0, 0, manyCal, []);
+  const ids = green.map((c) => c.id);
+  const okCount = green.filter((c) => c.ok).length;
+  let ok = ids.length === 9 && ids[0] === 1 && ids[1] === 2 && okCount === 9;
+  allOk = allOk && ok;
+  console.log(`  ${ok ? 'OK ' : '!!!'} 全绿场景返回 ${ids.length} 项（id: ${ids.join(',')}），通过 ${okCount} 项`
+    + (okCount === 9 ? '' : '　未过：' + green.filter((c) => !c.ok).map((c) => c.id + ':' + c.detail).join('；')));
+  console.log(`       注：第 10 项账本自审在主流程里追加，最终是 10 项`);
+
+  // 第 9 项现在能抓到 state 与账本脱节
+  const drift = run(good, 0, 1, [{ date: '2026-09-09', tierFrom: 0, tierTo: 1, price: 1 }]);
+  const c9 = drift.find((c) => c.id === 9);
+  ok = !c9.ok && c9.detail.includes('脱节');
+  allOk = allOk && ok;
+  console.log(`  ${ok ? 'OK ' : '!!!'} state 记 0 档但账本最后一笔是 1 档 → 第9项失败：${c9.detail.slice(0, 46)}`);
+
+  const fine = run(good, 1, 2, [{ date: '2026-09-09', tierFrom: 0, tierTo: 1, price: 1 }]);
+  ok = fine.find((c) => c.id === 9).ok;
+  allOk = allOk && ok;
+  console.log(`  ${ok ? 'OK ' : '!!!'} state 与账本吻合时第9项通过`);
+
+  // 各项确实能抓到它声称拦的问题
+  const cases = [
+    [3, '塞进不在日历里的日期', [...good, { d: '2026-09-11', c: 12400, pct: 0.77 }]],
+    [4, '残留幽灵行（连续两日同价）', [good[0], { d: '2026-09-09', c: 12250.47, pct: 0 }, good[2]]],
+    [5, '涨跌幅与收盘价对不上', [good[0], { ...good[1], pct: 9.99 }, good[2]]],
+    [6, '单日暴动超 ±11%', [good[0], { d: '2026-09-09', c: 20000, pct: 63.26 }, good[2]]],
+  ];
+  for (const [id, name, rows] of cases) {
+    const r = runChecks(rows, noRemoved, '2026-09-10', etfOk, 0, 0, cal, []).find((c) => c.id === id);
+    const caught = r && !r.ok;
+    allOk = allOk && caught;
+    console.log(`  ${caught ? 'OK ' : '!!!'} 第${id}项抓到「${name}」`);
+  }
+  // 第 7 项：不足 30 个交易日
+  const short = runChecks(good, noRemoved, '2026-09-10', etfOk, 0, 0, cal, []).find((c) => c.id === 7);
+  ok = !short.ok;
+  allOk = allOk && ok;
+  console.log(`  ${ok ? 'OK ' : '!!!'} 第7项抓到「只有 3 个交易日，不足 30」`);
+  // 第 8 项：ETF 日期与指数不一致
+  const stale = runChecks(good, noRemoved, '2026-09-10', { c: 1.46, d: '2026-09-09' }, 0, 0, cal, []).find((c) => c.id === 8);
+  ok = !stale.ok && stale.fatal === false;
+  allOk = allOk && ok;
+  console.log(`  ${ok ? 'OK ' : '!!!'} 第8项抓到「ETF 报价是昨天的」且标记为非致命`);
+}
+
 console.log(`\n总判定：${allOk ? '全部通过 ✓' : '有不一致 ✗'}`);
 process.exit(allOk ? 0 : 1);

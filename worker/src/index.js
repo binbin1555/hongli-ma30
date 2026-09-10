@@ -17,7 +17,7 @@ import {
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
-const EM = 'https://push2his.eastmoney.com/api/qt/stock/kline/get';
+const EM_RT = 'https://push2.eastmoney.com/api/qt/stock/get';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 // ---------------------------------------------------------------- 基础工具
@@ -183,17 +183,65 @@ async function fetchCSI(code, startYmd, endYmd) {
   return { rows: clean, removed, rawCount };
 }
 
-/** 东方财富 ETF 日线，用于换算参考股数 */
-async function fetchETF(code, startYmd, endYmd) {
-  const url = `${EM}?secid=1.${code}&klt=101&fqt=1&beg=${compact(startYmd)}&end=${compact(endYmd)}`
-    + `&fields1=f1,f2,f3&fields2=f51,f53`;
-  const r = await retryFetch(url, {}, 3, `东方财富 ${code}`);
+/**
+ * ETF 最新收盘价，用于换算参考股数。
+ *
+ * 为什么要三个源：2026-09-10 首次真实运行时，东财 K 线接口返回 HTTP 520，
+ * 股数提示直接失效。单一行情源不可靠，这里按顺序试，第一个成功的就用。
+ * 三个源都给不出就返回 null —— 非致命，只是没有股数提示。
+ *
+ * 注意腾讯和新浪返回的是 GBK，中文会乱码，但分隔符和数字都是 ASCII，取值不受影响。
+ */
+const mktPrefix = (code) => (/^[56]/.test(code) ? 'sh' : 'sz');
+const emPrefix = (code) => (/^[56]/.test(code) ? '1' : '0');
+
+async function etfTencent(code) {
+  const r = await fetch(`https://qt.gtimg.cn/q=${mktPrefix(code)}${code}`, { headers: { 'User-Agent': UA } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const body = (await r.text()).split('"')[1];
+  if (!body) throw new Error('返回格式异常');
+  const f = body.split('~');
+  const c = Number(f[3]);
+  const ts = String(f[30] || '');
+  if (!(c > 0) || ts.length < 8) throw new Error('字段缺失');
+  return { c, d: `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)}` };
+}
+async function etfSina(code) {
+  const r = await fetch(`https://hq.sinajs.cn/list=${mktPrefix(code)}${code}`,
+    { headers: { 'User-Agent': UA, Referer: 'https://finance.sina.com.cn/' } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const body = (await r.text()).split('"')[1];
+  if (!body) throw new Error('返回格式异常');
+  const f = body.split(',');
+  const c = Number(f[3]);
+  const d = f[30];
+  if (!(c > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(d || '')) throw new Error('字段缺失');
+  return { c, d };
+}
+async function etfEastmoney(code) {
+  const r = await fetch(`${EM_RT}?secid=${emPrefix(code)}.${code}&fields=f43,f59,f86`,
+    { headers: { 'User-Agent': UA } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const j = await r.json();
-  const k = (j.data && j.data.klines) || [];
-  return k.map((s) => {
-    const [d, c] = s.split(',');
-    return { d, c: +c };
-  });
+  const d0 = j && j.data;
+  if (!d0 || !(d0.f43 > 0)) throw new Error('字段缺失');
+  return {
+    c: d0.f43 / Math.pow(10, d0.f59 ?? 2),
+    d: new Date((d0.f86 + 8 * 3600) * 1000).toISOString().slice(0, 10),
+  };
+}
+async function fetchETF(code) {
+  const sources = [['腾讯', etfTencent], ['新浪', etfSina], ['东财', etfEastmoney]];
+  const tried = [];
+  for (const [name, fn] of sources) {
+    try {
+      const q = await fn(code);
+      return { ...q, source: name, tried };
+    } catch (e) {
+      tried.push(`${name}(${e.message})`);
+    }
+  }
+  return { failed: true, tried };
 }
 
 // ---------------------------------------------------------------- 校验
@@ -202,10 +250,15 @@ async function fetchETF(code, startYmd, endYmd) {
  * 校验 3–9。fatal 为 true 的失败会阻止写入。
  * 校验 1（交易日历）和 2（数据到位）在主流程里单独处理。
  */
-function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar) {
+export function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar, ledgerEntries) {
   const checks = [];
   const add = (id, name, ok, detail, fatal = true) =>
     checks.push({ id, name, ok, detail, fatal });
+
+  // 1、2 在主流程里靠提前返回把关：走到这里就说明它们已经过了。
+  // 之所以还要补记，是因为不记的话 state 里 total=8、页面却列 10 项，数字对不上。
+  add(1, '交易日历确认今天开市', true, `${today} 在交易所日历里`);
+  add(2, '中证今日数据已到位', true, `最新数据日期 ${today}`);
 
   // 3 结构：日期严格递增、无重复、清洗后每一天都在官方交易日历里
   let structOk = true, structMsg = '';
@@ -265,18 +318,34 @@ function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar) {
   add(8, 'ETF 报价日期与指数一致', etfOk,
     etf ? `ETF ${etf.d} vs 指数 ${today}` : '未取到 ETF 报价', false);
 
-  // 9 档位连续性
-  const step = Math.abs(tierTo - tierFrom);
-  const tierOk = step <= 1 && tierTo >= 0 && tierTo <= 4;
-  add(9, '档位一天最多动一档', tierOk, `${tierFrom} → ${tierTo}`);
+  // 9 state 与账本一致：state.tier 必须等于账本最后一笔的目标档位。
+  //   原先这里断言「一天最多动一档」，但那是 nextTier 的结构性质，穷举下永远成立 ——
+  //   等于一条永远通过的假校验。改成校验持久化状态没有漂移，那才是真实风险
+  //   （提交只写了一半、或有人手改了 state.json）。
+  const lastEntry = ledgerEntries.length ? ledgerEntries[ledgerEntries.length - 1] : null;
+  const expectTier = lastEntry ? lastEntry.tierTo : 0;
+  const stateOk = tierFrom === expectTier && Math.abs(tierTo - tierFrom) <= 1 && tierTo >= 0 && tierTo <= 4;
+  add(9, 'state 档位与账本一致', stateOk,
+    stateOk ? `${tierFrom} → ${tierTo}，与账本最后一笔（${lastEntry ? lastEntry.date + ' → ' + lastEntry.tierTo + '档' : '无记录，应为 0 档'}）吻合`
+      : `state 记为 ${tierFrom} 档，但账本最后一笔指向 ${expectTier} 档 —— 两者已脱节`);
 
   return checks;
 }
 
 // ---------------------------------------------------------------- Bark
 
+/**
+ * 最近一次推送的结果。推送是这套系统唯一的输出通道，
+ * 它失败等于系统失效 —— 但失败时又没法用 Bark 告诉你，
+ * 所以把结果记进 state.json，面板上能看见，HTTP 返回里也带上。
+ */
+let lastPush = null;
+
 async function bark(env, { title, body, level = 'active', group = '红利MA30' }) {
-  if (!env.BARK_KEY) return { skipped: '未配置 BARK_KEY' };
+  if (!env.BARK_KEY) {
+    lastPush = { ok: false, at: beijingStamp(), reason: '未配置 BARK_KEY' };
+    return lastPush;
+  }
   const payload = {
     device_key: env.BARK_KEY,
     title, body, group, level,
@@ -289,9 +358,14 @@ async function bark(env, { title, body, level = 'active', group = '红利MA30' }
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: JSON.stringify(payload),
     }, 3, 'Bark');
-    return await r.json();
+    const j = await r.json();
+    // Bark 即使 HTTP 200 也可能在 body 里报错，两层都要看
+    const ok = j && (j.code === 200 || j.code === undefined);
+    lastPush = { ok, at: beijingStamp(), title, reason: ok ? null : JSON.stringify(j).slice(0, 200) };
+    return lastPush;
   } catch (e) {
-    return { error: String(e) };
+    lastPush = { ok: false, at: beijingStamp(), title, reason: String(e && e.message || e).slice(0, 200) };
+    return lastPush;
   }
 }
 
@@ -362,12 +436,12 @@ async function runDaily(env, { force = false } = {}) {
 
   // ---- ETF 报价 ----
   let etf = null;
-  try {
-    const k = await fetchETF(env.ETF_CODE || '515180', shiftDays(today, -20), today);
-    // 只认与指数同一天的那根，挡掉盘中实时条
-    etf = k.find((x) => x.d === today) || (k.length ? k[k.length - 1] : null);
-  } catch (e) {
-    log.push(`ETF 报价获取失败：${e.message}`);
+  const etfRes = await fetchETF(env.ETF_CODE || '515180');
+  if (etfRes.failed) {
+    log.push(`ETF 报价三个源都取不到：${etfRes.tried.join('、')}`);
+  } else {
+    etf = etfRes;
+    if (etfRes.tried.length) log.push(`ETF 报价降级到${etfRes.source}：${etfRes.tried.join('、')}`);
   }
 
   // ---- 合并进 series ----
@@ -405,7 +479,13 @@ async function runDaily(env, { force = false } = {}) {
   let late = false;
   if (state.pending && state.pending.signalDate < today) {
     const p = state.pending;
-    const prevTradingDays = cal.tradingDays.filter((d) => d > p.signalDate && d <= today);
+    // 信号日可能落在上一年（12 月出信号、1 月才执行），只查当年日历会漏算天数
+    let calDays = cal.tradingDays;
+    if (p.signalDate.slice(0, 4) !== year) {
+      const prevCal = await G.readJSON(`calendar/${p.signalDate.slice(0, 4)}.json`);
+      if (prevCal) calDays = prevCal.tradingDays.concat(calDays).sort();
+    }
+    const prevTradingDays = calDays.filter((d) => d > p.signalDate && d <= today);
     late = prevTradingDays.length > 1;
     executed = {
       seq: (ledger.entries.length || 0) + 1,
@@ -432,7 +512,7 @@ async function runDaily(env, { force = false } = {}) {
     : null;
 
   // ---- 10 项校验 ----
-  const checks = runChecks(idx, removed, today, etf, tier, want, cal.tradingDays);
+  const checks = runChecks(idx, removed, today, etf, tier, want, cal.tradingDays, ledger.entries);
 
   // 10 账本自审：每笔记录的日期都要落在行情序列里、档位要逐笔连得上。
   //    这一项防的是"算得出结果但结果是错的"——比直接报错危险得多。
@@ -491,6 +571,7 @@ async function runDaily(env, { force = false } = {}) {
       ranAt: beijingStamp(),
     },
     lastExecuted: executed ? { date: executed.date, side: executed.side, tierTo: executed.tierTo } : state.lastExecuted || null,
+    push: null,   // 提交后由下面回填
   };
 
   // ---- 提交 ----
@@ -519,10 +600,27 @@ async function runDaily(env, { force = false } = {}) {
   // ---- 推送 ----
   await pushDaily(env, { today, newState, pending, executed, plan, etf, checks, late });
 
+  // 推送结果补记一次：失败时面板上要看得见，否则你不会知道自己漏收了通知。
+  // 这次补记失败也不影响主流程 —— 账本已经提交好了。
+  if (lastPush && !lastPush.ok) {
+    newState.push = lastPush;
+    await G.commit(
+      [{ path: 'data/state.json', content: JSON.stringify(newState, null, 2) }],
+      `chore(daily): ${today} 推送失败，记录状态`
+    ).catch(() => {});
+  } else if (lastPush) {
+    newState.push = { ok: true, at: lastPush.at };
+    await G.commit(
+      [{ path: 'data/state.json', content: JSON.stringify(newState, null, 2) }],
+      `chore(daily): ${today} 推送已送达`
+    ).catch(() => {});
+  }
+
   // HTTP 返回里刻意不带任何金额：cron-job.org 之类的调用方会把响应体存在
   // 自己服务器上。金额只走 Bark 推送到本人手机，不经过第三方。
   return {
     ok: true, today, commit: sha.slice(0, 7), tier, pending, executed, checks,
+    push: lastPush ? { ok: lastPush.ok, reason: lastPush.reason } : null,
     planned: plan ? { side: plan.side, targetWeight: plan.targetWeight, hasShares: plan.shares != null } : null,
   };
 }
@@ -631,11 +729,14 @@ async function remind(env) {
 async function refreshCalendar(env) {
   const G = gh(env);
   const today = beijingDate();
+  // 用年月整数推算，不能用 Date.setUTCMonth：
+  // 在 31 号调用时它会溢出到下下个月（1-31 加一个月得到 3-03），把二月整个跳过。
   const months = [];
+  let curY = +today.slice(0, 4), curM = +today.slice(5, 7);
   for (let k = 0; k < 5; k++) {
-    const d = new Date(Date.parse(today + 'T00:00:00Z'));
-    d.setUTCMonth(d.getUTCMonth() + k);
-    months.push(d.toISOString().slice(0, 7));
+    months.push(`${curY}-${String(curM).padStart(2, '0')}`);
+    curM += 1;
+    if (curM > 12) { curM = 1; curY += 1; }
   }
   const byYear = new Map();
   const missing = [];
@@ -688,14 +789,20 @@ export default {
       });
 
     try {
+      // /health 不鉴权，所以它的异常不发 Bark ——
+      // 否则任何知道地址的人都能靠反复请求把你的手机刷屏。
       if (path === '/health') {
-        const G = gh(env);
-        const st = await G.readJSON('data/state.json');
-        return json({
-          ok: true, now: beijingStamp(), stateAsof: st && st.asof,
-          tier: st && st.tier, pending: st && st.pending,
-          checks: st && st.checks,
-        });
+        try {
+          const G = gh(env);
+          const st = await G.readJSON('data/state.json');
+          return json({
+            ok: true, now: beijingStamp(), stateAsof: st && st.asof,
+            tier: st && st.tier, pending: st && st.pending,
+            checks: st && st.checks, push: st && st.push,
+          });
+        } catch (e) {
+          return json({ ok: false, error: String(e && e.message || e) }, 503);
+        }
       }
       if (path === '/run') {
         if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);

@@ -280,6 +280,7 @@ tr:last-child td{border-bottom:none}
         <button class="setbtn" id="pBtn" type="button">设置</button>
       </div>
     </div>
+    <p id="pushWarn" hidden class="errbox"></p>
     <div class="checks" id="checks"></div>
     <p class="note" id="dataNote">–</p>
   </div>
@@ -830,8 +831,20 @@ function renderHealth() {
   const failed = c.failed || [];
   const neverRan = !c.ranAt;
   const pill = $('healthPill');
-  const ok = !neverRan && failed.length === 0;
+
+  // 推送失败必须在页面上看得见 —— 它失败时没法用推送告诉你
+  const push = S.state.push;
+  const pushBad = push && push.ok === false;
+  const pw = $('pushWarn');
+  if (pushBad) {
+    pw.hidden = false;
+    pw.innerHTML = `<b>上一次推送没发出去。</b>${push.at || ''}　原因：${push.reason || '未知'}<br>`
+      + `这意味着即使触发了买卖信号，你手机上也收不到通知。请检查 Cloudflare 里的 BARK_KEY 是否还有效。`;
+  } else pw.hidden = true;
+
+  const ok = !neverRan && failed.length === 0 && !pushBad;
   pill.textContent = neverRan ? '等待首次运行'
+    : pushBad ? '推送失败'
     : ok ? `校验 ${c.passed}/${c.total} 通过` : `校验 ${c.passed}/${c.total}　${failed.length} 项未过`;
   pill.className = 'pill ' + (neverRan ? 'warn' : ok ? 'ok' : 'bad');
   pill.onclick = () => $('checks').scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -853,6 +866,7 @@ function renderHealth() {
 
   $('dataNote').innerHTML =
     `数据截至 <b>${S.state.asof}</b>，最近一次运行 <b>${S.state.lastRun || '尚未运行'}</b>。`
+    + (push ? `　推送 <b style="color:${push.ok ? 'var(--dn)' : 'var(--up)'}">${push.ok ? '已送达' : '失败'}</b>。` : '')
     + `　行情 ${S.series.rows.length} 个交易日。`
     + `<br>信号源 中证指数 H00922（全收益）／ 闲钱基准 中证全债 H11001 ／ 交易日历 深交所官方接口 ／ ETF 报价 ${S.state.etf?.code || '—'}。`
     + `<br><b>MA30 由本系统计算，不是抓来的</b>：中证接口只提供收盘价，均线是取最近 30 个交易日收盘价的算术平均`
