@@ -523,7 +523,12 @@ async function runDaily(env, { force = false } = {}) {
   // ---- 推送 ----
   await pushDaily(env, { today, newState, pending, executed, plan, etf, checks, late });
 
-  return { ok: true, today, commit: sha.slice(0, 7), tier, pending, executed, checks, plan };
+  // HTTP 返回里刻意不带任何金额：cron-job.org 之类的调用方会把响应体存在
+  // 自己服务器上。金额只走 Bark 推送到本人手机，不经过第三方。
+  return {
+    ok: true, today, commit: sha.slice(0, 7), tier, pending, executed, checks,
+    planned: plan ? { side: plan.side, targetWeight: plan.targetWeight, hasShares: plan.shares != null } : null,
+  };
 }
 
 async function pushDaily(env, { today, newState, pending, executed, plan, etf, checks, late }) {
