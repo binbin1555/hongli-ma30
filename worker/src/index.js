@@ -15,6 +15,12 @@ import {
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
 
+// 线上跑的是哪一版代码。由 npm run stamp 按 worker/src/index.js + shared/strategy.js
+// 的内容算出并写回这一行，/health 会把它原样返回。
+// 有了它才能从外面确认「推上去的改动到底部署了没有」——
+// 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
+const BUILD = '1e68f51997';
+
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
 const EM_RT = 'https://push2.eastmoney.com/api/qt/stock/get';
@@ -859,7 +865,7 @@ export default {
           const G = gh(env);
           const st = await G.readJSON('data/state.json');
           return json({
-            ok: true, now: beijingStamp(), stateAsof: st && st.asof,
+            ok: true, build: BUILD, now: beijingStamp(), stateAsof: st && st.asof,
             tier: st && st.tier, pending: st && st.pending,
             checks: st && st.checks, push: st && st.push,
           });

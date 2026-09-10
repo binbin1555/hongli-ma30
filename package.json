@@ -11,6 +11,7 @@
     "serve": "python -m http.server 8777",
     "stamp": "node stamp.mjs",
     "check:sources": "node tools/check-sources.mjs",
+    "check:deploy": "node tools/check-deploy.mjs",
     "sweep": "node tools/sweep.mjs",
     "wording": "node tests/wording.mjs"
   },

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { coreHash } from '../stamp.mjs';
+import { coreHash, buildHash } from '../stamp.mjs';
 import { fileURLToPath } from 'node:url';
 
 // 按脚本自身位置解析，保证从仓库根目录或 tests/ 目录跑都一样
@@ -215,6 +215,17 @@ console.log('\n=== 前端模块版本戳（防止浏览器缓存串版本）==='
   allOk = allOk && ok;
   console.log(`  ${ok ? 'OK ' : '!!!'} index.html 的 CORE_VERSION=${got}　strategy.js 实际哈希=${want}`);
   if (!ok) console.log('      → 改过 shared/strategy.js 但忘了跑 `npm run stamp`，线上会因浏览器缓存旧模块而白屏');
+
+  // Worker 的构建指纹：/health 返回它，用来从外面确认线上跑的是哪一版。
+  // 没盖对章的话，查线上版本时会拿到一个对不上任何提交的值，比没有还误导人。
+  const worker = readFileSync(join(HERE, '..', 'worker', 'src', 'index.js'), 'utf8');
+  const wantB = buildHash(worker, core);
+  const mB = worker.match(/const BUILD = '([^']*)';/);
+  const gotB = mB && mB[1];
+  const okB = gotB === wantB;
+  allOk = allOk && okB;
+  console.log(`  ${okB ? 'OK ' : '!!!'} worker 的 BUILD=${gotB}　实际哈希=${wantB}`);
+  if (!okB) console.log('      → 改过 worker/src/index.js 但忘了跑 `npm run stamp`，/health 报出的版本会是错的');
 }
 
 
