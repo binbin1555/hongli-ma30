@@ -174,7 +174,7 @@ tr:last-child td{border-bottom:none}
     <div class="bm">
       <p class="bk" id="bKick">触发 · 明日收盘执行</p>
       <p class="bt" id="bText">—</p>
-      <p class="bs">此横幅仅供你确认已下单。<b>无论是否点击，系统都已按规则把这笔操作写入不可更改的记录。</b></p>
+      <p class="bs" id="bSub"></p>
     </div>
     <button type="button" id="bDone">已完成</button>
   </div>
@@ -260,10 +260,13 @@ tr:last-child td{border-bottom:none}
     <p class="k">交易记录（不可更改）</p>
     <div id="ledgerWarn" class="errbox" style="display:none"></div>
     <div class="tbox"><table id="ledger"><thead><tr>
-      <th>#</th><th>执行日</th><th>方向</th><th>档位</th><th>指数收盘</th><th>金额（按本金推导）</th>
+      <th>#</th><th>执行日</th><th>方向</th><th>档位</th><th>指数收盘</th><th>当时理论金额</th>
     </tr></thead><tbody></tbody></table></div>
-    <p class="note">账本只记录日期、指数收盘价和档位变化，这三样一经写入就锁死在 Git 提交历史里。
-      金额是按你设的<b>本金</b>推导出来的，与上面计算器里填的数字无关。</p>
+    <p class="note">账本只记录日期、指数收盘价和档位变化，这三样一经写入就锁死在 Git 提交历史里，
+      与计算器里填什么无关。<br>
+      「当时理论金额」是<b>事后推导</b>出来的：从你设的本金出发，按账本逐日重放到那一天，
+      再套目标市值法算出的数。它回答的是「那天理论上该成交多少」，
+      <b>不是下单指令</b> —— 真要下单请看上面的计算器，那里用的是你填的真实数字。</p>
   </div>
 
   <div class="card">
@@ -466,10 +469,66 @@ function renderNext(behind) {
 
 }
 
+/**
+ * 触发横幅。抽成函数是因为它也依赖计算器里填的实盘数字
+ * （用来提示「理论值和你的实盘对不上」），输入变化时必须一起刷新。
+ */
+function renderBanner(behind) {
+  const st = S.state;
+  const M = accountMoney();
+  const bn = $('banner');
+  const ackKey = st.pending ? `ack.${st.pending.signalDate}` : null;
+  if (st.pending && !LS.get(ackKey, false)) {
+    let side = st.pending.side, amtTxt = `目标仓位 ${WEIGHTS[st.pending.tierTo] * 100}%`;
+    if (M) {
+      const o = plannedOrder(M.V, M.cash, st.pending.tierTo);
+      if (o.side !== 'NONE') side = o.side;
+      const sh = st.etf && st.etf.close ? shares(o.amount, st.etf.close) : null;
+      amtTxt = o.side === 'NONE' ? '无需调整' : `${money(o.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : '');
+    }
+    const buy = side === 'BUY';
+    bn.classList.add('on'); bn.classList.toggle('sell', !buy);
+    $('bKick').textContent = `触发 · 下一个交易日收盘执行　档位 ${st.pending.tierFrom}/5 → ${st.pending.tierTo}/5`;
+    $('bText').textContent = `${buy ? '买入' : '卖出'}　${amtTxt}`;
+
+    // 这里的金额是按本金重放出来的理论值，推送里也是同一个数。
+    // 如果你在计算器里填过真实数字且差得明显，必须以真实数字为准 ——
+    // 照着理论值下单会买错量。
+    const man = LS.get('calc', null);
+    let realNote = '';
+    if (man && isFinite(man.cash) && isFinite(man.hold) && (man.cash + man.hold) > 0 && M) {
+      const rr = calcCatchUp(man.cash, man.hold, st.pending.tierTo);
+      const theo = plannedOrder(M.V, M.cash, st.pending.tierTo);
+      if (rr.ok && rr.side !== 'NONE' && theo.side !== 'NONE'
+          && Math.abs(rr.amount - theo.amount) / theo.amount > 0.02) {
+        realNote = `<br><b>按你填的实盘数字应为 ${rr.side === 'BUY' ? '买入' : '卖出'} `
+          + `${money(rr.amount)} 元 —— 以这个为准。</b>上面是按本金推算的理论值。`;
+      }
+    }
+    $('bSub').innerHTML = '此横幅仅供你确认已下单。<b>无论是否点击，系统都已按规则把这笔操作写入不可更改的记录。</b>'
+      + realNote;
+    $('bDone').onclick = () => { LS.set(ackKey, true); bn.classList.remove('on'); };
+  } else {
+    bn.classList.remove('on');
+  }
+
+}
+
+/**
+ * 所有依赖「计算器输入」的部分，必须整体刷新。
+ * 分开刷新是这个页面反复出现「顶部和计算器说两件事」的根源 ——
+ * 加新的依赖输入的元素时，往这里加，不要在 onCalcInput 里单独调。
+ */
+function renderInputDependent() {
+  const behind = behindState();
+  renderNext(behind);
+  renderBanner(behind);
+  calc();
+}
+
 function render() {
   const st = S.state, i = st.index, tier = st.tier;
   const M = accountMoney();
-  const behind = behindState();
 
   // ---- 档位 ----
   $('tierNum').textContent = tier;
@@ -483,10 +542,7 @@ function render() {
   $('maSub').innerHTML = `指数比均线<span style="color:${gap >= 0 ? 'var(--up)' : 'var(--dn)'}">`
     + `${gap >= 0 ? '高' : '低'} ${Math.abs(gap).toFixed(2)}%</span>`;
 
-  // ---- 下一次操作 ----
-  renderNext(behind);
-
-  // ---- 账户盈亏 ----
+  // ---- 账户盈亏（只由本金和账本推导，与计算器输入无关）----
   if (!M) {
     $('pnl').textContent = '未设本金';
     $('pnl').style.color = 'var(--dm)';
@@ -507,27 +563,12 @@ function render() {
     $('pnlDays').textContent = Math.round(M.days) + ' 天';
   }
 
-  // ---- 横幅 ----
-  const bn = $('banner');
-  const ackKey = st.pending ? `ack.${st.pending.signalDate}` : null;
-  if (st.pending && !LS.get(ackKey, false)) {
-    let side = st.pending.side, amtTxt = `目标仓位 ${WEIGHTS[st.pending.tierTo] * 100}%`;
-    if (M) {
-      const o = plannedOrder(M.V, M.cash, st.pending.tierTo);
-      if (o.side !== 'NONE') side = o.side;
-      const sh = st.etf && st.etf.close ? shares(o.amount, st.etf.close) : null;
-      amtTxt = o.side === 'NONE' ? '无需调整' : `${money(o.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : '');
-    }
-    const buy = side === 'BUY';
-    bn.classList.add('on'); bn.classList.toggle('sell', !buy);
-    $('bKick').textContent = `触发 · 下一个交易日收盘执行　档位 ${st.pending.tierFrom}/5 → ${st.pending.tierTo}/5`;
-    $('bText').textContent = `${buy ? '买入' : '卖出'}　${amtTxt}`;
-    $('bDone').onclick = () => { LS.set(ackKey, true); bn.classList.remove('on'); };
-  } else {
-    bn.classList.remove('on');
-  }
+  // ---- 本金显示 ----
+  const pv = num(LS.get('principal', 0));
+  $('pView').textContent = pv ? money(pv) + ' 元' : '未设置';
+  $('pView').style.color = pv ? 'var(--tx)' : 'var(--dm)';
 
-  // ---- 计算器：默认填入账本推算值 ----
+  // ---- 计算器输入框：先填值，再算 ----
   $('etfLabel').textContent = st.etf?.code || 'ETF';
   const man = LS.get('calc', null);
   if (man && isFinite(man.cash) && isFinite(man.hold)) {
@@ -537,12 +578,7 @@ function render() {
   } else {
     $('inCash').value = ''; $('inHold').value = '';
   }
-  calc();
-
-  // ---- 本金显示 ----
-  const pv = num(LS.get('principal', 0));
-  $('pView').textContent = pv ? money(pv) + ' 元' : '未设置';
-  $('pView').style.color = pv ? 'var(--tx)' : 'var(--dm)';
+  renderInputDependent();
 
   renderLedger(M);
   buildRanges();
@@ -557,10 +593,20 @@ function calc() {
   chip.textContent = edited ? '按你填的数字' : '按账本自动填入';
   reset.hidden = !edited;
 
-  // 方向跟随上方「下一次操作」：已触发就按触发方向，否则按更接近触发的那一侧
+  // 有挂单时，目标就是挂单那一档 —— 从你实际位置直接调过去。
+  // 不能用「再走一档」：若你实盘已经差不多在目标档位上，走一档会多算整整一档。
+  // （实测：挂单到 3/5 档、实盘持仓 70% 时，正确答案 49,998 元，走一档算出 299,987 元。）
+  const pend = S.state.pending;
   const mv = nextMove();
   const wantBuy = mv.kind === 'pending' ? mv.side === 'BUY' : mv.kind !== 'sell';
-  const r = calcStep(cash, hold, wantBuy);
+  const r = pend
+    ? (() => {
+        const cu = calcCatchUp(cash, hold, pend.tierTo);
+        if (!cu.ok) return cu;
+        const step = calcStep(cash, hold, wantBuy);
+        return { ...cu, tier: step.tier, to: pend.tierTo };
+      })()
+    : calcStep(cash, hold, wantBuy);
 
   const setOut = (main, sub, color) => {
     $('oMain').textContent = main; $('oMain').style.color = color || 'var(--dm)';
@@ -679,10 +725,7 @@ function onCalcInput() {
   // 防抖 350ms：逐字输入时中间值（打到「5」时持仓几乎为 0）会让「你欠着操作」
   // 的红色告警闪来闪去。等你停手再判定。
   clearTimeout(calcTimer);
-  calcTimer = setTimeout(() => {
-    calc();
-    renderNext(behindState());   // 顶部必须一起刷新，否则会和计算器说两件事
-  }, 350);
+  calcTimer = setTimeout(renderInputDependent, 350);
 }
 $('inCash').addEventListener('input', onCalcInput);
 $('inHold').addEventListener('input', onCalcInput);

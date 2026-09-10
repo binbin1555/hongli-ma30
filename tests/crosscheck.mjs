@@ -400,5 +400,29 @@ console.log('\n=== 漏做识别 missedEntries ===');
   console.log(`  ${ok ? 'OK ' : '!!!'} 空账本 / null 输入安全返回`);
 }
 
+
+console.log('\n=== 有挂单时该用哪个目标（曾经用错，导致多买一整档）===');
+{
+  // 挂单目标 3/5 档（75%），实盘 30万现金 + 70万持仓（占 70%）
+  const cash = 300000, hold = 700000, pendingTierTo = 3;
+  const right = calcCatchUp(cash, hold, pendingTierTo);        // 调到挂单那一档
+  const wrong = calcStep(cash, hold, true);                    // 从推断档位再走一档
+  const okRight = right.ok && Math.abs(right.amount - (0.75 * 1000000 - 700000) / (1 + 0.75 * COMMISSION)) < 0.01;
+  allOk = allOk && okRight;
+  console.log(`  ${okRight ? 'OK ' : '!!!'} 正确做法 calcCatchUp(→${pendingTierTo}档) = ${Math.round(right.amount).toLocaleString()} 元`);
+  console.log(`      对照 calcStep(走一档) = ${Math.round(wrong.amount).toLocaleString()} 元（推断你在 ${wrong.tier} 档，目标 ${wrong.to} 档）`);
+  const differ = Math.abs(right.amount - wrong.amount) > 1000;
+  allOk = allOk && differ;
+  console.log(`  ${differ ? 'OK ' : '!!!'} 两者相差 ${Math.round(Math.abs(right.amount - wrong.amount)).toLocaleString()} 元 —— 有挂单时必须用前者`);
+
+  // 成交后必须精确落在挂单目标仓位上
+  let V = hold, S2 = cash + hold;
+  if (right.side === 'BUY') { V += right.amount; S2 -= right.amount * COMMISSION; }
+  else { V -= right.amount; S2 -= right.amount * COMMISSION; }
+  const land = Math.abs(V / S2 - WEIGHTS[pendingTierTo]) < 1e-9;
+  allOk = allOk && land;
+  console.log(`  ${land ? 'OK ' : '!!!'} 成交后仓位 ${(V / S2 * 100).toFixed(4)}% ，挂单目标 ${WEIGHTS[pendingTierTo] * 100}%`);
+}
+
 console.log(`\n总判定：${allOk ? '全部通过 ✓' : '有不一致 ✗'}`);
 process.exit(allOk ? 0 : 1);
