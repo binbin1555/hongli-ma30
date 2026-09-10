@@ -35,12 +35,17 @@ const bad = (msg) => { fails++; console.log(`  ✗ ${msg}`); };
  * ================================================================ */
 const RELATIVE = /今天|今日|明天|明日|昨天|昨日|当晚|次日|下一?个交易日/g;
 /*
- * 「收盘前」和「收盘」不是一回事。
- * 说明文档 3.4 写的是「T+1 日收盘执行」，7 节「成交价用当日收盘价」——
- * 账本按当日收盘价记账。写成「收盘前下单」，字面上允许你上午十点就买，
- * 那天振幅 2% 你就和账本差 2%，这笔误差回测里根本没算过。
+ * 执行时点一律写「收盘前」，不许写成光秃秃的「收盘」。
+ *
+ * 「收盘执行」会被读成「收盘之后再执行」—— 而那是个做不到的动作，
+ * 收盘之后市场已经关了。「收盘前」在时间上任何时候都成立。
+ *
+ * 「收盘前」单独看确实太松（字面上上午十点也算），
+ * 但精度由 CLOSE_TIP 那句「尾盘 14:50 之后、收盘之前」补齐 ——
+ * 所以下面还要求：凡给出执行时点的文案，必须同时带上这句提示。
  */
-const VAGUE_CLOSE = /收盘前(下单|成交|执行|完成|买入|卖出|必须)/g;
+const BARE_CLOSE = /收盘(下单|成交|执行|完成|买入|卖出|必须)/g;
+const CLOSE_HINT = '尾盘';
 const HAS_DATE = /\d+\s*月\s*\d+\s*日|\d{4}-\d{2}-\d{2}/;
 /** 括号里紧跟在日期后面的相对词是允许的：那是定位，不是信息 */
 const stripParen = (t) => t.replace(/(\d+\s*月\s*\d+\s*日)（[^）]*）/g, '$1');
@@ -124,6 +129,9 @@ const tmp = join(tmpdir(), `hlma30-wording-${process.pid}.mjs`);
 writeFileSync(tmp, src, 'utf8');
 await import(pathToFileURL(tmp).href);
 await new Promise((r) => setTimeout(r, 60));   // 等 load() 把真实数据读进来
+
+const S_pendingNow = () => !!(globalThis.__H && globalThis.__H.S && globalThis.__H.S.state
+  && globalThis.__H.S.state.pending);
 
 const H = globalThis.__H;
 if (!H || !H.S || !H.S.state) { console.log('✗ 页面模块没能加载出数据'); process.exit(1); }
@@ -251,10 +259,14 @@ for (const [name, over] of SCEN) {
   }
   // 每一处相对时间词都必须挨着具体日期
   for (const o of relativeOffenders(all)) bad(`${name}：相对时间词旁边没有日期 —— ${o}`);
-  // 执行时点必须说「收盘」，不能松成「收盘前」
-  VAGUE_CLOSE.lastIndex = 0;
-  const vague = all.match(VAGUE_CLOSE);
-  if (vague) bad(`${name}：写成了「${vague.join('/')}」——账本按收盘价记账，必须说「收盘成交」`);
+  // 执行时点必须说「收盘前」，不能写成光秃秃的「收盘」
+  BARE_CLOSE.lastIndex = 0;
+  const bare = all.match(BARE_CLOSE);
+  if (bare) bad(`${name}：写成了「${bare.join('/')}」——会被读成「收盘之后」，必须说「收盘前」`);
+  // 给了执行时点，就必须同时给出尾盘提示，否则「收盘前」松得能理解成上午十点
+  if (behind === null && S_pendingNow() && !all.includes(CLOSE_HINT)) {
+    bad(`${name}：说了执行时点却没带「${CLOSE_HINT}」提示，「收盘前」会被理解成当天随便什么时候`);
+  }
   // 落后/超前的方向必须和实盘-账本的高低一致
   if (behind && /需一次性(买入|卖出)/.test(line)) {
     const saysBuy = /需一次性买入/.test(line);
@@ -288,8 +300,9 @@ for (const [sig, exec] of cases) {
   for (const o of relativeOffenders(`${w.short}。${w.long}`)) {
     bad(`${sig} → ${exec}：相对时间词旁边没有日期 —— ${o}`);
   }
-  VAGUE_CLOSE.lastIndex = 0;
-  if (`${w.short}${w.long}`.match(VAGUE_CLOSE)) bad(`${sig} → ${exec}：执行时点写成了「收盘前」`);
+  BARE_CLOSE.lastIndex = 0;
+  if (`${w.short}${w.long}`.match(BARE_CLOSE)) bad(`${sig} → ${exec}：执行时点写成了光秃秃的「收盘」`);
+  if (!w.short.includes('收盘前')) bad(`${sig} → ${exec}：标题里没说「收盘前」（「${w.short}」）`);
   // 规矩三：只有执行日确实是第二天时，括注里才准出现「明天」
   const isTomorrow = exec === nextCalDay(sig);
   if (w.short.includes('明天') !== isTomorrow) {
@@ -332,12 +345,19 @@ console.log('\n================ 源码里的写死相对词 ================\n')
     });
     lines.forEach((raw, k) => {
       const ln = stripComment(raw);
-      VAGUE_CLOSE.lastIndex = 0;
-      const v = ln.match(VAGUE_CLOSE);
-      if (v) bad(`${f}:${k + 1} 执行时点写成了「${v.join('/')}」 —— ${ln.trim().slice(0, 72)}`);
+      BARE_CLOSE.lastIndex = 0;
+      const v = ln.match(BARE_CLOSE);
+      if (v) bad(`${f}:${k + 1} 执行时点写成了「${v.join('/')}」，应为「收盘前」 —— ${ln.trim().slice(0, 72)}`);
     });
   }
   console.log(`  扫过 ${scanned} 行含相对时间词的代码（注释已排除）`);
+
+  // 「收盘前」太松，必须靠 CLOSE_TIP 把窗口收到尾盘。
+  // 两处推送（挂单当晚、执行日盘中提醒）都得带上，少一处就等于少一半信息。
+  const wsrc = readFileSync(join(ROOT, 'worker/src/index.js'), 'utf8');
+  const tips = (wsrc.match(/\$\{CLOSE_TIP\}/g) || []).length;
+  if (tips < 2) bad(`worker 里只有 ${tips} 处带了 CLOSE_TIP，挂单推送和盘中提醒都必须带`);
+  else console.log(`  worker 的两条推送都带了尾盘提示（${tips} 处）`);
 }
 
 console.log(`\n${fails ? `✗ ${fails} 处文案有问题` : '✓ 全部状态文案通过'}\n`);

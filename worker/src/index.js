@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '581c1e65aa';
+const BUILD = '21eb111738';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -495,7 +495,7 @@ async function runDaily(env, { force = false } = {}) {
   const close = lastRow.c;
   const trig = triggers(close, ma30);
 
-  // ---- 执行昨日挂单（T+1 收盘成交） ----
+  // ---- 执行昨日挂单（T+1 收盘前成交） ----
   const ledger = await G.readJSON('data/ledger.json');
   let tier = state.tier;
   let executed = null;
@@ -660,21 +660,21 @@ async function runDaily(env, { force = false } = {}) {
 /**
  * 挂单执行日的措辞。**一律先说日期**，「明天」只作括注。
  *
- * 早先这里写死「明日收盘执行」：周五出的信号执行日是下周一，
+ * 早先这里写死「明日收盘前执行」：周五出的信号执行日是下周一，
  * 长假前能差十天，2026 年 241 个信号日里有 50 个不是第二天。
  * 现在日期永远在，把括号删掉句子也依然正确。
  */
 export function execWording(today, execDay) {
   if (!execDay) {
     return {
-      short: `${NO_EXEC_DATE}收盘执行`,
+      short: `${NO_EXEC_DATE}收盘前执行`,
       long: '交易日历暂时取不到，给不出执行日期。请到面板核对后再下单。',
     };
   }
   const L = dayLabel(execDay, today);
   return {
-    short: `${L.label}收盘执行`,
-    long: `执行日 ${execDay}（${L.wd}）收盘成交`
+    short: `${L.label}收盘前执行`,
+    long: `执行日 ${execDay}（${L.wd}）收盘前完成`
       + (L.diff > 1 ? `　·　距出信号 ${L.diff} 天，中间的休市日不用操作` : ''),
   };
 }
@@ -741,7 +741,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
   if (late && executed) {
     await bark(env, {
       title: '⚠️ 红利MA30 · 挂单迟到执行',
-      body: `信号出在 ${executed.signalDate}，本该在它的下一个交易日收盘成交，`
+      body: `信号出在 ${executed.signalDate}，本该在它的下一个交易日收盘前成交，`
         + `实际拖到 ${executed.date}（${dayLabel(executed.date, today).wd}）才记上。`
         + '\n中间可能有交易日漏跑，请核对账本。',
       level: 'timeSensitive',
@@ -799,7 +799,7 @@ async function remind(env) {
   const share = isBuy ? p.tierTo : p.tierFrom;
   const L = dayLabel(today, today);
   await bark(env, {
-    title: `⏰ ${L.md}收盘${isBuy ? '买入' : '卖出'}第 ${share} 份`,
+    title: `⏰ ${L.md}收盘前${isBuy ? '买入' : '卖出'}第 ${share} 份`,
     body: `档位 ${p.tierFrom}/5 → ${p.tierTo}/5，目标仓位 ${WEIGHTS[p.tierTo] * 100}%${est}`
       + `\n信号出在 ${p.signalDate}，执行日就是 ${today}（${L.wd}）。`
       + `\n${CLOSE_TIP}`,
