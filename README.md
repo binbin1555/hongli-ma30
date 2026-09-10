@@ -72,11 +72,11 @@ tests/                回归测试
 
 ### 1. 发布仓库
 
-用 GitHub Desktop 打开本目录 → Publish repository → 仓库名 `hongli-ma30`，**取消勾选 Private**。
+已完成：https://github.com/binbin1555/hongli-ma30 （公开，默认分支 `master`）
 
 ### 2. 打开 GitHub Pages
 
-仓库 Settings → Pages → Source 选 `Deploy from a branch`，Branch 选 `main` / `/ (root)` → Save。
+仓库 Settings → Pages → Source 选 `Deploy from a branch`，Branch 选 **`master`**（本仓库的默认分支）、目录选 `/ (root)` → Save。
 一两分钟后 https://binbin1555.github.io/hongli-ma30/ 就能打开。
 
 ### 3. 建一个 GitHub Token
@@ -100,6 +100,8 @@ Cloudflare Dashboard → Workers & Pages → Create → Connect to Git → 选�
 | `BARK_KEY` | Bark App 里那串设备 key |
 | `RUN_TOKEN` | 自己编一串长口令，用来保护 /run 端点 |
 | `PRINCIPAL` | 本金，例如 `1000000` |
+
+Worker 会自动向 GitHub 查询默认分支，`main` 还是 `master` 都不用管。
 
 **这四个值不要写进仓库里的任何文件。**
 

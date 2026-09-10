@@ -6,7 +6,8 @@ compatibility_date = "2026-09-01"
 [vars]
 GH_OWNER  = "binbin1555"
 GH_REPO   = "hongli-ma30"
-GH_BRANCH = "main"
+# GH_BRANCH 留空即可：Worker 会自动向 GitHub 查询默认分支（你的仓库是 master）。
+# 只有想固定到某个非默认分支时才填。
 ETF_CODE  = "515180"                                     # 红利ETF易方达，跟踪中证红利 000922
 PAGES_URL = "https://binbin1555.github.io/hongli-ma30/"  # Bark 点击后跳转的地址
 

@@ -75,10 +75,22 @@ function gh(env) {
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'hongli-ma30-worker',
   };
-  const branch = env.GH_BRANCH || 'main';
+
+  // 分支名不写死：GH_BRANCH 没配就问 GitHub 要默认分支。
+  // main 还是 master 各家仓库不一样，写死会在第一次运行时静默 404。
+  let branchCache = env.GH_BRANCH || null;
+  async function branchName() {
+    if (branchCache) return branchCache;
+    const r = await retryFetch(base, { headers }, 3, '仓库信息');
+    branchCache = (await r.json()).default_branch;
+    if (!branchCache) throw new Error('拿不到默认分支名');
+    return branchCache;
+  }
 
   return {
+    branchName,
     async readJSON(path, fallback = null) {
+      const branch = await branchName();
       const r = await fetch(`${base}/contents/${path}?ref=${branch}`, { headers });
       if (r.status === 404) return fallback;
       if (!r.ok) throw new Error(`读取 ${path} 失败：HTTP ${r.status}`);
@@ -87,6 +99,7 @@ function gh(env) {
     },
     /** 一次提交写入多个文件，保证原子性 */
     async commit(files, message) {
+      const branch = await branchName();
       const refRes = await retryFetch(`${base}/git/ref/heads/${branch}`, { headers }, 3, 'git ref');
       const baseSha = (await refRes.json()).object.sha;
 
