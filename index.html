@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#E9EDF1">
+<title>红利 MA30 停车策略</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+:root{
+  --bg:#E9EDF1; --pan:#FFFFFF; --ln:#DCE3EA; --tx:#1B2431; --dm:#5E6B7B;
+  --ac:#2C55C8; --up:#D63C48; --dn:#0E9B60; --warn:#B4690E; --chip:#F1F5F9;
+  --mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
+  --sans:'Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#11151B; --pan:#1A1F27; --ln:#2A323D; --tx:#E3E8EE; --dm:#8D99A8;
+  --ac:#6E9BF0; --up:#F0555F; --dn:#2BB77C; --warn:#D89A3A; --chip:#222933;
+}}
+:root[data-theme="dark"]{
+  --bg:#11151B; --pan:#1A1F27; --ln:#2A323D; --tx:#E3E8EE; --dm:#8D99A8;
+  --ac:#6E9BF0; --up:#F0555F; --dn:#2BB77C; --warn:#D89A3A; --chip:#222933;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-height:1.6;
+  font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.wrap{max-width:860px;margin:0 auto;padding:14px 14px 60px;display:flex;flex-direction:column;gap:14px}
+.card{background:var(--pan);border-radius:12px;padding:20px 22px}
+.k{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--dm);
+  font-weight:600;margin:0 0 8px}
+.big{font-family:var(--mono);font-size:34px;font-weight:600;margin:0;line-height:1.1;letter-spacing:-.02em}
+.mid{font-family:var(--mono);font-size:21px;font-weight:600;margin:0}
+.sm{font-size:12.5px;margin:6px 0 0;color:var(--dm)}
+.mono{font-family:var(--mono)}
+
+/* 顶栏 */
+.top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:2px 4px}
+.top h1{font-size:15px;margin:0;font-weight:700;flex:1 1 auto}
+.pill{font-size:11px;padding:4px 10px;border-radius:999px;background:var(--chip);color:var(--dm);
+  border:none;font-family:inherit;cursor:pointer}
+.pill:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.pill.ok{color:var(--dn)} .pill.bad{color:var(--up)} .pill.warn{color:var(--warn)}
+
+/* 触发横幅 */
+#banner{display:none;background:var(--up);color:#fff;border-radius:12px;padding:24px 22px;
+  gap:16px;align-items:center;flex-wrap:wrap;box-shadow:0 6px 24px rgba(214,60,72,.32)}
+#banner.on{display:flex}
+#banner.sell{background:var(--dn);box-shadow:0 6px 24px rgba(14,155,96,.32)}
+#banner .bm{flex:1 1 280px;min-width:0}
+#banner .bk{font-size:11.5px;letter-spacing:.16em;margin:0 0 6px;opacity:.9}
+#banner .bt{font-size:clamp(26px,6.4vw,40px);font-weight:700;margin:0;line-height:1.16;letter-spacing:-.02em}
+#banner .bs{font-size:12.5px;margin:10px 0 0;opacity:.92;line-height:1.55;max-width:48ch}
+#banner button{font-family:inherit;font-size:16px;font-weight:700;padding:15px 34px;border-radius:8px;
+  border:none;background:#fff;color:var(--up);cursor:pointer;flex:none}
+#banner.sell button{color:var(--dn)}
+#banner button:focus-visible{outline:3px solid #fff;outline-offset:3px}
+
+/* 首屏三件事 */
+.hero{display:flex;gap:26px;flex-wrap:wrap}
+.hero>div{flex:1 1 210px;min-width:0}
+.pips{display:flex;gap:6px;margin:14px 0 0}
+.pip{flex:1;height:34px;border-radius:6px;background:var(--chip)}
+.pip.on{background:var(--up)}
+
+.rowline{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+  padding:10px 0;font-size:13.5px}
+.rowline+.rowline{border-top:1px solid var(--ln)}
+.rowline .v{font-family:var(--mono);font-weight:600;font-size:14px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+
+/* 图 */
+.ranges{display:flex;gap:5px;flex-wrap:wrap;margin:0 0 12px}
+.ranges button{font-size:11.5px;padding:5px 11px;border-radius:6px;cursor:pointer;
+  background:var(--pan);border:1px solid var(--ln);color:var(--dm);font-family:inherit}
+.ranges button[aria-pressed="true"]{background:var(--ac);border-color:var(--ac);color:#fff}
+.ranges button:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.chartbox{width:100%;overflow-x:auto}
+svg.ch{display:block;width:100%;height:auto;min-width:520px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--dm);margin:10px 0 0}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
+
+/* 计算器 */
+.calc{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.calc label{font-size:11px;color:var(--dm);display:block;margin:0 0 5px;letter-spacing:.05em}
+.calc input{font-family:var(--mono);font-size:16px;padding:10px 12px;border-radius:7px;width:165px;
+  background:var(--bg);border:1px solid var(--ln);color:var(--tx)}
+.calc input:focus-visible{outline:2px solid var(--ac);outline-offset:1px}
+.calcout{display:flex;gap:26px;flex-wrap:wrap;margin:16px 0 0;padding:15px 17px;border-radius:9px;
+  background:var(--bg)}
+.calcout .v{font-family:var(--mono);font-size:22px;font-weight:600;margin:0}
+
+/* 表 */
+.tbox{overflow:auto;max-height:340px;margin:0 -6px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dm);text-align:left;
+  padding:8px 10px;font-weight:600;background:var(--pan);position:sticky;top:0;white-space:nowrap;
+  border-bottom:1px solid var(--ln)}
+td{padding:9px 10px;font-family:var(--mono);white-space:nowrap;border-bottom:1px solid var(--ln)}
+td.side{font-family:var(--sans);font-weight:600}
+tr:last-child td{border-bottom:none}
+
+.note{font-size:11.5px;color:var(--dm);margin:12px 0 0;line-height:1.65}
+.checks{display:flex;flex-direction:column;gap:7px;margin:4px 0 0}
+.chk{display:flex;gap:9px;align-items:flex-start;font-size:12.5px}
+.chk i{flex:none;width:16px;font-style:normal}
+.chk.ok i{color:var(--dn)} .chk.bad i{color:var(--up)}
+.chk span{color:var(--dm)}
+.empty{color:var(--dm);font-size:13px;padding:18px 0;text-align:center}
+@media (max-width:520px){.card{padding:17px 16px}.big{font-size:29px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top">
+    <h1>红利 MA30 停车策略</h1>
+    <button class="pill" id="themeBtn" type="button">主题</button>
+    <button class="pill" id="healthPill" type="button">加载中…</button>
+  </div>
+
+  <div id="banner">
+    <div class="bm">
+      <p class="bk" id="bKick">触发 · 明日收盘执行</p>
+      <p class="bt" id="bText">—</p>
+      <p class="bs">此横幅仅供你确认已下单。<b>无论是否点击，系统都已按规则把这笔操作写入不可更改的记录。</b></p>
+    </div>
+    <button type="button" id="bDone">已完成</button>
+  </div>
+
+  <div class="card hero" id="hero">
+    <div>
+      <p class="k">当前档位</p>
+      <p class="big"><span id="tierNum">–</span> <span style="font-size:20px;color:var(--dm)">/ 5 份</span></p>
+      <div class="pips" id="pips"></div>
+    </div>
+    <div>
+      <p class="k">下一次操作</p>
+      <p class="mid" id="nextAct">–</p>
+      <p class="sm" id="nextDist">–</p>
+    </div>
+    <div>
+      <p class="k">账户盈亏</p>
+      <p class="big" id="pnl">–</p>
+      <p class="sm" id="pnlSub">–</p>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <p class="k">中证红利全收益 H00922</p>
+      <p class="big" id="idxClose">–</p>
+      <p class="sm" id="idxSub">–</p>
+    </div>
+    <div class="card">
+      <p class="k">30 日均线</p>
+      <p class="big" style="color:var(--ac)" id="maVal">–</p>
+      <p class="sm" id="maSub">–</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="k">走势与操作</p>
+    <div class="ranges" id="ranges"></div>
+    <div class="chartbox"><svg class="ch" id="chart" role="img" aria-label="中证红利全收益指数与30日均线走势，含买卖操作点"></svg></div>
+    <div class="legend">
+      <span><i style="background:var(--tx)"></i>指数收盘</span>
+      <span><i style="background:var(--ac)"></i>MA30</span>
+      <span><i style="background:var(--up)"></i>B 买入</span>
+      <span><i style="background:var(--dn)"></i>S 卖出</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="k">每份该是多少钱</p>
+    <div class="calc">
+      <div><label for="inS">当前总资产（元）</label><input id="inS" type="text" inputmode="decimal"></div>
+      <div><label for="inV">其中股票市值（元）</label><input id="inV" type="text" inputmode="decimal"></div>
+    </div>
+    <div class="calcout">
+      <div><p class="k">下一次买入</p><p class="v" style="color:var(--up)" id="oBuy">–</p></div>
+      <div><p class="k">下一次卖出</p><p class="v" style="color:var(--dn)" id="oSell">–</p></div>
+      <div><p class="k">参考股数</p><p class="v" id="oShares">–</p></div>
+    </div>
+    <p class="note">目标市值法（说明文档 3.5）：买 X =（w×S − V）÷（1 + w×c），卖 X =（V − w×S）÷（1 − w×c），佣金 c = 万分之 0.45。
+      默认值由本金和账本自动推导，你也可以改成实盘的真实数字来试算。股数按 <span id="etfLabel">ETF</span> 收盘价向下取整到 100 股。</p>
+  </div>
+
+  <div class="card">
+    <p class="k">交易记录（不可更改）</p>
+    <div id="ledgerWarn" style="display:none;background:color-mix(in srgb,var(--up) 12%,transparent);
+      border:1px solid var(--up);color:var(--up);border-radius:8px;padding:12px 14px;
+      font-size:12.5px;line-height:1.6;margin:0 0 12px"></div>
+    <div class="tbox"><table id="ledger"><thead><tr>
+      <th>#</th><th>执行日</th><th>方向</th><th>档位</th><th>指数收盘</th><th>金额（推导）</th>
+    </tr></thead><tbody></tbody></table></div>
+    <p class="note">账本只记录日期、指数收盘价和档位变化，这三样一经写入就锁死在 Git 提交历史里。
+      金额是按你的本金实时推导出来的，所以仓库是公开的也不会泄露你的资金规模。</p>
+  </div>
+
+  <div class="card">
+    <p class="k">设置与数据健康</p>
+    <div class="calc" style="margin-bottom:16px">
+      <div><label for="inP">本金（元）</label><input id="inP" type="text" inputmode="decimal" placeholder="例如 1000000"></div>
+      <div><label for="inReal">实际总资产（可选，覆盖推导值）</label><input id="inReal" type="text" inputmode="decimal" placeholder="留空则用理论值"></div>
+    </div>
+    <div class="checks" id="checks"></div>
+    <p class="note" id="dataNote">–</p>
+  </div>
+
+</div>
+
+<script type="module">
+import { replay, plannedOrder, orderAmount, shares, triggers, auditLedger, WEIGHTS, COMMISSION }
+  from './shared/strategy.js';
+
+const $ = (id) => document.getElementById(id);
+const LS = {
+  get: (k, d = null) => { try { const v = localStorage.getItem('hlma30.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem('hlma30.' + k, JSON.stringify(v)); } catch {} },
+};
+const money = (n) => (isFinite(n) ? Math.round(n).toLocaleString('zh-CN') : '–');
+const money2 = (n) => (isFinite(n) ? n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '–');
+const num = (s) => { const v = Number(String(s).replace(/[^\d.]/g, '')); return isFinite(v) ? v : 0; };
+
+// 主题
+const applyTheme = (t) => {
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', t);
+};
+applyTheme(LS.get('theme', 'auto'));
+$('themeBtn').onclick = () => {
+  const order = ['auto', 'light', 'dark'];
+  const next = order[(order.indexOf(LS.get('theme', 'auto')) + 1) % 3];
+  LS.set('theme', next); applyTheme(next);
+  $('themeBtn').textContent = { auto: '主题·跟随', light: '主题·浅', dark: '主题·深' }[next];
+};
+$('themeBtn').textContent = { auto: '主题·跟随', light: '主题·浅', dark: '主题·深' }[LS.get('theme', 'auto')];
+
+const RANGES = [['近一月', 21], ['近三月', 63], ['近半年', 126], ['年初至今', 0],
+                ['近一年', 243], ['近两年', 486], ['近三年', 729]];
+let S = {}; // state, ledger, series, computed
+
+async function load() {
+  const bust = '?t=' + Date.now();
+  const [state, ledger, series] = await Promise.all([
+    fetch('./data/state.json' + bust).then((r) => r.json()),
+    fetch('./data/ledger.json' + bust).then((r) => r.json()),
+    fetch('./data/series.json' + bust).then((r) => r.json()),
+  ]);
+  S = { state, ledger, series };
+  render();
+}
+
+function computeMoney() {
+  const principal = num(LS.get('principal', 0));
+  if (!principal) return null;
+  const rows = S.series.rows.filter((r) => r.d <= S.state.asof);
+  const st = replay(rows, S.ledger.entries, principal, S.state.launchDate);
+  const override = num(LS.get('realTotal', 0));
+  return { principal, ...st, override: override > 0 ? override : null };
+}
+
+function render() {
+  const st = S.state, i = st.index;
+  const tier = st.tier;
+
+  // 档位
+  $('tierNum').textContent = tier;
+  $('pips').innerHTML = [0, 1, 2, 3, 4].map((k) => `<div class="pip${k < tier ? ' on' : ''}"></div>`).join('');
+
+  // 指数
+  const chg = i.changePct != null ? `${i.changePct > 0 ? '+' : ''}${i.changePct}%` : '';
+  $('idxClose').textContent = money2(i.close);
+  $('idxSub').textContent = `${st.asof} 收盘　${chg}`;
+  $('maVal').textContent = money2(i.ma30);
+  $('maSub').textContent = `收盘/MA30 = ${i.ratio}　买入线 ${money2(i.buyTrigger)}　卖出线 ${money2(i.sellTrigger)}`;
+
+  // 下一步
+  if (st.pending) {
+    const buy = st.pending.side === 'BUY';
+    $('nextAct').textContent = `${buy ? '买入' : '卖出'}第 ${buy ? st.pending.tierTo : st.pending.tierFrom} 份`;
+    $('nextAct').style.color = buy ? 'var(--up)' : 'var(--dn)';
+    $('nextDist').textContent = `已触发，明日（下一个交易日）收盘执行`;
+  } else if (tier < 4) {
+    $('nextAct').textContent = `买入第 ${tier + 1} 份`;
+    $('nextAct').style.color = 'var(--up)';
+    let s = `指数需再跌 ${Math.abs(i.pctToBuy).toFixed(2)}% 至 ${money2(i.buyTrigger)}`;
+    if (tier > 0) s += `　／　卖出需涨 ${i.pctToSell.toFixed(2)}% 至 ${money2(i.sellTrigger)}`;
+    $('nextDist').textContent = s;
+  } else {
+    $('nextAct').textContent = '已满仓';
+    $('nextAct').style.color = 'var(--tx)';
+    $('nextDist').textContent = `卖出需涨 ${i.pctToSell.toFixed(2)}% 至 ${money2(i.sellTrigger)}`;
+  }
+
+  // 盈亏（红涨绿跌）
+  const M = computeMoney();
+  if (!M) {
+    $('pnl').textContent = '未设本金';
+    $('pnl').style.color = 'var(--dm)';
+    $('pnlSub').textContent = '在下方「设置」里填入本金后显示';
+  } else {
+    const total = M.override ?? M.total;
+    const p = total - M.principal, pct = p / M.principal * 100;
+    const col = p >= 0 ? 'var(--up)' : 'var(--dn)';
+    $('pnl').textContent = (p >= 0 ? '+' : '−') + money(Math.abs(p));
+    $('pnl').style.color = col;
+    $('pnlSub').innerHTML = `<span style="color:${col}">${p >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%</span>`
+      + `　总资产 ${money(total)}　本金 ${money(M.principal)}${M.override ? '　（手填）' : ''}`;
+  }
+
+  // 横幅
+  const bn = $('banner');
+  const ackKey = st.pending ? `ack.${st.pending.signalDate}` : null;
+  if (st.pending && !LS.get(ackKey, false)) {
+    const buy = st.pending.side === 'BUY';
+    bn.classList.add('on'); bn.classList.toggle('sell', !buy);
+    let amtTxt = `目标仓位 ${WEIGHTS[st.pending.tierTo] * 100}%`;
+    if (M) {
+      const o = plannedOrder(M.V, M.cash, st.pending.tierTo);
+      const sh = st.etf && st.etf.close ? shares(o.amount, st.etf.close) : null;
+      amtTxt = `${money(o.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : '');
+    }
+    $('bKick').textContent = `触发 · 下一个交易日收盘执行　档位 ${st.pending.tierFrom}/5 → ${st.pending.tierTo}/5`;
+    $('bText').textContent = `${buy ? '买入' : '卖出'}　${amtTxt}`;
+    $('bDone').onclick = () => { LS.set(ackKey, true); bn.classList.remove('on'); };
+  } else {
+    bn.classList.remove('on');
+  }
+
+  // 计算器默认值
+  if (M) {
+    if (!$('inS').dataset.touched) $('inS').value = money(M.override ?? M.total);
+    if (!$('inV').dataset.touched) $('inV').value = money(M.V);
+  }
+  $('etfLabel').textContent = st.etf?.code || 'ETF';
+  calc();
+
+  // 账本
+  renderLedger(M);
+
+  // 图
+  buildRanges();
+
+  // 健康
+  renderHealth();
+}
+
+function calc() {
+  const st = S.state, tier = st.tier;
+  const Sv = num($('inS').value), Vv = num($('inV').value);
+  const tb = Math.min(4, tier + 1), ts = Math.max(0, tier - 1);
+  const ob = tier < 4 ? orderAmount(Sv, Vv, WEIGHTS[tb]) : null;
+  const os = tier > 0 ? orderAmount(Sv, Vv, WEIGHTS[ts]) : null;
+  $('oBuy').textContent = ob ? `${money(ob.amount)} 元` : '已满仓';
+  $('oSell').textContent = os ? `${money(os.amount)} 元` : '已空仓';
+  const px = S.state.etf && S.state.etf.close;
+  const target = st.pending ? (st.pending.side === 'BUY' ? ob : os) : ob;
+  const sh = target && px ? shares(target.amount, px) : null;
+  $('oShares').textContent = sh ? `${money(sh)} 股` : (px ? '–' : '无报价');
+}
+for (const id of ['inS', 'inV']) {
+  $(id).addEventListener('input', (e) => { e.target.dataset.touched = '1'; calc(); });
+}
+$('inP').value = LS.get('principal', '') ? money(num(LS.get('principal', 0))) : '';
+$('inReal').value = LS.get('realTotal', '') ? money(num(LS.get('realTotal', 0))) : '';
+$('inP').addEventListener('input', (e) => { LS.set('principal', num(e.target.value)); delete $('inS').dataset.touched; delete $('inV').dataset.touched; render(); });
+$('inReal').addEventListener('input', (e) => { LS.set('realTotal', num(e.target.value)); delete $('inS').dataset.touched; render(); });
+
+function renderLedger(M) {
+  const tb = $('ledger').querySelector('tbody');
+  const es = S.ledger.entries || [];
+
+  // 账本自审：日期必须落在行情序列里、档位必须逐笔连得上，否则金额不可信
+  const problems = auditLedger(S.series.rows, es, S.state.launchDate);
+  const box = $('ledgerWarn');
+  if (problems.length) {
+    box.style.display = 'block';
+    box.innerHTML = `<b>账本自审发现 ${problems.length} 处异常，下方金额不可信：</b><br>`
+      + problems.slice(0, 5).map((p) => `· ${p.msg}`).join('<br>')
+      + (problems.length > 5 ? `<br>· 另有 ${problems.length - 5} 处…` : '');
+  } else {
+    box.style.display = 'none';
+  }
+
+  if (!es.length) {
+    tb.innerHTML = `<tr><td colspan="6" class="empty">还没有交易。账本从 ${S.ledger.launchDate} 起算，当前 0/5 档，等第一次买入信号。</td></tr>`;
+    return;
+  }
+  // 用重放得到每笔的金额
+  const amounts = new Map();
+  if (M) {
+    const rows = S.series.rows.filter((r) => r.d <= S.state.asof);
+    let V = 0, cash = M.principal;
+    const byDate = new Map(es.map((e) => [e.date, e]));
+    let start = rows.findIndex((r) => r.d >= S.state.launchDate);
+    if (start < 0) start = rows.length - 1;
+    for (let k = start; k < rows.length; k++) {
+      const r = rows[k];
+      if (k > start) {
+        const pv = rows[k - 1];
+        if (pv.c > 0) V *= r.c / pv.c;
+        if (pv.b && r.b && pv.b > 0) cash *= r.b / pv.b;
+      }
+      const e = byDate.get(r.d);
+      if (e) {
+        const o = orderAmount(V + cash, V, WEIGHTS[e.tierTo]);
+        amounts.set(e.date, o.amount);
+        if (o.side === 'BUY') { V += o.amount; cash -= o.amount * (1 + COMMISSION); }
+        else if (o.side === 'SELL') { V -= o.amount; cash += o.amount * (1 - COMMISSION); }
+      }
+    }
+  }
+  tb.innerHTML = es.slice().reverse().map((e) => {
+    const buy = e.side === 'BUY';
+    const amt = amounts.has(e.date) ? money(amounts.get(e.date)) : '设本金后显示';
+    return `<tr><td>${e.seq}</td><td>${e.date}</td>`
+      + `<td class="side" style="color:${buy ? 'var(--up)' : 'var(--dn)'}">${buy ? '买入 B' : '卖出 S'}</td>`
+      + `<td>${e.tierFrom} → ${e.tierTo}</td><td>${money2(e.price)}</td><td>${amt}</td></tr>`;
+  }).join('');
+}
+
+function sliceFrom(key) {
+  const rows = S.series.rows, n = rows.length;
+  if (key === 0) {
+    const y = S.state.asof.slice(0, 4) + '-01-01';
+    const i = rows.findIndex((r) => r.d >= y);
+    return i < 0 ? 0 : i;
+  }
+  return Math.max(0, n - key);
+}
+function buildRanges() {
+  const rg = $('ranges');
+  if (rg.dataset.built) return;
+  rg.dataset.built = '1';
+  const saved = LS.get('range', 4);
+  RANGES.forEach(([lab, n], k) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = lab;
+    b.setAttribute('aria-pressed', String(k === saved));
+    b.onclick = () => {
+      rg.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', 'false'));
+      b.setAttribute('aria-pressed', 'true'); LS.set('range', k); drawChart(sliceFrom(n));
+    };
+    rg.appendChild(b);
+  });
+  drawChart(sliceFrom(RANGES[saved][1]));
+}
+function drawChart(from) {
+  const svg = $('chart');
+  const cs = getComputedStyle(document.body);
+  const g_ = (p) => cs.getPropertyValue(p).trim();
+  const ln = g_('--ln'), dm = g_('--dm'), tx = g_('--tx'), ac = g_('--ac'),
+        up = g_('--up'), dn = g_('--dn'), pan = g_('--pan');
+  const rows = S.series.rows.slice(from);
+  if (rows.length < 2) { svg.innerHTML = ''; return; }
+  const W = 880, H = 300, L = 64, R = 18, T = 18, B = 32;
+  const vals = [];
+  for (const r of rows) { vals.push(r.c); if (r.m != null) vals.push(r.m); }
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = (hi - lo) * 0.1 || 1; lo -= pad; hi += pad;
+  const X = (k) => L + k * (W - L - R) / (rows.length - 1);
+  const Y = (v) => T + (hi - v) * (H - T - B) / (hi - lo);
+  let g = '';
+  for (let k = 0; k <= 5; k++) {
+    const v = lo + (hi - lo) * k / 5, y = Y(v);
+    g += `<line x1="${L}" y1="${y.toFixed(1)}" x2="${W - R}" y2="${y.toFixed(1)}" stroke="${ln}" stroke-width="1"/>`;
+    g += `<text x="${L - 8}" y="${(y + 4).toFixed(1)}" fill="${dm}" font-size="11" text-anchor="end" font-family="monospace">${Math.round(v)}</text>`;
+  }
+  const step = Math.max(1, Math.floor(rows.length / 6));
+  for (let k = 0; k < rows.length; k += step) {
+    g += `<text x="${X(k).toFixed(1)}" y="${H - 10}" fill="${dm}" font-size="11" text-anchor="middle" font-family="monospace">${rows[k].d.slice(2).replace(/-/g, '/')}</text>`;
+  }
+  const path = (get) => {
+    let s = '', pen = false;
+    rows.forEach((r, k) => {
+      const v = get(r);
+      if (v == null) { pen = false; return; }
+      s += (pen ? 'L' : 'M') + X(k).toFixed(1) + ',' + Y(v).toFixed(1) + ' ';
+      pen = true;
+    });
+    return s.trim();
+  };
+  g += `<path d="${path((r) => r.m)}" fill="none" stroke="${ac}" stroke-width="1.7" stroke-dasharray="5 4" stroke-linejoin="round"/>`;
+  g += `<path d="${path((r) => r.c)}" fill="none" stroke="${tx}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const idx = new Map(rows.map((r, k) => [r.d, k]));
+  for (const e of S.ledger.entries || []) {
+    const k = idx.get(e.date);
+    if (k == null) continue;
+    const buy = e.side === 'BUY', col = buy ? up : dn, y = Y(rows[k].c);
+    g += `<circle cx="${X(k).toFixed(1)}" cy="${y.toFixed(1)}" r="8.5" fill="${col}" stroke="${pan}" stroke-width="1.5"/>`;
+    g += `<text x="${X(k).toFixed(1)}" y="${(y + 3.8).toFixed(1)}" fill="#ffffff" font-size="10" font-weight="700" text-anchor="middle" font-family="monospace">${buy ? 'B' : 'S'}</text>`;
+  }
+  const last = rows.length - 1;
+  g += `<circle cx="${X(last).toFixed(1)}" cy="${Y(rows[last].c).toFixed(1)}" r="3.5" fill="${tx}"/>`;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = g;
+}
+
+function renderHealth() {
+  const c = S.state.checks || {};
+  const failed = c.failed || [];
+  const neverRan = !c.ranAt;
+  const pill = $('healthPill');
+  const ok = !neverRan && failed.length === 0;
+  pill.textContent = neverRan ? '等待首次运行'
+    : ok ? `校验 ${c.passed}/${c.total} 通过`
+    : `校验 ${c.passed}/${c.total}　${failed.length} 项未过`;
+  pill.className = 'pill ' + (neverRan ? 'warn' : ok ? 'ok' : 'bad');
+  pill.onclick = () => $('checks').scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  const names = {
+    1: '交易日历确认今天开市', 2: '中证今日数据已到位', 3: '结构：日期递增且都是官方交易日',
+    4: '幽灵行已清除', 5: '涨跌幅与收盘价对账', 6: '单日波动在 ±11% 内',
+    7: 'MA30 有满 30 个交易日', 8: 'ETF 报价日期与指数一致', 9: '档位一天最多动一档',
+    10: '账本自审：日期与档位链完整',
+  };
+  const failedIds = new Set(failed.map((f) => f.id));
+  $('checks').innerHTML = Object.entries(names).map(([id, nm]) => {
+    if (neverRan) return `<div class="chk"><i style="color:var(--dm)">·</i><div>${nm}<br><span>尚未运行</span></div></div>`;
+    const bad = failedIds.has(+id);
+    const detail = bad ? failed.find((f) => f.id === +id).detail : '';
+    return `<div class="chk ${bad ? 'bad' : 'ok'}"><i>${bad ? '✕' : '✓'}</i>`
+      + `<div>${nm}${detail ? `<br><span>${detail}</span>` : ''}</div></div>`;
+  }).join('');
+
+  $('dataNote').innerHTML =
+    `数据截至 <b>${S.state.asof}</b>，最近一次运行 <b>${S.state.lastRun || '尚未运行'}</b>。`
+    + `　行情 ${S.series.rows.length} 个交易日。`
+    + `<br>信号源 中证指数 H00922（全收益）／ 闲钱基准 中证全债 H11001 ／ 交易日历 深交所官方接口 ／ ETF 报价 ${S.state.etf?.code || '—'}。`
+    + `<br>账本按<b>理论口径</b>记账：股票腿用全收益指数、闲钱用全债指数推算，与你实盘的零头差异不追踪。实盘表现通常略低于理论值。`;
+}
+
+load().catch((e) => {
+  document.querySelector('.wrap').insertAdjacentHTML('afterbegin',
+    `<div class="card"><p class="k" style="color:var(--up)">加载失败</p><p>${String(e)}</p>
+     <p class="note">如果是刚部署，请确认 GitHub Pages 已经生效，并且 data/ 下的三个 json 文件存在。</p></div>`);
+});
+</script>
+</body>
+</html>

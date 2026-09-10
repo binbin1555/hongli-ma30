@@ -1,0 +1,17 @@
+name = "hongli-ma30"
+main = "worker/src/index.js"
+compatibility_date = "2026-09-01"
+
+# ---- 公开配置（可以进仓库）----
+[vars]
+GH_OWNER  = "binbin1555"
+GH_REPO   = "hongli-ma30"
+GH_BRANCH = "main"
+ETF_CODE  = "515180"                                     # 红利ETF易方达，跟踪中证红利 000922
+PAGES_URL = "https://binbin1555.github.io/hongli-ma30/"  # Bark 点击后跳转的地址
+
+# ---- 机密（绝不写进这个文件，用命令行或控制台单独设置）----
+#   npx wrangler secret put GITHUB_TOKEN   GitHub 细粒度 PAT，只给本仓库 Contents 读写权限
+#   npx wrangler secret put BARK_KEY       Bark App 里的设备 key
+#   npx wrangler secret put RUN_TOKEN      自己随便编一串长口令，用来保护 /run 端点
+#   npx wrangler secret put PRINCIPAL      本金，例如 1000000。只有 Worker 知道，不进仓库。
