@@ -525,6 +525,17 @@ async function runDaily(env, { force = false } = {}) {
     ? { signalDate: today, tierFrom: tier, tierTo: want, side: want > tier ? 'BUY' : 'SELL' }
     : null;
 
+  // 挂单到底哪天执行 —— 周五出的信号要到下周一，节前能差十天。
+  // 推送里绝不能笼统写"明日"，那是会让人在休市日空等的错话。
+  let execDay = null;
+  if (pending) {
+    execDay = nextTradingDay(cal.tradingDays, today);
+    if (!execDay) {   // 12 月底的信号会落到明年，当年日历里已经没有下一天了
+      const nextCal = await G.readJSON(`calendar/${+year + 1}.json`);
+      if (nextCal) execDay = nextTradingDay(nextCal.tradingDays, today);
+    }
+  }
+
   // ---- 10 项校验 ----
   const checks = runChecks(idx, removed, today, etf, tier, want, cal.tradingDays, ledger.entries);
 
@@ -607,12 +618,12 @@ async function runDaily(env, { force = false } = {}) {
 
   const msg = executed
     ? `${today} 成交 ${executed.side === 'BUY' ? '买入' : '卖出'} 第 ${executed.tierTo} 档`
-    : pending ? `${today} 出信号 ${pending.side === 'BUY' ? '买入' : '卖出'} → 明日执行`
+    : pending ? `${today} 出信号 ${pending.side === 'BUY' ? '买入' : '卖出'} → ${execDay || '下一交易日'} 执行`
       : `${today} 无操作`;
   const sha = await G.commit(files, `chore(daily): ${msg}`);
 
   // ---- 推送 ----
-  await pushDaily(env, { today, newState, pending, executed, plan, etf, checks, late });
+  await pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late });
 
   // 推送结果补记一次：失败时面板上要看得见，否则你不会知道自己漏收了通知。
   // 这次补记失败也不影响主流程 —— 账本已经提交好了。
@@ -639,7 +650,28 @@ async function runDaily(env, { force = false } = {}) {
   };
 }
 
-async function pushDaily(env, { today, newState, pending, executed, plan, etf, checks, late }) {
+const WD_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const weekdayCN = (d) => WD_CN[new Date(`${d}T00:00:00Z`).getUTCDay()];
+
+/**
+ * 挂单执行日的措辞。
+ * 只有执行日正好是日历上的第二天时才能说「明日」。
+ * 周五出的信号执行日是下周一，节前能差十天 —— 这时必须把日期说出来，
+ * 否则你会在休市日盯着盘等一个不会来的成交。
+ */
+export function execWording(today, execDay) {
+  if (!execDay) {
+    return { short: '下一个交易日收盘执行', long: '执行日以交易日历为准（当前取不到，请到面板核对）' };
+  }
+  const tomorrow = new Date(Date.parse(`${today}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+  const d = `${+execDay.slice(5, 7)} 月 ${+execDay.slice(8, 10)} 日`;
+  if (execDay === tomorrow) {
+    return { short: '明日收盘执行', long: `执行日 ${execDay}（明天，${weekdayCN(execDay)}）收盘前` };
+  }
+  return { short: `${d}收盘执行`, long: `执行日 ${execDay}（${weekdayCN(execDay)}）收盘前，中间的休市日不用操作` };
+}
+
+async function pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late }) {
   const i = newState.index;
   const chg = i.changePct != null ? `${i.changePct > 0 ? '+' : ''}${i.changePct}%` : '';
   const warn = checks.some((c) => !c.ok) ? `\n⚠️ ${checks.filter((c) => !c.ok).map((c) => c.name).join('、')}` : '';
@@ -656,20 +688,35 @@ async function pushDaily(env, { today, newState, pending, executed, plan, etf, c
     const est = plan
       ? `\n估算约 ${money(plan.amount)} 元${plan.shares ? `（约 ${money(plan.shares)} 股）` : ''}，按本金推算，下单以面板为准`
       : '';
+    const w = execWording(today, execDay);
     await bark(env, {
-      title: `${isBuy ? '🔴 买入' : '🟢 卖出'}第 ${share} 份　明日收盘执行`,
+      title: `${isBuy ? '🔴 买入' : '🟢 卖出'}第 ${share} 份　${w.short}`,
       body: `档位 ${pending.tierFrom}/5 → ${pending.tierTo}/5，目标仓位 ${WEIGHTS[pending.tierTo] * 100}%${est}`
+        + `\n${w.long}`
         + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${doneLine}${warn}`,
       level: 'timeSensitive',
       group: '红利MA30·操作',
     });
   } else {
-    const dist = newState.tier < 4
-      ? `距买入还需跌 ${Math.abs(i.pctToBuy).toFixed(2)}%（${i.buyTrigger}）` : '已满仓';
-    const dist2 = newState.tier > 0
-      ? `　距卖出还需涨 ${i.pctToSell.toFixed(2)}%（${i.sellTrigger}）` : '';
+    // 已经破线却没出挂单，只可能是满仓/空仓挡住了。
+    // 这时说「还需跌 X%」是假话（abs 会把负数翻正），得直说已经破线。
+    const dist = newState.tier >= 4
+      ? '已满仓，不再加仓'
+      : i.pctToBuy <= 0
+        ? `已跌破买入线（${i.buyTrigger}）`
+        : `距买入还需跌 ${i.pctToBuy.toFixed(2)}%（${i.buyTrigger}）`;
+    const dist2 = newState.tier <= 0
+      ? '　当前空仓，没有可卖的份额'
+      : i.pctToSell <= 0
+        ? `　已涨破卖出线（${i.sellTrigger}）`
+        : `　距卖出还需涨 ${i.pctToSell.toFixed(2)}%（${i.sellTrigger}）`;
+    // 今天刚成交过就不能叫「无操作」—— 那会让人以为白跑一趟。
+    // 「无操作」说的是明天不用动，标题必须把这层意思写清楚。
+    const title = executed
+      ? `✅ 今日已成交　${newState.tier}/5 档　明日无需操作`
+      : `红利MA30 · 明日无需操作　${newState.tier}/5 档`;
     await bark(env, {
-      title: `红利MA30 · 无操作　${newState.tier}/5 档`,
+      title,
       body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${doneLine}${warn}`,
       level: 'passive',
     });

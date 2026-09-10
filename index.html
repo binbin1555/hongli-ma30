@@ -310,6 +310,8 @@ const num = (s) => { const v = Number(String(s).replace(/[^\d.]/g, '')); return 
 const pct = (n) => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(2)}%`;
 const bjToday = () => beijingDate();   // 实现在 shared/strategy.js，受测试覆盖
 const md = (d) => `${+d.slice(5, 7)} 月 ${+d.slice(8, 10)} 日`;
+const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const wd = (d) => WD[new Date(`${d}T00:00:00Z`).getUTCDay()];
 /**
  * 挂单该在哪天执行、相对今天是什么位置。
  * 文案必须随日期变：T 日晚上说「明天」，到了 T+1 当天就得说「今天」，
@@ -318,10 +320,12 @@ const md = (d) => `${+d.slice(5, 7)} 月 ${+d.slice(8, 10)} 日`;
 function execInfo(signalDate) {
   const day = nextTradingDay(S.cal, signalDate);
   const today = bjToday();
-  if (!day) return { day: null, when: 'unknown', text: '下一个交易日收盘' };
-  if (day === today) return { day, when: 'today', text: '就在今天收盘前' };
-  if (day > today) return { day, when: 'future', text: `${md(day)}（下一个交易日）收盘` };
-  return { day, when: 'past', text: `${md(day)} 收盘（执行日已过）` };
+  // lead 会原样拼在「买入第 N 份」前面，四种情况都必须读得通顺；
+  // kick 是横幅顶上那行，短，但同样不能和卡片说的时点打架。
+  if (!day) return { day: null, when: 'unknown', lead: '下一个交易日收盘前', kick: '下一个交易日收盘执行' };
+  if (day === today) return { day, when: 'today', lead: '今天收盘前', kick: '今天收盘前执行' };
+  if (day > today) return { day, when: 'future', lead: `${md(day)}（${wd(day)}）收盘前`, kick: `${md(day)}（${wd(day)}）收盘执行` };
+  return { day, when: 'past', lead: `本应在 ${md(day)}收盘前`, kick: '执行日已过 · 请尽快补做' };
 }
 
 const applyTheme = (t) => {
@@ -418,6 +422,23 @@ function behindState() {
  * 单独成函数是因为改计算器里的数字也要刷新它 —— 否则会出现
  * 计算器已经切到补做态、顶部还在推演下一个信号的自相矛盾。
  */
+/**
+ * 1–3 档时买入线和卖出线同时有效，nextMove 只会给出更近的那一个。
+ * 卡片叫「下一次操作」，只写一边容易被读成「方向已经定了」——
+ * 把另一边的触发点也写出来，才不会在反向走的时候措手不及。
+ */
+function otherSide(kind, tier, i) {
+  if (kind === 'buy' && tier > 0) {
+    const need = Math.max(0, (i.sellTrigger - i.close) / i.close * 100);
+    return `<br>反向也可能先到：涨 ${need.toFixed(2)}% 到 <b>${int(i.sellTrigger)}</b> 则改为卖出第 ${tier} 份。`;
+  }
+  if (kind === 'sell' && tier < 4) {
+    const need = Math.max(0, (i.close - i.buyTrigger) / i.close * 100);
+    return `<br>反向也可能先到：跌 ${need.toFixed(2)}% 到 <b>${int(i.buyTrigger)}</b> 则改为买入第 ${tier + 1} 份。`;
+  }
+  return '';
+}
+
 function renderNext(behind) {
   const st = S.state, i = st.index, tier = st.tier;
   const M = accountMoney();
@@ -432,17 +453,33 @@ function renderNext(behind) {
     card.classList.add(buy ? 'buy' : 'sell');
     const amt = behind.order ? `${money(behind.order.amount)} 元` : '';
     const sh = behind.order && st.etf && st.etf.close ? shares(behind.order.amount, st.etf.close) : null;
-    $('nextLine').innerHTML = `你有 <b>${behind.missed.length || Math.abs(behind.gap)}</b> 笔操作还没做`
-      + (amt ? `，需<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'} ${amt}</b>` : '');
-    const days = behind.missed.length
+    const nMissed = behind.missed.length;
+    // 笔数和金额说的不是一回事：账本可能来回走过 0→1→2→1 三笔，
+    // 而你只需一次调仓就能落到最终档位。写「N 笔」再给一个金额会让人以为
+    // 要下 N 单，所以金额这里必须点明是「一次性补到位」。
+    const head = nMissed
+      ? `你有 <b>${nMissed}</b> 笔操作还没做`
+      : `你填的实盘仓位和账本对不上`;
+    $('nextLine').innerHTML = head
+      + (amt ? `，需一次性<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'} ${amt}</b>补到位` : '');
+    const days = nMissed
       ? behind.missed.map((e) => `${e.date} ${e.side === 'BUY' ? '买' : '卖'}${e.tierFrom}→${e.tierTo}`).join('　')
       : '';
-    $('nextSub').innerHTML = `实盘 <b>${behind.actualTier}/5</b> 档，账本已到 <b>${behind.target}/5</b> 档`
+    $('nextSub').innerHTML = `实盘 <b>${behind.actualTier}/5</b> 档`
+      + (buy ? '，低于' : '，高于')
+      + `账本的 <b>${behind.target}/5</b> 档`
       + (sh ? `　·　约 ${money(sh)} 股` : '')
-      + (days ? `<br>漏掉的记录：${days}` : '')
+      + (days ? `<br>漏掉的记录：${days}（${nMissed} 笔合起来只需这一次调仓）` : '')
+      + (nMissed ? '' : '<br>账本里没有对得上的漏做记录 —— 可能是持仓涨跌跨过了档位边界，也可能是计算器里的数字填错了。')
       + `<br>补完之后才会回到正常的信号节奏。详见下方「每份该是多少钱」。`;
   } else if (mv.kind === 'pending') {
-    const buy = mv.side === 'BUY';
+    // 方向以目标市值公式实际算出来的为准：涨多了的时候「加一档」也可能要卖。
+    // 横幅和推送都是这么定方向的，这里必须一致 —— 否则同一屏上两处说反。
+    let buy = mv.side === 'BUY';
+    if (M) {
+      const o0 = plannedOrder(M.V, M.cash, mv.to);
+      if (o0.side !== 'NONE') buy = o0.side === 'BUY';
+    }
     card.classList.add(buy ? 'buy' : 'sell');
     const share = buy ? mv.to : mv.from;
     // 金额是按本金推算的估算值，实盘有偏差时它就不准 —— 只放副行当量级参考。
@@ -464,35 +501,47 @@ function renderNext(behind) {
       }
     }
     const ex = execInfo(st.pending.signalDate);
-    $('nextLine').innerHTML = (ex.when === 'today' ? '今天收盘前' : ex.text)
+    $('nextLine').innerHTML = ex.lead
       + `<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'}第 ${share} 份</b>`;
     $('nextSub').innerHTML = `档位 <b>${mv.from}/5</b> → <b>${mv.to}/5</b>，目标仓位 ${WEIGHTS[mv.to] * 100}%`
       + est + realLine
       + `<br>信号日 ${st.pending.signalDate}`
       + (ex.when === 'today' ? '　·　<b style="color:var(--up)">就是今天，别错过收盘</b>'
-        : ex.when === 'past' ? '　·　执行日已过，系统当晚会自动记账'
-        : ex.day ? `　·　执行日 ${ex.day}` : '');
+        : ex.when === 'past' ? '　·　执行日已过，账本当晚已按规则记上，实盘请尽快补做'
+        : ex.day ? `　·　执行日 ${ex.day}（${wd(ex.day)}），中间的休市日不用操作`
+          : '　·　执行日待交易日历确认');
   } else if (mv.kind === 'buy') {
     card.classList.add('buy');
     if (mv.need <= 0) {
-      $('nextLine').innerHTML = `中证红利已跌破买入线，<b style="color:var(--up)">等今日收盘确认</b>`;
-      $('nextSub').innerHTML = `买入线 <b>${int(i.buyTrigger)}</b>　·　收盘后若成立，明日收盘买入第 ${tier + 1} 份`;
+      $('nextLine').innerHTML = `中证红利收盘已跌破买入线，<b style="color:var(--up)">等系统当晚确认</b>`;
+      $('nextSub').innerHTML = `${st.asof} 收盘 <b>${int(i.close)}</b> 已在买入线 <b>${int(i.buyTrigger)}</b> 之下`
+        + `　·　按规则应挂单买入第 ${tier + 1} 份`
+        + `<br>面板上还没出现挂单，说明当晚 21:00 的运行还没跑到，稍后再看。`;
     } else {
       $('nextLine').innerHTML = `距离下一次买入，还需中证红利<b style="color:var(--up)">跌 ${mv.need.toFixed(2)}%</b>`;
-      $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　届时买入第 <b>${tier + 1}</b> 份（仓位 ${WEIGHTS[tier + 1] * 100}%）`;
+      $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　届时买入第 <b>${tier + 1}</b> 份（仓位 ${WEIGHTS[tier + 1] * 100}%）`
+        + otherSide('buy', tier, i)
+        + `<br>百分比按 ${st.asof} 收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
     }
   } else if (mv.kind === 'sell') {
     card.classList.add('sell');
     if (mv.need <= 0) {
-      $('nextLine').innerHTML = `中证红利已涨破卖出线，<b style="color:var(--dn)">等今日收盘确认</b>`;
-      $('nextSub').innerHTML = `卖出线 <b>${int(i.sellTrigger)}</b>　·　收盘后若成立，明日收盘卖出第 ${tier} 份`;
+      $('nextLine').innerHTML = `中证红利收盘已涨破卖出线，<b style="color:var(--dn)">等系统当晚确认</b>`;
+      $('nextSub').innerHTML = `${st.asof} 收盘 <b>${int(i.close)}</b> 已在卖出线 <b>${int(i.sellTrigger)}</b> 之上`
+        + `　·　按规则应挂单卖出第 ${tier} 份`
+        + `<br>面板上还没出现挂单，说明当晚 21:00 的运行还没跑到，稍后再看。`;
     } else {
       $('nextLine').innerHTML = `距离下一次卖出，还需中证红利<b style="color:var(--dn)">涨 ${mv.need.toFixed(2)}%</b>`;
-      $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　届时卖出第 <b>${tier}</b> 份（仓位降到 ${WEIGHTS[tier - 1] * 100}%）`;
+      $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　届时卖出第 <b>${tier}</b> 份（仓位降到 ${WEIGHTS[tier - 1] * 100}%）`
+        + otherSide('sell', tier, i)
+        + `<br>百分比按 ${st.asof} 收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
     }
   } else {
-    $('nextLine').textContent = '暂无可执行的操作';
-    $('nextSub').textContent = '';
+    // 档位在 0–4 之间时这一支到不了（0 档能买、4 档能卖），
+    // 真到了这里说明状态不对劲，别只写一句「暂无」让人干瞪眼。
+    $('nextLine').innerHTML = '<b>算不出下一步操作</b>';
+    $('nextSub').innerHTML = `当前档位 ${tier}/5 既不能加仓也不能减仓，这不正常。`
+      + `<br>请查看下方「系统自检」，或稍后重开页面；若持续如此，说明状态文件需要人工核对。`;
   }
 
 }
@@ -517,7 +566,10 @@ function renderBanner(behind) {
     }
     const buy = side === 'BUY';
     bn.classList.add('on'); bn.classList.toggle('sell', !buy);
-    $('bKick').textContent = `触发 · 下一个交易日收盘执行　档位 ${st.pending.tierFrom}/5 → ${st.pending.tierTo}/5`;
+    // 写死「下一个交易日」会在 T+1 当天和顶部卡片的「今天收盘前」正面矛盾 ——
+    // 横幅是最显眼的地方，时点必须跟着日期走。
+    const bex = execInfo(st.pending.signalDate);
+    $('bKick').textContent = `触发 · ${bex.kick}　档位 ${st.pending.tierFrom}/5 → ${st.pending.tierTo}/5`;
     const bShare = buy ? st.pending.tierTo : st.pending.tierFrom;
     $('bText').textContent = `${buy ? '买入' : '卖出'}第 ${bShare} 份　目标仓位 ${WEIGHTS[st.pending.tierTo] * 100}%`;
 
