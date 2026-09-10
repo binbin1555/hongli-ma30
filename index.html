@@ -398,24 +398,14 @@ function behindState() {
   };
 }
 
-function render() {
+/**
+ * 顶部「下一次操作」卡片。
+ * 单独成函数是因为改计算器里的数字也要刷新它 —— 否则会出现
+ * 计算器已经切到补做态、顶部还在推演下一个信号的自相矛盾。
+ */
+function renderNext(behind) {
   const st = S.state, i = st.index, tier = st.tier;
   const M = accountMoney();
-  const behind = behindState();
-
-  // ---- 档位 ----
-  $('tierNum').textContent = tier;
-  $('pips').innerHTML = [0, 1, 2, 3, 4].map((k) => `<div class="pip${k < tier ? ' on' : ''}"></div>`).join('');
-
-  // ---- 指数与均线（显示取整；后台计算仍用原值）----
-  $('idxClose').textContent = int(i.close);
-  $('idxSub').textContent = `${st.asof} 收盘` + (i.changePct != null ? `　${pct(i.changePct)}` : '');
-  $('maVal').textContent = int(i.ma30);
-  const gap = (i.close / i.ma30 - 1) * 100;
-  $('maSub').innerHTML = `指数比均线<span style="color:${gap >= 0 ? 'var(--up)' : 'var(--dn)'}">`
-    + `${gap >= 0 ? '高' : '低'} ${Math.abs(gap).toFixed(2)}%</span>`;
-
-  // ---- 下一次操作 ----
   const mv = nextMove();
   const card = $('nextCard');
   card.classList.remove('buy', 'sell');
@@ -473,6 +463,28 @@ function render() {
     $('nextLine').textContent = '暂无可执行的操作';
     $('nextSub').textContent = '';
   }
+
+}
+
+function render() {
+  const st = S.state, i = st.index, tier = st.tier;
+  const M = accountMoney();
+  const behind = behindState();
+
+  // ---- 档位 ----
+  $('tierNum').textContent = tier;
+  $('pips').innerHTML = [0, 1, 2, 3, 4].map((k) => `<div class="pip${k < tier ? ' on' : ''}"></div>`).join('');
+
+  // ---- 指数与均线（显示取整；后台计算仍用原值）----
+  $('idxClose').textContent = int(i.close);
+  $('idxSub').textContent = `${st.asof} 收盘` + (i.changePct != null ? `　${pct(i.changePct)}` : '');
+  $('maVal').textContent = int(i.ma30);
+  const gap = (i.close / i.ma30 - 1) * 100;
+  $('maSub').innerHTML = `指数比均线<span style="color:${gap >= 0 ? 'var(--up)' : 'var(--dn)'}">`
+    + `${gap >= 0 ? '高' : '低'} ${Math.abs(gap).toFixed(2)}%</span>`;
+
+  // ---- 下一次操作 ----
+  renderNext(behind);
 
   // ---- 账户盈亏 ----
   if (!M) {
@@ -661,9 +673,16 @@ function renderMismatch(r, behind) {
       + `账本记的是理论价，补齐时的成交价会和它有出入，这部分差异系统不追踪。</div>`;
   } else box.hidden = true;
 }
+let calcTimer = null;
 function onCalcInput() {
   LS.set('calc', { cash: num($('inCash').value), hold: num($('inHold').value) });
-  calc();
+  // 防抖 350ms：逐字输入时中间值（打到「5」时持仓几乎为 0）会让「你欠着操作」
+  // 的红色告警闪来闪去。等你停手再判定。
+  clearTimeout(calcTimer);
+  calcTimer = setTimeout(() => {
+    calc();
+    renderNext(behindState());   // 顶部必须一起刷新，否则会和计算器说两件事
+  }, 350);
 }
 $('inCash').addEventListener('input', onCalcInput);
 $('inHold').addEventListener('input', onCalcInput);
