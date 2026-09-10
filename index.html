@@ -30,12 +30,10 @@ body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-
 .card{background:var(--pan);border-radius:12px;padding:20px 22px}
 .k{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--dm);
   font-weight:600;margin:0 0 8px}
-.big{font-family:var(--mono);font-size:34px;font-weight:600;margin:0;line-height:1.1;letter-spacing:-.02em}
-.mid{font-family:var(--mono);font-size:21px;font-weight:600;margin:0}
+.big{font-family:var(--mono);font-size:32px;font-weight:600;margin:0;line-height:1.12;letter-spacing:-.02em}
 .sm{font-size:12.5px;margin:6px 0 0;color:var(--dm)}
-.mono{font-family:var(--mono)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
 
-/* 顶栏 */
 .top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:2px 4px}
 .top h1{font-size:15px;margin:0;font-weight:700;flex:1 1 auto}
 .pill{font-size:11px;padding:4px 10px;border-radius:999px;background:var(--chip);color:var(--dm);
@@ -57,18 +55,23 @@ body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-
 #banner.sell button{color:var(--dn)}
 #banner button:focus-visible{outline:3px solid #fff;outline-offset:3px}
 
-/* 首屏三件事 */
-.hero{display:flex;gap:26px;flex-wrap:wrap}
-.hero>div{flex:1 1 210px;min-width:0}
+/* 下一次操作 —— 页面的主角 */
+#nextCard{background:var(--pan);border-radius:14px;padding:26px 24px;
+  border-left:5px solid var(--ac)}
+#nextCard.buy{border-left-color:var(--up)}
+#nextCard.sell{border-left-color:var(--dn)}
+#nextLine{font-size:clamp(19px,4.6vw,27px);font-weight:700;margin:0;line-height:1.35;
+  letter-spacing:-.01em;text-wrap:balance}
+#nextSub{font-size:13px;margin:12px 0 0;color:var(--dm);line-height:1.6}
+#nextSub b{color:var(--tx);font-family:var(--mono);font-weight:600}
+
 .pips{display:flex;gap:6px;margin:14px 0 0}
-.pip{flex:1;height:34px;border-radius:6px;background:var(--chip)}
+.pip{flex:1;height:32px;border-radius:6px;background:var(--chip)}
 .pip.on{background:var(--up)}
 
-.rowline{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
-  padding:10px 0;font-size:13.5px}
-.rowline+.rowline{border-top:1px solid var(--ln)}
-.rowline .v{font-family:var(--mono);font-weight:600;font-size:14px}
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+/* 指数 + 均线合并卡 */
+.idxrow{display:flex;gap:30px;flex-wrap:wrap}
+.idxrow>div{flex:1 1 150px;min-width:0}
 
 /* 图 */
 .ranges{display:flex;gap:5px;flex-wrap:wrap;margin:0 0 12px}
@@ -76,20 +79,33 @@ body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-
   background:var(--pan);border:1px solid var(--ln);color:var(--dm);font-family:inherit}
 .ranges button[aria-pressed="true"]{background:var(--ac);border-color:var(--ac);color:#fff}
 .ranges button:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
-.chartbox{width:100%;overflow-x:auto}
+.chartbox{width:100%;overflow-x:auto;position:relative;touch-action:pan-y}
 svg.ch{display:block;width:100%;height:auto;min-width:520px}
+#tip{position:absolute;pointer-events:none;background:var(--pan);border:1px solid var(--ln);
+  border-radius:9px;padding:10px 12px;font-size:12px;line-height:1.65;white-space:nowrap;
+  box-shadow:0 6px 22px rgba(0,0,0,.18);opacity:0;transition:opacity .1s;z-index:5}
+#tip.on{opacity:1}
+#tip .td{font-family:var(--mono);color:var(--dm);font-size:11px;margin-bottom:4px}
+#tip .tr2{display:flex;justify-content:space-between;gap:16px}
+#tip .tr2 span:last-child{font-family:var(--mono);font-weight:600}
 .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--dm);margin:10px 0 0}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
 
 /* 计算器 */
+.cardhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 14px}
+.chip{font-size:10.5px;padding:3px 9px;border-radius:999px;background:var(--chip);color:var(--dm);
+  letter-spacing:.04em;white-space:nowrap}
+.linkbtn{font-family:inherit;font-size:11.5px;background:none;border:none;color:var(--ac);
+  cursor:pointer;padding:2px 4px;text-decoration:underline;text-underline-offset:2px}
+.linkbtn:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:4px}
 .calc{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
-.calc label{font-size:11px;color:var(--dm);display:block;margin:0 0 5px;letter-spacing:.05em}
-.calc input{font-family:var(--mono);font-size:16px;padding:10px 12px;border-radius:7px;width:165px;
+.calc label{font-size:11.5px;color:var(--dm);display:block;margin:0 0 5px;letter-spacing:.03em}
+.calc input{font-family:var(--mono);font-size:16px;padding:10px 12px;border-radius:7px;width:170px;
   background:var(--bg);border:1px solid var(--ln);color:var(--tx)}
 .calc input:focus-visible{outline:2px solid var(--ac);outline-offset:1px}
-.calcout{display:flex;gap:26px;flex-wrap:wrap;margin:16px 0 0;padding:15px 17px;border-radius:9px;
-  background:var(--bg)}
-.calcout .v{font-family:var(--mono);font-size:22px;font-weight:600;margin:0}
+.calcout{margin:16px 0 0;padding:18px 18px;border-radius:10px;background:var(--bg)}
+.calcout .v{font-family:var(--mono);font-size:clamp(20px,4.4vw,26px);font-weight:600;margin:0;line-height:1.25}
+.calcout .s{font-size:12px;color:var(--dm);margin:8px 0 0}
 
 /* 表 */
 .tbox{overflow:auto;max-height:340px;margin:0 -6px}
@@ -102,30 +118,31 @@ td.side{font-family:var(--sans);font-weight:600}
 tr:last-child td{border-bottom:none}
 
 .note{font-size:11.5px;color:var(--dm);margin:12px 0 0;line-height:1.65}
-.cardhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}
-.chip{font-size:10.5px;padding:3px 9px;border-radius:999px;background:var(--chip);color:var(--dm);
-  letter-spacing:.04em;white-space:nowrap}
-.chip.manual{background:color-mix(in srgb,var(--ac) 16%,transparent);color:var(--ac);font-weight:600}
-.linkbtn{font-family:inherit;font-size:11.5px;background:none;border:none;color:var(--ac);
-  cursor:pointer;padding:2px 4px;text-decoration:underline;text-underline-offset:2px}
-.linkbtn:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:4px}
-.setrow{display:flex;align-items:flex-start;gap:14px;margin:0 0 20px;padding:0 0 18px;
-  border-bottom:1px solid var(--ln)}
-.setmain{flex:1 1 auto;min-width:0}
-.setmain input{font-family:var(--mono);font-size:19px;padding:8px 11px;border-radius:7px;width:100%;
-  max-width:230px;background:var(--bg);border:1px solid var(--ac);color:var(--tx)}
-.setmain input:focus-visible{outline:2px solid var(--ac);outline-offset:1px}
-.setbtn{font-family:inherit;font-size:13px;font-weight:600;padding:9px 20px;border-radius:7px;
-  border:1px solid var(--ln);background:var(--bg);color:var(--tx);cursor:pointer;flex:none}
-.setbtn.done{background:var(--ac);border-color:var(--ac);color:#fff}
-.setbtn:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.warnbox{background:color-mix(in srgb,var(--warn) 14%,transparent);border:1px solid var(--warn);
+  color:var(--warn);border-radius:8px;padding:11px 13px;font-size:12.5px;line-height:1.6;margin:14px 0 0}
+.errbox{background:color-mix(in srgb,var(--up) 12%,transparent);border:1px solid var(--up);
+  color:var(--up);border-radius:8px;padding:12px 14px;font-size:12.5px;line-height:1.6;margin:0 0 12px}
 .checks{display:flex;flex-direction:column;gap:7px;margin:4px 0 0}
 .chk{display:flex;gap:9px;align-items:flex-start;font-size:12.5px}
 .chk i{flex:none;width:16px;font-style:normal}
 .chk.ok i{color:var(--dn)} .chk.bad i{color:var(--up)}
 .chk span{color:var(--dm)}
 .empty{color:var(--dm);font-size:13px;padding:18px 0;text-align:center}
-@media (max-width:520px){.card{padding:17px 16px}.big{font-size:29px}}
+
+/* 本金设置 */
+.setrow{display:flex;align-items:flex-start;gap:14px;margin:0 0 20px;padding:0 0 18px;
+  border-bottom:1px solid var(--ln);flex-wrap:wrap}
+.setmain{flex:1 1 200px;min-width:0}
+.setmain input{font-family:var(--mono);font-size:19px;padding:8px 11px;border-radius:7px;width:100%;
+  max-width:230px;background:var(--bg);border:1px solid var(--ac);color:var(--tx)}
+.setmain input:focus-visible{outline:2px solid var(--ac);outline-offset:1px}
+.setbtns{display:flex;gap:8px;flex:none}
+.setbtn{font-family:inherit;font-size:13px;font-weight:600;padding:9px 20px;border-radius:7px;
+  border:1px solid var(--ln);background:var(--bg);color:var(--tx);cursor:pointer}
+.setbtn.done{background:var(--ac);border-color:var(--ac);color:#fff}
+.setbtn:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+
+@media (max-width:520px){.card,#nextCard{padding:17px 16px}.big{font-size:27px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -147,41 +164,47 @@ tr:last-child td{border-bottom:none}
     <button type="button" id="bDone">已完成</button>
   </div>
 
-  <div class="card hero" id="hero">
-    <div>
+  <div id="nextCard">
+    <p class="k">下一次操作</p>
+    <p id="nextLine">加载中…</p>
+    <p id="nextSub"></p>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
       <p class="k">当前档位</p>
-      <p class="big"><span id="tierNum">–</span> <span style="font-size:20px;color:var(--dm)">/ 5 份</span></p>
+      <p class="big"><span id="tierNum">–</span> <span style="font-size:19px;color:var(--dm)">/ 5 份</span></p>
       <div class="pips" id="pips"></div>
     </div>
-    <div>
-      <p class="k">下一次操作</p>
-      <p class="mid" id="nextAct">–</p>
-      <p class="sm" id="nextDist">–</p>
-    </div>
-    <div>
+    <div class="card">
       <p class="k">账户盈亏</p>
       <p class="big" id="pnl">–</p>
       <p class="sm" id="pnlSub">–</p>
     </div>
   </div>
 
-  <div class="grid2">
-    <div class="card">
-      <p class="k">中证红利全收益 H00922</p>
-      <p class="big" id="idxClose">–</p>
-      <p class="sm" id="idxSub">–</p>
-    </div>
-    <div class="card">
-      <p class="k">30 日均线</p>
-      <p class="big" style="color:var(--ac)" id="maVal">–</p>
-      <p class="sm" id="maSub">–</p>
+  <div class="card">
+    <div class="idxrow">
+      <div>
+        <p class="k">中证红利全收益 H00922</p>
+        <p class="big" id="idxClose">–</p>
+        <p class="sm" id="idxSub">–</p>
+      </div>
+      <div>
+        <p class="k">30 日均线</p>
+        <p class="big" style="color:var(--ac)" id="maVal">–</p>
+        <p class="sm" id="maSub">–</p>
+      </div>
     </div>
   </div>
 
   <div class="card">
     <p class="k">走势与操作</p>
     <div class="ranges" id="ranges"></div>
-    <div class="chartbox"><svg class="ch" id="chart" role="img" aria-label="中证红利全收益指数与30日均线走势，含买卖操作点"></svg></div>
+    <div class="chartbox" id="chartbox">
+      <svg class="ch" id="chart" role="img" aria-label="中证红利全收益指数与30日均线走势，含买卖操作点"></svg>
+      <div id="tip"></div>
+    </div>
     <div class="legend">
       <span><i style="background:var(--tx)"></i>指数收盘</span>
       <span><i style="background:var(--ac)"></i>MA30</span>
@@ -193,35 +216,33 @@ tr:last-child td{border-bottom:none}
   <div class="card">
     <div class="cardhead">
       <p class="k" style="margin:0">每份该是多少钱</p>
-      <span class="chip" id="basisChip">自动推算</span>
-      <button class="linkbtn" id="resetBasis" type="button" hidden>恢复自动推算</button>
+      <span class="chip" id="basisChip">按账本自动填入</span>
+      <button class="linkbtn" id="resetBasis" type="button" hidden>恢复账本数字</button>
     </div>
     <div class="calc">
-      <div><label for="inS">当前总资产（元）</label><input id="inS" type="text" inputmode="decimal"></div>
-      <div><label for="inV">其中股票市值（元）</label><input id="inV" type="text" inputmode="decimal"></div>
+      <div><label for="inCash">可用资金（元）</label><input id="inCash" type="text" inputmode="decimal"></div>
+      <div><label for="inHold">已持有红利（元）</label><input id="inHold" type="text" inputmode="decimal"></div>
     </div>
     <div class="calcout">
-      <div><p class="k" id="oUpLabel">上调一档</p><p class="v" id="oBuy">–</p></div>
-      <div><p class="k" id="oDownLabel">下调一档</p><p class="v" id="oSell">–</p></div>
-      <div><p class="k">参考股数</p><p class="v" id="oShares">–</p></div>
+      <p class="v" id="oMain">–</p>
+      <p class="s" id="oSub">–</p>
     </div>
-    <p id="mismatch" hidden style="background:color-mix(in srgb,var(--warn) 14%,transparent);
-      border:1px solid var(--warn);color:var(--warn);border-radius:8px;padding:11px 13px;
-      font-size:12.5px;line-height:1.6;margin:14px 0 0"></p>
-    <p class="note">这两个数字默认由本金和账本自动推算。<b>如果和你券商 App 里的真实数字对不上，直接改这里</b>——改完上方的账户盈亏也会跟着按你填的数字算，随时可以点「恢复自动推算」还原。<br>
-      算法是目标市值法（说明文档 3.5）：买 X =（w×S − V）÷（1 + w×c），卖 X =（V − w×S）÷（1 − w×c），佣金 c = 万分之 0.45。股数按 <span id="etfLabel">ETF</span> 收盘价向下取整到 100 股。</p>
+    <p id="mismatch" hidden class="warnbox"></p>
+    <p class="note"><b>可用资金</b>＝还没买红利 ETF 的钱（现金、债基）。<b>已持有红利</b>＝已经买了的红利 ETF 现在值多少钱。
+      两者相加就是你的总资产。<br>
+      这个板块<b>只是个计算器</b>——你在这里填什么都不会影响上面的操作提醒，也不会影响交易记录。
+      它按你填的数字反推你现在在第几档，再算下一步该动多少钱。默认填入账本推算值，改了可以点「恢复账本数字」还原。<br>
+      算法是目标市值法（说明文档 3.5）：买 X =（w×S − V）÷（1 + w×c），佣金 c = 万分之 0.45。股数按 <span id="etfLabel">ETF</span> 收盘价向下取整到 100 股。</p>
   </div>
 
   <div class="card">
     <p class="k">交易记录（不可更改）</p>
-    <div id="ledgerWarn" style="display:none;background:color-mix(in srgb,var(--up) 12%,transparent);
-      border:1px solid var(--up);color:var(--up);border-radius:8px;padding:12px 14px;
-      font-size:12.5px;line-height:1.6;margin:0 0 12px"></div>
+    <div id="ledgerWarn" class="errbox" style="display:none"></div>
     <div class="tbox"><table id="ledger"><thead><tr>
-      <th>#</th><th>执行日</th><th>方向</th><th>档位</th><th>指数收盘</th><th>金额（推导）</th>
+      <th>#</th><th>执行日</th><th>方向</th><th>档位</th><th>指数收盘</th><th>金额（按本金推导）</th>
     </tr></thead><tbody></tbody></table></div>
     <p class="note">账本只记录日期、指数收盘价和档位变化，这三样一经写入就锁死在 Git 提交历史里。
-      金额是按你的本金实时推导出来的，所以仓库是公开的也不会泄露你的资金规模。</p>
+      金额是按你设的<b>本金</b>推导出来的，与上面计算器里填的数字无关。</p>
   </div>
 
   <div class="card">
@@ -229,11 +250,14 @@ tr:last-child td{border-bottom:none}
     <div class="setrow">
       <div class="setmain">
         <p class="k" style="margin:0 0 4px">本金 · 起算金额</p>
-        <p class="mid" id="pView">未设置</p>
+        <p class="big" id="pView" style="font-size:24px">未设置</p>
         <input id="inP" type="text" inputmode="decimal" placeholder="例如 1000000" hidden>
-        <p class="sm" id="pHint">只填一次。系统从这个数字出发，按账本逐笔重放算出你现在应该有多少钱。</p>
+        <p class="sm" id="pHint">账户盈亏和交易记录里的金额都由它推导。</p>
       </div>
-      <button class="setbtn" id="pBtn" type="button">设置</button>
+      <div class="setbtns">
+        <button class="setbtn" id="pCancel" type="button" hidden>取消</button>
+        <button class="setbtn" id="pBtn" type="button">设置</button>
+      </div>
     </div>
     <div class="checks" id="checks"></div>
     <p class="note" id="dataNote">–</p>
@@ -242,7 +266,7 @@ tr:last-child td{border-bottom:none}
 </div>
 
 <script type="module">
-import { replay, plannedOrder, orderAmount, shares, triggers, auditLedger, WEIGHTS, COMMISSION }
+import { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, nextMove as nextMoveFn, WEIGHTS, COMMISSION }
   from './shared/strategy.js';
 
 const $ = (id) => document.getElementById(id);
@@ -251,26 +275,29 @@ const LS = {
   set: (k, v) => { try { localStorage.setItem('hlma30.' + k, JSON.stringify(v)); } catch {} },
 };
 const money = (n) => (isFinite(n) ? Math.round(n).toLocaleString('zh-CN') : '–');
-const money2 = (n) => (isFinite(n) ? n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '–');
+const int = (n) => (isFinite(n) ? Math.round(n).toLocaleString('zh-CN') : '–');
 const num = (s) => { const v = Number(String(s).replace(/[^\d.]/g, '')); return isFinite(v) ? v : 0; };
+const pct = (n) => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(2)}%`;
 
-// 主题
 const applyTheme = (t) => {
   if (t === 'auto') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', t);
 };
+const THEMES = { auto: '主题·跟随', light: '主题·浅', dark: '主题·深' };
 applyTheme(LS.get('theme', 'auto'));
+$('themeBtn').textContent = THEMES[LS.get('theme', 'auto')];
 $('themeBtn').onclick = () => {
   const order = ['auto', 'light', 'dark'];
   const next = order[(order.indexOf(LS.get('theme', 'auto')) + 1) % 3];
   LS.set('theme', next); applyTheme(next);
-  $('themeBtn').textContent = { auto: '主题·跟随', light: '主题·浅', dark: '主题·深' }[next];
+  $('themeBtn').textContent = THEMES[next];
+  drawChart(curFrom);
 };
-$('themeBtn').textContent = { auto: '主题·跟随', light: '主题·浅', dark: '主题·深' }[LS.get('theme', 'auto')];
 
 const RANGES = [['近一月', 21], ['近三月', 63], ['近半年', 126], ['年初至今', 0],
                 ['近一年', 243], ['近两年', 486], ['近三年', 729]];
-let S = {}; // state, ledger, series, computed
+let S = {};        // state / ledger / series
+let curFrom = 0;   // 当前图表起点索引
 
 async function load() {
   const bust = '?t=' + Date.now();
@@ -284,92 +311,108 @@ async function load() {
 }
 
 /**
- * 资金状态只有一个来源：本金 + 账本重放。
- * 如果实盘和推算对不上，用户可以在计算器里改成真实数字——那个覆盖值
- * 同时作用于盈亏显示和下单金额，不存在"两处各管一半"的情况。
+ * 账户资金：只由本金和账本重放得出。
+ * 计算器里填什么都不影响这里 —— 那是个独立的试算工具。
  */
-function getManual() {
-  const m = LS.get('manual', null);
-  return (m && isFinite(m.S) && m.S > 0 && isFinite(m.V) && m.V >= 0) ? m : null;
-}
-function computeMoney() {
+function accountMoney() {
   const principal = num(LS.get('principal', 0));
   if (!principal) return null;
   const rows = S.series.rows.filter((r) => r.d <= S.state.asof);
   const d = replay(rows, S.ledger.entries, principal, S.state.launchDate);
-  const man = getManual();
-  return {
-    principal,
-    derivedTotal: d.total, derivedV: d.V,
-    total: man ? man.S : d.total,
-    V: man ? man.V : d.V,
-    cash: man ? Math.max(0, man.S - man.V) : d.cash,
-    manual: !!man,
-  };
+  const days = Math.max(0, (Date.parse(S.state.asof) - Date.parse(S.state.launchDate)) / 86400000);
+  const ratio = d.total / principal;
+  const annual = days >= 1 ? (Math.pow(ratio, 365.25 / days) - 1) * 100 : null;
+  return { principal, ...d, days, annual, cumPct: (ratio - 1) * 100 };
 }
 
-function render() {
-  const st = S.state, i = st.index;
-  const tier = st.tier;
+// 距离触发还有多远 —— 逻辑在 shared/strategy.js，受回归测试覆盖
+const nextMove = () => nextMoveFn(S.state.index, S.state.tier, S.state.pending);
 
-  // 档位
+function render() {
+  const st = S.state, i = st.index, tier = st.tier;
+  const M = accountMoney();
+
+  // ---- 档位 ----
   $('tierNum').textContent = tier;
   $('pips').innerHTML = [0, 1, 2, 3, 4].map((k) => `<div class="pip${k < tier ? ' on' : ''}"></div>`).join('');
 
-  // 指数
-  const chg = i.changePct != null ? `${i.changePct > 0 ? '+' : ''}${i.changePct}%` : '';
-  $('idxClose').textContent = money2(i.close);
-  $('idxSub').textContent = `${st.asof} 收盘　${chg}`;
-  $('maVal').textContent = money2(i.ma30);
-  $('maSub').textContent = `收盘/MA30 = ${i.ratio}　买入线 ${money2(i.buyTrigger)}　卖出线 ${money2(i.sellTrigger)}`;
+  // ---- 指数与均线（显示取整；后台计算仍用原值）----
+  $('idxClose').textContent = int(i.close);
+  $('idxSub').textContent = `${st.asof} 收盘` + (i.changePct != null ? `　${pct(i.changePct)}` : '');
+  $('maVal').textContent = int(i.ma30);
+  const gap = (i.close / i.ma30 - 1) * 100;
+  $('maSub').innerHTML = `指数比均线<span style="color:${gap >= 0 ? 'var(--up)' : 'var(--dn)'}">`
+    + `${gap >= 0 ? '高' : '低'} ${Math.abs(gap).toFixed(2)}%</span>`;
 
-  // 下一步
-  if (st.pending) {
-    const buy = st.pending.side === 'BUY';
-    $('nextAct').textContent = `${buy ? '买入' : '卖出'}第 ${buy ? st.pending.tierTo : st.pending.tierFrom} 份`;
-    $('nextAct').style.color = buy ? 'var(--up)' : 'var(--dn)';
-    $('nextDist').textContent = `已触发，明日（下一个交易日）收盘执行`;
-  } else if (tier < 4) {
-    $('nextAct').textContent = `买入第 ${tier + 1} 份`;
-    $('nextAct').style.color = 'var(--up)';
-    let s = `指数需再跌 ${Math.abs(i.pctToBuy).toFixed(2)}% 至 ${money2(i.buyTrigger)}`;
-    if (tier > 0) s += `　／　卖出需涨 ${i.pctToSell.toFixed(2)}% 至 ${money2(i.sellTrigger)}`;
-    $('nextDist').textContent = s;
+  // ---- 下一次操作 ----
+  const mv = nextMove();
+  const card = $('nextCard');
+  card.classList.remove('buy', 'sell');
+  if (mv.kind === 'pending') {
+    const buy = mv.side === 'BUY';
+    card.classList.add(buy ? 'buy' : 'sell');
+    let amt = '';
+    if (M) {
+      const o = plannedOrder(M.V, M.cash, mv.to);
+      if (o.side !== 'NONE') amt = `，约 ${money(o.amount)} 元`;
+    }
+    $('nextLine').innerHTML = `已触发：下一个交易日收盘<b style="color:var(--${buy ? 'up' : 'dn'})">`
+      + `${buy ? '买入' : '卖出'}</b>${amt}`;
+    $('nextSub').innerHTML = `档位 <b>${mv.from}/5</b> → <b>${mv.to}/5</b>　·　信号日 ${st.pending.signalDate}`;
+  } else if (mv.kind === 'buy') {
+    card.classList.add('buy');
+    if (mv.need <= 0) {
+      $('nextLine').innerHTML = `中证红利已跌破买入线，<b style="color:var(--up)">等今日收盘确认</b>`;
+      $('nextSub').innerHTML = `买入线 <b>${int(i.buyTrigger)}</b>　·　收盘后若成立，明日收盘买入第 ${tier + 1} 份`;
+    } else {
+      $('nextLine').innerHTML = `距离下一次买入，还需中证红利<b style="color:var(--up)">跌 ${mv.need.toFixed(2)}%</b>`;
+      $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　届时买入第 <b>${tier + 1}</b> 份（仓位 ${WEIGHTS[tier + 1] * 100}%）`;
+    }
+  } else if (mv.kind === 'sell') {
+    card.classList.add('sell');
+    if (mv.need <= 0) {
+      $('nextLine').innerHTML = `中证红利已涨破卖出线，<b style="color:var(--dn)">等今日收盘确认</b>`;
+      $('nextSub').innerHTML = `卖出线 <b>${int(i.sellTrigger)}</b>　·　收盘后若成立，明日收盘卖出第 ${tier} 份`;
+    } else {
+      $('nextLine').innerHTML = `距离下一次卖出，还需中证红利<b style="color:var(--dn)">涨 ${mv.need.toFixed(2)}%</b>`;
+      $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　届时卖出第 <b>${tier}</b> 份（仓位降到 ${WEIGHTS[tier - 1] * 100}%）`;
+    }
   } else {
-    $('nextAct').textContent = '已满仓';
-    $('nextAct').style.color = 'var(--tx)';
-    $('nextDist').textContent = `卖出需涨 ${i.pctToSell.toFixed(2)}% 至 ${money2(i.sellTrigger)}`;
+    $('nextLine').textContent = '暂无可执行的操作';
+    $('nextSub').textContent = '';
+  }
+  // 空仓时补一句：另一个方向为什么不显示
+  if (mv.kind === 'buy' && tier === 0) {
+    $('nextSub').innerHTML += `<br>当前 0/5 空仓，没有可卖的份额。`;
+  } else if (mv.kind === 'sell' && tier === 4) {
+    $('nextSub').innerHTML += `<br>当前 5/5 满仓，不再加仓。`;
   }
 
-  // 盈亏（红涨绿跌）
-  const M = computeMoney();
+  // ---- 账户盈亏 ----
   if (!M) {
     $('pnl').textContent = '未设本金';
     $('pnl').style.color = 'var(--dm)';
     $('pnlSub').textContent = '在下方「设置」里填入本金后显示';
   } else {
-    const p = M.total - M.principal, pct = p / M.principal * 100;
+    const p = M.total - M.principal;
     const col = p >= 0 ? 'var(--up)' : 'var(--dn)';
     $('pnl').textContent = (p >= 0 ? '+' : '−') + money(Math.abs(p));
     $('pnl').style.color = col;
-    $('pnlSub').innerHTML = `<span style="color:${col}">${p >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%</span>`
-      + `　总资产 ${money(M.total)}　本金 ${money(M.principal)}`
-      + (M.manual ? '　<b style="color:var(--ac)">按实盘数字</b>' : '');
+    const ann = M.annual == null ? '运行不足一天' : `年化 ${pct(M.annual)}`;
+    $('pnlSub').innerHTML = `<span style="color:${col}">${pct(M.cumPct)}</span>　${ann}`
+      + `<br>总资产 ${money(M.total)}　已运行 ${Math.round(M.days)} 天`;
   }
 
-  // 横幅
+  // ---- 横幅 ----
   const bn = $('banner');
   const ackKey = st.pending ? `ack.${st.pending.signalDate}` : null;
   if (st.pending && !LS.get(ackKey, false)) {
-    // 方向按公式实际算出来的写，不按档位方向假设。
-    // 若实盘持仓和账本不同步，"上调一档"也可能实际要卖出。
     let side = st.pending.side, amtTxt = `目标仓位 ${WEIGHTS[st.pending.tierTo] * 100}%`;
     if (M) {
       const o = plannedOrder(M.V, M.cash, st.pending.tierTo);
       if (o.side !== 'NONE') side = o.side;
       const sh = st.etf && st.etf.close ? shares(o.amount, st.etf.close) : null;
-      amtTxt = o.side === 'NONE' ? '无需调整'
-        : `${money(o.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : '');
+      amtTxt = o.side === 'NONE' ? '无需调整' : `${money(o.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : '');
     }
     const buy = side === 'BUY';
     bn.classList.add('on'); bn.classList.toggle('sell', !buy);
@@ -380,138 +423,115 @@ function render() {
     bn.classList.remove('on');
   }
 
-  // 计算器：输入框始终反映当前生效的数字（自动推算值，或你填的实盘值）
-  if (M) {
-    $('inS').value = money(M.total);
-    $('inV').value = money(M.V);
-  } else {
-    $('inS').value = ''; $('inV').value = '';
-  }
+  // ---- 计算器：默认填入账本推算值 ----
   $('etfLabel').textContent = st.etf?.code || 'ETF';
-  syncBasisChip(M);
+  const man = LS.get('calc', null);
+  if (man && isFinite(man.cash) && isFinite(man.hold)) {
+    $('inCash').value = money(man.cash); $('inHold').value = money(man.hold);
+  } else if (M) {
+    $('inCash').value = money(M.cash); $('inHold').value = money(M.V);
+  } else {
+    $('inCash').value = ''; $('inHold').value = '';
+  }
   calc();
 
-  // 本金显示
+  // ---- 本金显示 ----
   const pv = num(LS.get('principal', 0));
   $('pView').textContent = pv ? money(pv) + ' 元' : '未设置';
   $('pView').style.color = pv ? 'var(--tx)' : 'var(--dm)';
 
-  // 账本
   renderLedger(M);
-
-  // 图
   buildRanges();
-
-  // 健康
   renderHealth();
 }
 
+/* ==================== 计算器：完全独立 ==================== */
 function calc() {
-  const st = S.state, tier = st.tier;
-  const Sv = num($('inS').value), Vv = num($('inV').value);
-  const tb = Math.min(4, tier + 1), ts = Math.max(0, tier - 1);
-  const ob = tier < 4 ? orderAmount(Sv, Vv, WEIGHTS[tb]) : null;
-  const os = tier > 0 ? orderAmount(Sv, Vv, WEIGHTS[ts]) : null;
-  const noInput = !(Sv > 0);
+  const cash = num($('inCash').value), hold = num($('inHold').value);
+  const chip = $('basisChip'), reset = $('resetBasis');
+  const edited = !!LS.get('calc', null);
+  chip.textContent = edited ? '按你填的数字' : '按账本自动填入';
+  reset.hidden = !edited;
 
-  $('oUpLabel').textContent = tier >= 4 ? '上调一档' : `上调一档 → ${WEIGHTS[tb] * 100}%`;
-  $('oDownLabel').textContent = tier <= 0 ? '下调一档' : `下调一档 → ${WEIGHTS[ts] * 100}%`;
+  // 方向跟随上方「下一次操作」：已触发就按触发方向，否则按更接近触发的那一侧
+  const mv = nextMove();
+  const wantBuy = mv.kind === 'pending' ? mv.side === 'BUY' : mv.kind !== 'sell';
+  const r = calcStep(cash, hold, wantBuy);
 
-  // 方向必须按公式实际算出来的写。
-  // 如果实盘持仓已经超过目标仓位，"上调一档"反而要卖——写死成"买入"就是骗人。
-  const show = (el, o, capped, cappedText) => {
-    if (capped) { el.textContent = cappedText; el.style.color = 'var(--dm)'; return; }
-    if (noInput) { el.textContent = '先填总资产'; el.style.color = 'var(--dm)'; return; }
-    if (o.side === 'NONE' || o.amount < 1) { el.textContent = '无需调整'; el.style.color = 'var(--dm)'; return; }
-    el.textContent = `${o.side === 'BUY' ? '买入' : '卖出'} ${money(o.amount)} 元`;
-    el.style.color = o.side === 'BUY' ? 'var(--up)' : 'var(--dn)';
+  const setOut = (main, sub, color) => {
+    $('oMain').textContent = main; $('oMain').style.color = color || 'var(--dm)';
+    $('oSub').innerHTML = sub;
   };
-  show($('oBuy'), ob, tier >= 4, '已满仓');
-  show($('oSell'), os, tier <= 0, '已空仓');
-  const px = S.state.etf && S.state.etf.close;
-  const target = st.pending ? (st.pending.side === 'BUY' ? ob : os) : ob;
-  const sh = target && px ? shares(target.amount, px) : null;
-  $('oShares').textContent = sh ? `${money(sh)} 股` : (px ? '–' : '无报价');
 
-  // 实盘股票占比和记录的档位对不上 —— 说明实盘和账本不同步，
-  // 不提示的话后面每一笔下单金额都会算错，而界面上完全看不出来。
-  const box = $('mismatch');
-  const man = getManual();
-  if (man && Sv > 0) {
-    const impliedW = Vv / Sv;
-    const expectW = WEIGHTS[tier];
-    if (Math.abs(impliedW - expectW) > 0.125) {
-      const near = WEIGHTS.reduce((a, b) => Math.abs(b - impliedW) < Math.abs(a - impliedW) ? b : a);
-      box.hidden = false;
-      box.innerHTML = `<b>实盘和账本对不上。</b>你填的股票占比是 ${(impliedW * 100).toFixed(1)}%`
-        + `（接近 ${WEIGHTS.indexOf(near)}/5 档），但账本记录的当前档位是 ${tier}/5，应为 ${(expectW * 100).toFixed(0)}%。<br>`
-        + `如果不是笔误，说明你的实际持仓和系统记录的不一致——按现在这两个数字算出来的下单金额会把仓位带偏。建议先核对账本，或把持仓调回 ${(expectW * 100).toFixed(0)}% 再继续。`;
-      return;
-    }
+  if (!r.ok && r.reason === 'NO_INPUT') {
+    setOut('先填可用资金', '两栏加起来要大于 0');
+    $('mismatch').hidden = true;
+    return;
   }
-  box.hidden = true;
-}
-function syncBasisChip(M) {
-  const chip = $('basisChip'), btn = $('resetBasis');
-  const manual = M && M.manual;
-  chip.textContent = manual ? '已按实盘数字' : '自动推算';
-  chip.classList.toggle('manual', !!manual);
-  btn.hidden = !manual;
-  if (manual) {
-    chip.title = `自动推算值为 总资产 ${money(M.derivedTotal)} / 股票 ${money(M.derivedV)}`;
+  const wTxt = `红利占 ${(r.weight * 100).toFixed(1)}%`;
+  if (!r.ok && r.reason === 'FULL') {
+    setOut('已满仓，无需买入', `按你填的数字：总资产 ${money(r.total)}，${wTxt}，相当于 <b>5/5</b> 档`);
+  } else if (!r.ok && r.reason === 'EMPTY') {
+    setOut('已空仓，无可卖出', `按你填的数字：总资产 ${money(r.total)}，${wTxt}，相当于 <b>0/5</b> 档`);
   } else {
-    chip.title = '由本金和账本逐笔重放算出';
+    const px = S.state.etf && S.state.etf.close;
+    const sh = px ? shares(r.amount, px) : null;
+    const isBuy = r.side === 'BUY';
+    setOut(
+      `${isBuy ? '买入' : '卖出'}第 ${isBuy ? r.to : r.tier} 份　${money(r.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : ''),
+      `按你填的数字：总资产 ${money(r.total)}，${wTxt}，相当于 <b>${r.tier}/5</b> 档 → 目标 <b>${r.to}/5</b> 档（${r.targetWeight * 100}%）`
+        + (px ? '' : '　·　暂无 ETF 报价，只给金额'),
+      isBuy ? 'var(--up)' : 'var(--dn)');
   }
-}
 
-// 改计算器里的数字 = 用实盘值覆盖推算值。只更新结果，不重写输入框（否则光标会跳）
-function onBasisInput() {
-  const Sv = num($('inS').value), Vv = num($('inV').value);
-  if (Sv > 0) LS.set('manual', { S: Sv, V: Vv });
-  const M = computeMoney();
-  syncBasisChip(M);
+  // 与账本档位不一致只提示，不改变上面的计算结果
+  const box = $('mismatch');
+  if (r.tier !== S.state.tier) {
+    box.hidden = false;
+    box.innerHTML = `<b>提示：</b>按你填的数字你在 <b>${r.tier}/5</b> 档，账本记录的是 <b>${S.state.tier}/5</b> 档。`
+      + `上面的计算已按你填的数字来。如果不是随手试算，说明实盘和账本不同步，建议核对一下。`;
+  } else box.hidden = true;
+}
+function onCalcInput() {
+  LS.set('calc', { cash: num($('inCash').value), hold: num($('inHold').value) });
   calc();
-  if (M) {
-    const p = M.total - M.principal, pct = p / M.principal * 100;
-    const col = p >= 0 ? 'var(--up)' : 'var(--dn)';
-    $('pnl').textContent = (p >= 0 ? '+' : '−') + money(Math.abs(p));
-    $('pnl').style.color = col;
-    $('pnlSub').innerHTML = `<span style="color:${col}">${p >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%</span>`
-      + `　总资产 ${money(M.total)}　本金 ${money(M.principal)}`
-      + (M.manual ? '　<b style="color:var(--ac)">按实盘数字</b>' : '');
-  }
 }
-$('inS').addEventListener('input', onBasisInput);
-$('inV').addEventListener('input', onBasisInput);
-$('resetBasis').addEventListener('click', () => { LS.set('manual', null); render(); });
+$('inCash').addEventListener('input', onCalcInput);
+$('inHold').addEventListener('input', onCalcInput);
+$('resetBasis').addEventListener('click', () => { LS.set('calc', null); render(); });
 
-// 本金：平时是文本，点「设置」才变输入框，点「完成」保存并立即重算
+/* ==================== 本金设置 ==================== */
+function setEditing(on) {
+  $('inP').hidden = !on; $('pView').hidden = on;
+  $('pCancel').hidden = !on;
+  $('pBtn').textContent = on ? '完成' : '设置';
+  $('pBtn').classList.toggle('done', on);
+  $('pHint').textContent = on
+    ? '填完点「完成」保存，账户盈亏和交易记录会立刻重算；点「取消」放弃修改。'
+    : '账户盈亏和交易记录里的金额都由它推导。';
+}
 $('pBtn').addEventListener('click', () => {
-  const editing = !$('inP').hidden;
-  if (!editing) {
+  if ($('inP').hidden) {
     const pv = num(LS.get('principal', 0));
     $('inP').value = pv ? money(pv) : '';
-    $('inP').hidden = false; $('pView').hidden = true;
-    $('pBtn').textContent = '完成'; $('pBtn').classList.add('done');
-    $('pHint').textContent = '填完点「完成」保存，盈亏和下单金额会立刻重算。';
-    $('inP').focus(); $('inP').select();
+    setEditing(true); $('inP').focus(); $('inP').select();
   } else {
-    const v = num($('inP').value);
-    LS.set('principal', v);
-    LS.set('manual', null);            // 换了本金，之前的实盘覆盖值就不作数了
-    $('inP').hidden = true; $('pView').hidden = false;
-    $('pBtn').textContent = '设置'; $('pBtn').classList.remove('done');
-    $('pHint').textContent = '只填一次。系统从这个数字出发，按账本逐笔重放算出你现在应该有多少钱。';
+    LS.set('principal', num($('inP').value));
+    LS.set('calc', null);          // 本金变了，计算器回到账本推算值
+    setEditing(false);
     render();
   }
 });
-$('inP').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pBtn').click(); });
+$('pCancel').addEventListener('click', () => { setEditing(false); });
+$('inP').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('pBtn').click();
+  if (e.key === 'Escape') $('pCancel').click();
+});
 
+/* ==================== 账本 ==================== */
 function renderLedger(M) {
   const tb = $('ledger').querySelector('tbody');
   const es = S.ledger.entries || [];
-
-  // 账本自审：日期必须落在行情序列里、档位必须逐笔连得上，否则金额不可信
   const problems = auditLedger(S.series.rows, es, S.state.launchDate);
   const box = $('ledgerWarn');
   if (problems.length) {
@@ -519,15 +539,12 @@ function renderLedger(M) {
     box.innerHTML = `<b>账本自审发现 ${problems.length} 处异常，下方金额不可信：</b><br>`
       + problems.slice(0, 5).map((p) => `· ${p.msg}`).join('<br>')
       + (problems.length > 5 ? `<br>· 另有 ${problems.length - 5} 处…` : '');
-  } else {
-    box.style.display = 'none';
-  }
+  } else box.style.display = 'none';
 
   if (!es.length) {
-    tb.innerHTML = `<tr><td colspan="6" class="empty">还没有交易。账本从 ${S.ledger.launchDate} 起算，当前 0/5 档，等第一次买入信号。</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="6" class="empty">还没有交易。账本从 ${S.ledger.launchDate} 起算，当前 ${S.state.tier}/5 档。</td></tr>`;
     return;
   }
-  // 用重放得到每笔的金额
   const amounts = new Map();
   if (M) {
     const rows = S.series.rows.filter((r) => r.d <= S.state.asof);
@@ -556,10 +573,11 @@ function renderLedger(M) {
     const amt = amounts.has(e.date) ? money(amounts.get(e.date)) : '设本金后显示';
     return `<tr><td>${e.seq}</td><td>${e.date}</td>`
       + `<td class="side" style="color:${buy ? 'var(--up)' : 'var(--dn)'}">${buy ? '买入 B' : '卖出 S'}</td>`
-      + `<td>${e.tierFrom} → ${e.tierTo}</td><td>${money2(e.price)}</td><td>${amt}</td></tr>`;
+      + `<td>${e.tierFrom} → ${e.tierTo}</td><td>${int(e.price)}</td><td>${amt}</td></tr>`;
   }).join('');
 }
 
+/* ==================== 图表 ==================== */
 function sliceFrom(key) {
   const rows = S.series.rows, n = rows.length;
   if (key === 0) {
@@ -586,14 +604,17 @@ function buildRanges() {
   });
   drawChart(sliceFrom(RANGES[saved][1]));
 }
+
+let GEO = null; // 供 hover 定位用
 function drawChart(from) {
+  curFrom = from;
   const svg = $('chart');
   const cs = getComputedStyle(document.body);
   const g_ = (p) => cs.getPropertyValue(p).trim();
   const ln = g_('--ln'), dm = g_('--dm'), tx = g_('--tx'), ac = g_('--ac'),
         up = g_('--up'), dn = g_('--dn'), pan = g_('--pan');
   const rows = S.series.rows.slice(from);
-  if (rows.length < 2) { svg.innerHTML = ''; return; }
+  if (rows.length < 2) { svg.innerHTML = ''; GEO = null; return; }
   const W = 880, H = 300, L = 64, R = 18, T = 18, B = 32;
   const vals = [];
   for (const r of rows) { vals.push(r.c); if (r.m != null) vals.push(r.m); }
@@ -601,6 +622,8 @@ function drawChart(from) {
   const pad = (hi - lo) * 0.1 || 1; lo -= pad; hi += pad;
   const X = (k) => L + k * (W - L - R) / (rows.length - 1);
   const Y = (v) => T + (hi - v) * (H - T - B) / (hi - lo);
+  GEO = { rows, W, H, L, R, T, B, lo, hi, X, Y };
+
   let g = '';
   for (let k = 0; k <= 5; k++) {
     const v = lo + (hi - lo) * k / 5, y = Y(v);
@@ -633,10 +656,61 @@ function drawChart(from) {
   }
   const last = rows.length - 1;
   g += `<circle cx="${X(last).toFixed(1)}" cy="${Y(rows[last].c).toFixed(1)}" r="3.5" fill="${tx}"/>`;
+  g += `<line id="guide" x1="0" y1="${T}" x2="0" y2="${H - B}" stroke="${dm}" stroke-width="1" stroke-dasharray="3 3" opacity="0"/>`;
+  g += `<circle id="gdotC" r="4.5" fill="${tx}" opacity="0"/><circle id="gdotM" r="4.5" fill="${ac}" opacity="0"/>`;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.innerHTML = g;
 }
 
+/** 手指或鼠标移到图上时，显示该点的日期 / 指数 / 均线 / 差值 */
+function onHover(clientX, clientY) {
+  if (!GEO) return;
+  const svg = $('chart'), box = $('chartbox'), tip = $('tip');
+  const rect = svg.getBoundingClientRect();
+  const vx = (clientX - rect.left) / rect.width * GEO.W;   // 换算回 viewBox 坐标
+  const span = (GEO.W - GEO.L - GEO.R) / (GEO.rows.length - 1);
+  let k = Math.round((vx - GEO.L) / span);
+  k = Math.max(0, Math.min(GEO.rows.length - 1, k));
+  const r = GEO.rows[k];
+  const gapV = r.m != null ? r.c - r.m : null;
+  const gapP = r.m != null ? (r.c / r.m - 1) * 100 : null;
+  const col = gapV == null ? 'var(--dm)' : (gapV >= 0 ? 'var(--up)' : 'var(--dn)');
+
+  tip.innerHTML = `<div class="td">${r.d}</div>`
+    + `<div class="tr2"><span>指数</span><span>${int(r.c)}</span></div>`
+    + `<div class="tr2"><span>MA30</span><span style="color:var(--ac)">${r.m == null ? '–' : int(r.m)}</span></div>`
+    + (gapV == null ? '' : `<div class="tr2"><span>差值</span><span style="color:${col}">`
+        + `${gapV >= 0 ? '+' : '−'}${int(Math.abs(gapV))}　${gapP >= 0 ? '+' : '−'}${Math.abs(gapP).toFixed(2)}%</span></div>`);
+  tip.classList.add('on');
+
+  // 定位：跟着手指，靠边时自动翻到另一侧
+  const px = GEO.X(k) / GEO.W * rect.width + (rect.left - box.getBoundingClientRect().left) + box.scrollLeft;
+  const tw = tip.offsetWidth;
+  let left = px + 14;
+  if (left + tw > box.scrollLeft + box.clientWidth) left = px - tw - 14;
+  tip.style.left = Math.max(box.scrollLeft + 4, left) + 'px';
+  tip.style.top = '10px';
+
+  const guide = svg.querySelector('#guide'), dC = svg.querySelector('#gdotC'), dM = svg.querySelector('#gdotM');
+  if (guide) { guide.setAttribute('x1', GEO.X(k)); guide.setAttribute('x2', GEO.X(k)); guide.setAttribute('opacity', '.7'); }
+  if (dC) { dC.setAttribute('cx', GEO.X(k)); dC.setAttribute('cy', GEO.Y(r.c)); dC.setAttribute('opacity', '1'); }
+  if (dM && r.m != null) { dM.setAttribute('cx', GEO.X(k)); dM.setAttribute('cy', GEO.Y(r.m)); dM.setAttribute('opacity', '1'); }
+}
+function hideHover() {
+  $('tip').classList.remove('on');
+  const svg = $('chart');
+  ['#guide', '#gdotC', '#gdotM'].forEach((s) => { const el = svg.querySelector(s); if (el) el.setAttribute('opacity', '0'); });
+}
+{
+  const box = $('chartbox');
+  box.addEventListener('pointermove', (e) => onHover(e.clientX, e.clientY));
+  box.addEventListener('pointerdown', (e) => onHover(e.clientX, e.clientY));
+  box.addEventListener('pointerleave', hideHover);
+  box.addEventListener('pointercancel', hideHover);
+  box.addEventListener('touchend', hideHover);
+}
+
+/* ==================== 数据健康 ==================== */
 function renderHealth() {
   const c = S.state.checks || {};
   const failed = c.failed || [];
@@ -644,8 +718,7 @@ function renderHealth() {
   const pill = $('healthPill');
   const ok = !neverRan && failed.length === 0;
   pill.textContent = neverRan ? '等待首次运行'
-    : ok ? `校验 ${c.passed}/${c.total} 通过`
-    : `校验 ${c.passed}/${c.total}　${failed.length} 项未过`;
+    : ok ? `校验 ${c.passed}/${c.total} 通过` : `校验 ${c.passed}/${c.total}　${failed.length} 项未过`;
   pill.className = 'pill ' + (neverRan ? 'warn' : ok ? 'ok' : 'bad');
   pill.onclick = () => $('checks').scrollIntoView({ behavior: 'smooth', block: 'center' });
 
@@ -668,7 +741,7 @@ function renderHealth() {
     `数据截至 <b>${S.state.asof}</b>，最近一次运行 <b>${S.state.lastRun || '尚未运行'}</b>。`
     + `　行情 ${S.series.rows.length} 个交易日。`
     + `<br>信号源 中证指数 H00922（全收益）／ 闲钱基准 中证全债 H11001 ／ 交易日历 深交所官方接口 ／ ETF 报价 ${S.state.etf?.code || '—'}。`
-    + `<br>账本按<b>理论口径</b>记账：股票腿用全收益指数、闲钱用全债指数推算，与你实盘的零头差异不追踪。实盘表现通常略低于理论值。`;
+    + `<br>账本按<b>理论口径</b>记账：股票腿用全收益指数、闲钱用全债指数推算。实盘会有跟踪误差和税费，通常略低于这里显示的数字。`;
 }
 
 load().catch((e) => {

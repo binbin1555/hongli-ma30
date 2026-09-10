@@ -130,6 +130,68 @@ export function shares(amount, etfPrice) {
 }
 
 /**
+ * 下一次操作：距离触发还差多远，以及是哪个方向。
+ *
+ * 边界规则：
+ *   已满仓（4/5）不再提示买入，已空仓（0/5）不再提示卖出；
+ *   两个方向都可能时，取更接近触发线的那一个；
+ *   价格已越过触发线但当天信号还没确认时，need 为 0，由界面显示「等收盘确认」。
+ *
+ * @param {{close:number,ma30:number,buyTrigger:number,sellTrigger:number}} idx
+ * @param {number} tier 当前档位 0–4
+ * @param {{side:string,tierFrom:number,tierTo:number}|null} pending 已触发待执行的挂单
+ */
+export function nextMove(idx, tier, pending) {
+  if (pending) {
+    return { kind: 'pending', side: pending.side, from: pending.tierFrom, to: pending.tierTo };
+  }
+  const canBuy = tier < MAX_TIER;
+  const canSell = tier > 0;
+  const opts = [];
+  if (canBuy) {
+    opts.push({ kind: 'buy', need: Math.max(0, (idx.close - idx.buyTrigger) / idx.close * 100),
+      target: idx.buyTrigger, tierTo: tier + 1 });
+  }
+  if (canSell) {
+    opts.push({ kind: 'sell', need: Math.max(0, (idx.sellTrigger - idx.close) / idx.close * 100),
+      target: idx.sellTrigger, tierTo: tier - 1 });
+  }
+  if (!opts.length) return { kind: 'none' };
+  opts.sort((a, b) => a.need - b.need);
+  return opts[0];
+}
+
+/**
+ * 计算器核心：给定「可用资金」和「已持有红利市值」，
+ * 先按这两个数字反推现在处在第几档（取最接近的一档），再算朝指定方向走一档要动多少钱。
+ *
+ * 为什么按填入的数字反推、而不是用账本记录的档位：
+ * 这样结果永远自洽 —— 不会出现"标着买入却算出要卖出"那种自相矛盾的输出。
+ * 账本档位和这里不一致时，由调用方单独提示，不影响计算本身。
+ *
+ * @param {number} cash 可用资金（还没买 ETF 的钱）
+ * @param {number} hold 已持有红利 ETF 的市值
+ * @param {boolean} wantBuy true=算买入，false=算卖出
+ */
+export function calcStep(cash, hold, wantBuy) {
+  const c = Number(cash) || 0;
+  const h = Number(hold) || 0;
+  const total = c + h;
+  if (!(total > 0) || c < 0 || h < 0) return { ok: false, reason: 'NO_INPUT' };
+
+  const weight = h / total;
+  let tier = 0, best = Infinity;
+  WEIGHTS.forEach((wt, k) => { const d = Math.abs(wt - weight); if (d < best) { best = d; tier = k; } });
+
+  if (wantBuy && tier >= MAX_TIER) return { ok: false, reason: 'FULL', tier, weight, total };
+  if (!wantBuy && tier <= 0) return { ok: false, reason: 'EMPTY', tier, weight, total };
+
+  const to = wantBuy ? tier + 1 : tier - 1;
+  const o = orderAmount(total, h, WEIGHTS[to]);
+  return { ok: true, tier, to, weight, total, side: o.side, amount: o.amount, targetWeight: WEIGHTS[to] };
+}
+
+/**
  * 账本自审：重放之前先确认账本本身是自洽的。
  *
  * 存在的理由：只要有一条记录的日期不在行情序列里（比如误写成休市日），
