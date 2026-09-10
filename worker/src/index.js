@@ -540,7 +540,8 @@ async function pushDaily(env, { today, newState, pending, executed, plan, etf, c
     : '';
 
   if (pending) {
-    const isBuy = pending.side === 'BUY';
+    // 方向以公式实际算出来的为准，不按档位方向假设
+    const isBuy = (plan && plan.side !== 'NONE' ? plan.side : pending.side) === 'BUY';
     const amt = plan ? `${money(plan.amount)} 元` : `目标仓位 ${WEIGHTS[pending.tierTo] * 100}%`;
     const sh = plan && plan.shares ? `　约 ${money(plan.shares)} 股` : '';
     const px = etf ? `\n${newState.etf.code} 收盘 ${etf.c}${newState.etf.stale ? '（非当日价，股数仅供参考）' : ''}` : '';

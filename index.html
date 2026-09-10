@@ -201,8 +201,8 @@ tr:last-child td{border-bottom:none}
       <div><label for="inV">其中股票市值（元）</label><input id="inV" type="text" inputmode="decimal"></div>
     </div>
     <div class="calcout">
-      <div><p class="k">下一次买入</p><p class="v" style="color:var(--up)" id="oBuy">–</p></div>
-      <div><p class="k">下一次卖出</p><p class="v" style="color:var(--dn)" id="oSell">–</p></div>
+      <div><p class="k" id="oUpLabel">上调一档</p><p class="v" id="oBuy">–</p></div>
+      <div><p class="k" id="oDownLabel">下调一档</p><p class="v" id="oSell">–</p></div>
       <div><p class="k">参考股数</p><p class="v" id="oShares">–</p></div>
     </div>
     <p id="mismatch" hidden style="background:color-mix(in srgb,var(--warn) 14%,transparent);
@@ -361,14 +361,18 @@ function render() {
   const bn = $('banner');
   const ackKey = st.pending ? `ack.${st.pending.signalDate}` : null;
   if (st.pending && !LS.get(ackKey, false)) {
-    const buy = st.pending.side === 'BUY';
-    bn.classList.add('on'); bn.classList.toggle('sell', !buy);
-    let amtTxt = `目标仓位 ${WEIGHTS[st.pending.tierTo] * 100}%`;
+    // 方向按公式实际算出来的写，不按档位方向假设。
+    // 若实盘持仓和账本不同步，"上调一档"也可能实际要卖出。
+    let side = st.pending.side, amtTxt = `目标仓位 ${WEIGHTS[st.pending.tierTo] * 100}%`;
     if (M) {
       const o = plannedOrder(M.V, M.cash, st.pending.tierTo);
+      if (o.side !== 'NONE') side = o.side;
       const sh = st.etf && st.etf.close ? shares(o.amount, st.etf.close) : null;
-      amtTxt = `${money(o.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : '');
+      amtTxt = o.side === 'NONE' ? '无需调整'
+        : `${money(o.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : '');
     }
+    const buy = side === 'BUY';
+    bn.classList.add('on'); bn.classList.toggle('sell', !buy);
     $('bKick').textContent = `触发 · 下一个交易日收盘执行　档位 ${st.pending.tierFrom}/5 → ${st.pending.tierTo}/5`;
     $('bText').textContent = `${buy ? '买入' : '卖出'}　${amtTxt}`;
     $('bDone').onclick = () => { LS.set(ackKey, true); bn.classList.remove('on'); };
@@ -408,10 +412,22 @@ function calc() {
   const tb = Math.min(4, tier + 1), ts = Math.max(0, tier - 1);
   const ob = tier < 4 ? orderAmount(Sv, Vv, WEIGHTS[tb]) : null;
   const os = tier > 0 ? orderAmount(Sv, Vv, WEIGHTS[ts]) : null;
-  // 总资产为 0 时不要显示「0 元」——那看着像算错了，而不是「还没填」
   const noInput = !(Sv > 0);
-  $('oBuy').textContent = tier >= 4 ? '已满仓' : noInput ? '先填总资产' : `${money(ob.amount)} 元`;
-  $('oSell').textContent = tier <= 0 ? '已空仓' : noInput ? '先填总资产' : `${money(os.amount)} 元`;
+
+  $('oUpLabel').textContent = tier >= 4 ? '上调一档' : `上调一档 → ${WEIGHTS[tb] * 100}%`;
+  $('oDownLabel').textContent = tier <= 0 ? '下调一档' : `下调一档 → ${WEIGHTS[ts] * 100}%`;
+
+  // 方向必须按公式实际算出来的写。
+  // 如果实盘持仓已经超过目标仓位，"上调一档"反而要卖——写死成"买入"就是骗人。
+  const show = (el, o, capped, cappedText) => {
+    if (capped) { el.textContent = cappedText; el.style.color = 'var(--dm)'; return; }
+    if (noInput) { el.textContent = '先填总资产'; el.style.color = 'var(--dm)'; return; }
+    if (o.side === 'NONE' || o.amount < 1) { el.textContent = '无需调整'; el.style.color = 'var(--dm)'; return; }
+    el.textContent = `${o.side === 'BUY' ? '买入' : '卖出'} ${money(o.amount)} 元`;
+    el.style.color = o.side === 'BUY' ? 'var(--up)' : 'var(--dn)';
+  };
+  show($('oBuy'), ob, tier >= 4, '已满仓');
+  show($('oSell'), os, tier <= 0, '已空仓');
   const px = S.state.etf && S.state.etf.close;
   const target = st.pending ? (st.pending.side === 'BUY' ? ob : os) : ob;
   const sh = target && px ? shares(target.amount, px) : null;
