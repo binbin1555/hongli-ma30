@@ -438,10 +438,14 @@ async function runDaily(env, { force = false } = {}) {
     await bark(env, {
       title: '⚠️ 红利MA30 · 今日数据未到',
       body: `交易日历显示 ${today} 开市，但中证接口最新数据只到 ${lastRow ? lastRow.d : '无'}。`
-        + `本次未写入，请稍后手动重跑或检查数据源。`,
+        + `本次未写入。若此刻尚未到 17:00，属正常；若已过 18:00 仍如此，请检查数据源。`,
       level: 'timeSensitive',
     });
-    return { ok: false, today, reason: `数据未到位，最新 ${lastRow ? lastRow.d : '无'}` };
+    // 带上时点：一眼能分清是「收盘前跑早了」还是「数据源真的坏了」
+    const hh = +beijingStamp().slice(11, 13);
+    const why = hh < 17 ? '当前还未到中证发布时间（一般 17:00–18:00），属正常' : '已过通常发布时间，请留意数据源';
+    return { ok: false, today, now: beijingStamp(), latest: lastRow ? lastRow.d : null,
+      reason: `数据未到位，最新 ${lastRow ? lastRow.d : '无'}`, hint: why };
   }
 
   // ---- ETF 报价 ----
