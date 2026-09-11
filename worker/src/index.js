@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '99b7f1d080';
+const BUILD = '13e8f044c2';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -617,7 +617,11 @@ async function runDaily(env, { force = false } = {}) {
       ranAt: beijingStamp(),
     },
     lastExecuted: executed ? { date: executed.date, side: executed.side, tierTo: executed.tierTo } : state.lastExecuted || null,
-    push: null,   // 提交后由下面回填
+    // 占位：本次推送结果由下面那次提交回填。
+    // 同时把上一次的结果带上 —— 万一回填没跑成，至少还留着上一次的痕迹，
+    // 面板据此能说出「昨晚那次推送没有记录成功」。
+    push: null,
+    prevPush: state.push || null,
   };
 
   // ---- 提交 ----
@@ -648,18 +652,21 @@ async function runDaily(env, { force = false } = {}) {
 
   // 推送结果补记一次：失败时面板上要看得见，否则你不会知道自己漏收了通知。
   // 这次补记失败也不影响主流程 —— 账本已经提交好了。
+  // 回填要是也失败了，push 会一直停在占位的 null —— 那时面板会误报
+  // 「推送没送达」。所以把回填本身的错误也带进 HTTP 返回，别让它无声无息。
+  let backfillErr = null;
   if (lastPush && !lastPush.ok) {
     newState.push = lastPush;
     await G.commit(
       [{ path: 'data/state.json', content: JSON.stringify(newState, null, 2) }],
       `chore(daily): ${today} 推送失败，记录状态`
-    ).catch(() => {});
+    ).catch((e) => { backfillErr = String(e && e.message || e); });
   } else if (lastPush) {
     newState.push = { ok: true, at: lastPush.at };
     await G.commit(
       [{ path: 'data/state.json', content: JSON.stringify(newState, null, 2) }],
       `chore(daily): ${today} 推送已送达`
-    ).catch(() => {});
+    ).catch((e) => { backfillErr = String(e && e.message || e); });
   }
 
   // HTTP 返回里刻意不带任何金额：cron-job.org 之类的调用方会把响应体存在
@@ -667,6 +674,7 @@ async function runDaily(env, { force = false } = {}) {
   return {
     ok: true, today, commit: sha.slice(0, 7), tier, pending, executed, checks,
     push: lastPush ? { ok: lastPush.ok, reason: lastPush.reason } : null,
+    backfillErr,
     planned: plan ? { side: plan.side, targetWeight: plan.targetWeight, hasShares: plan.shares != null } : null,
   };
 }
@@ -702,6 +710,14 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
   const warn = failedChecks.length
     ? `\n⚠️ 有 ${failedChecks.length} 项检查没通过：${failedChecks.map((c) => c.name).join('、')}`
     : '';
+  // 上一次没留下推送成功的记录 —— 那多半意味着你漏收过一条通知。
+  // 这件事没法由「上一次的推送」告诉你（它就是没发出去），只能由下一次补说。
+  // 你不会注意到一条从没来过的通知，所以必须有人主动提起。
+  const missed = newState.prevPush && newState.prevPush.ok
+    ? ''
+    : '\n⚠️ 上一次运行没有留下推送成功的记录'
+      + `${newState.prevPush && newState.prevPush.reason ? `（${newState.prevPush.reason}）` : ''}`
+      + '，那次的通知你可能没收到，请到面板确认一遍。';
   const doneLine = executed
     ? `\n已记账：${executed.date}（${dayLabel(executed.date, today).wd}）`
       + `${executed.side === 'BUY' ? '买入' : '卖出'}，仓位 ${posPct(executed.tierFrom)}→${posPct(executed.tierTo)}`
@@ -723,7 +739,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       body: `仓位 ${posPct(pending.tierFrom)} → ${posPct(pending.tierTo)}${est}`
         + `\n${w.long}`
         + `\n${CLOSE_TIP}`
-        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${doneLine}${warn}`,
+        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${doneLine}${warn}${missed}`,
       level: 'timeSensitive',
       group: '红利MA30·操作',
     });
@@ -758,7 +774,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       : `\n${NO_EXEC_DATE}无需操作`;
     await bark(env, {
       title,
-      body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${doneLine}${warn}`,
+      body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${doneLine}${warn}${missed}`,
       level: 'passive',
     });
   }
@@ -885,8 +901,27 @@ async function refreshCalendar(env) {
 
 // ---------------------------------------------------------------- 入口
 
+/**
+ * 让这次运行活到自己跑完，而不是活到调用方失去耐心。
+ *
+ * 触发器（cron-job.org）30 秒没等到响应就断开连接，而 Cloudflare 一旦发现
+ * 客户端走了，就会把还在跑的 Worker 直接掐掉。推送是整个流程的最后一步，
+ * 于是它成了第一个牺牲品 —— 2026-09-11 那次就是这样：账本提交成功了
+ * （21:00:37），Bark 没发出去，回填推送结果的那次提交也没跑成，
+ * state.json 里的 push 一直停在占位的 null。
+ *
+ * 最难受的是这种失败完全没有声音：你不会注意到一条没有来过的通知。
+ *
+ * waitUntil 把这次运行的生命周期和 HTTP 响应解绑 —— 调用方超时断开，
+ * 剩下的活照样干完。调用方还在的话，行为和以前完全一样。
+ */
+function keepAlive(ctx, promise) {
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(promise);
+  return promise;
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';
     const token = url.searchParams.get('token');
@@ -914,15 +949,15 @@ export default {
       }
       if (path === '/run') {
         if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
-        return json(await runDaily(env, { force: url.searchParams.get('force') === '1' }));
+        return json(await keepAlive(ctx, runDaily(env, { force: url.searchParams.get('force') === '1' })));
       }
       if (path === '/remind') {
         if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
-        return json(await remind(env));
+        return json(await keepAlive(ctx, remind(env)));
       }
       if (path === '/calendar/refresh') {
         if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
-        return json(await refreshCalendar(env));
+        return json(await keepAlive(ctx, refreshCalendar(env)));
       }
       return json({ ok: false, error: '未知路径', paths: ['/run', '/remind', '/calendar/refresh', '/health'] }, 404);
     } catch (e) {

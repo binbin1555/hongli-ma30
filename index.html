@@ -1576,11 +1576,23 @@ function renderHealth() {
   // 推送失败必须在页面上看得见 —— 它失败时没法用推送告诉你
   const push = S.state.push;
   const pushBad = push && push.ok === false;
+  // 「没有记录」和「记录了失败」是两回事，而前者更阴险：
+  // 运行本身成功了、账本也提交了，看哪儿都正常，只有推送那一步无声消失。
+  // 2026-09-11 就是这样 —— 触发器 30 秒超时断开，Cloudflare 把还在跑的
+  // Worker 掐掉，而推送是最后一步。不把这种情况说出来，你永远发现不了。
+  const pushMissing = !!S.state.lastRun && !push;
   const pw = $('pushWarn');
   if (pushBad) {
     pw.hidden = false;
     pw.innerHTML = `<b>上一次推送没发出去。</b>${push.at || ''}　原因：${push.reason || '未知'}<br>`
       + `这意味着即使触发了买卖信号，你手机上也收不到通知。请检查 Cloudflare 里的 BARK_KEY 是否还有效。`;
+  } else if (pushMissing) {
+    pw.hidden = false;
+    pw.innerHTML = `<b>上一次运行没有留下推送记录。</b>运行本身是成功的（${S.state.lastRun}），`
+      + `账本也提交了，但没记下推送到底发出去没有。<br>`
+      + `最常见的原因是运行被定时触发器的超时掐断了 —— 推送是整个流程的最后一步，`
+      + `被掐掉时它正好还没发。<b>那一次的通知你很可能没收到。</b><br>`
+      + `如果这条一直在，说明每天的推送都在丢，请检查定时任务的超时设置。`;
   } else pw.hidden = true;
 
   // 数据停更比任何一项校验失败都严重：校验说的是「上次跑的那次对不对」，
