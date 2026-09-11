@@ -27,7 +27,7 @@ const goto = (day, hhmm) => {
   FAKE = Date.parse(`${day}T00:00:00Z`) + (h - 8) * 3600000 + m * 60000;
 };
 
-const { H, el, store, ROOT, CORE } = await import('./harness.mjs');
+const { H, el, store, ROOT, CORE, fractionsIn } = await import('./harness.mjs');
 const { ma, signal, nextTier, triggers, WEIGHTS, MA_LEN, orderAmount, COMMISSION, posPct } = CORE;
 
 let fails = 0;
@@ -44,7 +44,7 @@ const ETF_PX = 1.46;
 const PRINCIPAL = 1000000;
 
 /** 复刻 runDaily 的状态推进：执行昨日挂单 → 记账 → 算今日信号 → 生成新挂单 */
-function workerRun(dayIdx, prev, ledger) {
+function workerRun(dayIdx, prev, ledger, launchDate = LAUNCH) {
   const upto = SERIES.slice(0, dayIdx + 1);
   const closes = upto.map((r) => r.c);
   const close = closes[closes.length - 1];
@@ -72,7 +72,7 @@ function workerRun(dayIdx, prev, ledger) {
     : null;
   const tg = triggers(close, ma30);
   const state = {
-    schema: 1, launchDate: LAUNCH, asof: today, lastRun: `${today} 21:00:45`, tier, pending,
+    schema: 1, launchDate, asof: today, lastRun: `${today} 21:00:45`, tier, pending,
     index: {
       code: 'H00922', close: +close.toFixed(2), ma30: +ma30.toFixed(2), ratio: +tg.ratio.toFixed(4),
       changePct: +((close / prevClose - 1) * 100).toFixed(2),
@@ -335,6 +335,221 @@ console.log('\n═════════════ 每日「无操作」推�
     if (expectBuy === '已跌破' && !saysBrokeBuy) bad(`${name}：预期「已跌破」，实际「${line.trim()}」`);
   }
 }
+
+/* ==================================================================== */
+/*
+ * 多角度矩阵：把「面板此刻必须说什么」写成一个独立判据，
+ * 然后拿真实历史里各种信号组合 × 各种用户行为去撞它。
+ *
+ * 判据完全不看被测代码怎么算的 —— 只从「账本档位 / 实盘档位 / 挂单 / 今天」
+ * 这四个事实推导出应该显示什么，再去对照真实渲染出来的字。
+ */
+const CALJ = JSON.parse(readFileSync(join(ROOT, 'calendar', '2026.json'), 'utf8')).tradingDays;
+const nearest = (cash, hold) => {
+  const tot = cash + hold;
+  if (!(tot > 0)) return null;
+  const w = hold / tot;
+  let t = 0, best = Infinity;
+  WEIGHTS.forEach((x, k) => { const d = Math.abs(x - w); if (d < best) { best = d; t = k; } });
+  return t;
+};
+
+/** 面板在这一刻必须满足的全部规则 */
+function verify(tag, state, ledger, calc, todayStr) {
+  const p = panel();
+  const all = `${p.卡片}｜${p.卡片副}｜${p.算主}｜${p.算副}｜${p.时点}｜${p.横幅 || ''}｜${p.落差 || ''}`;
+  const say = (m) => bad(`[${tag}] ${m}`);
+
+  // ── 独立推导「真相」──
+  const ledgerTier = state.tier;
+  const pend = state.pending;
+  const userTier = calc ? nearest(calc.cash, calc.hold) : ledgerTier;
+  // 不算欠账的两种情形：实盘对上账本，或已经做到挂单的落点（提前做完）
+  const onTarget = calc && (userTier === ledgerTier || (pend && userTier === pend.tierTo));
+  const owed = calc && !onTarget ? ledgerTier - userTier : 0;
+  const target = pend ? pend.tierTo : ledgerTier;
+  const execDay = pend ? CALJ.filter((d) => d > pend.signalDate)[0] : null;
+
+  // 1. 仓位卡片必须等于账本档位
+  if (p.仓位 !== posPct(ledgerTier)) say(`仓位卡片「${p.仓位}」，账本是 ${posPct(ledgerTier)}`);
+
+  // 2. 欠账提示当且仅当实盘档位 ≠ 账本档位
+  const scolds = /你有 \d+ 笔操作还没做|你还欠着|实盘仓位和账本对不上|你填的实盘仓位和账本对不上|补齐到/.test(all);
+  if (scolds !== (owed !== 0)) {
+    say(owed === 0
+      ? `实盘 ${posPct(userTier)} 已在应有位置（账本 ${posPct(ledgerTier)}${pend ? `，挂单去 ${posPct(pend.tierTo)}` : ''}），却提示欠账`
+      : `实盘 ${posPct(userTier)} 与账本 ${posPct(ledgerTier)} 不符，却没提示`);
+  }
+
+  // 3. 落差框只允许在实盘≠账本时出现
+  if (p.落差 && owed === 0) say(`实盘与账本一致，落差框仍出现：「${p.落差.slice(0, 36)}…」`);
+
+  // 4. 有挂单且不欠账 → 卡片必须写出执行日期；执行日就是今天时必须说「今天」
+  if (pend && owed === 0) {
+    if (execDay) {
+      const md = `${+execDay.slice(5, 7)} 月 ${+execDay.slice(8, 10)} 日`;
+      if (!p.卡片.includes(md)) say(`挂单执行日是 ${execDay}，卡片没写出来：「${p.卡片}」`);
+      const isToday = execDay === todayStr;
+      if (p.卡片.includes('（今天') !== isToday) {
+        say(`执行日 ${execDay}，今天 ${todayStr}，卡片${isToday ? '没说' : '却说'}「今天」：「${p.卡片}」`);
+      }
+      if (p.横幅 && p.横幅.includes('（今天') !== isToday) say(`横幅与卡片的「今天」不一致：「${p.横幅}」`);
+    }
+    if (calc && userTier === pend.tierTo) {
+      if (!/已经做到位/.test(p.时点)) say(`已提前做到位，时点行还在催「${p.时点.slice(0, 26)}…」`);
+    } else if (!p.时点.includes('尾盘')) {
+      say(`有挂单却没给尾盘提示：「${p.时点}」`);
+    }
+  }
+
+  // 5. 无挂单且不欠账 → 回到预估态
+  if (!pend && owed === 0 && calc) {
+    if (!p.算主.includes('预估')) say(`没有挂单，计算器主行却没标「预估」：「${p.算主}」`);
+    if (!/距离下一次|已跌破|已涨破|算不出/.test(p.卡片)) say(`没有挂单，卡片却不是等待态：「${p.卡片}」`);
+  }
+
+  // 6. 金额必须等于目标市值法独立算出的值
+  if (calc && calc.cash + calc.hold > 0) {
+    const w = want(calc.cash, calc.hold, target);
+    if (w.side !== 'NONE') {
+      const g = shown(p.算主);
+      if (!isFinite(g)) {
+        if (!/已满仓|已空仓|先填/.test(p.算主)) say(`主行读不出金额：「${p.算主}」`);
+      } else {
+        if (Math.abs(g - w.amount) > 1) say(`金额 ${g}，公式算出 ${Math.round(w.amount)}（目标 ${posPct(target)}）`);
+        const saysBuy = p.算主.includes('买入');
+        if (saysBuy !== (w.side === 'BUY')) say(`方向：显示${saysBuy ? '买入' : '卖出'}，应为${w.side === 'BUY' ? '买入' : '卖出'}`);
+      }
+    }
+  }
+
+  // 6b. 卡片和横幅说的买卖方向，必须和它自己印出来的仓位箭头一致。
+  //     「仓位 50% → 25%」配「买入第 1 份」是自相矛盾，读的人只会懵。
+  if (pend && owed === 0) {
+    const arrowBuy = pend.tierTo > pend.tierFrom;
+    for (const [where, txt] of [['卡片', p.卡片], ['横幅', p.横幅]]) {
+      if (!txt) continue;
+      if (/买入第/.test(txt) && !arrowBuy) say(`${where}说「买入」，但仓位是 ${posPct(pend.tierFrom)} → ${posPct(pend.tierTo)}：「${txt}」`);
+      if (/卖出第/.test(txt) && arrowBuy) say(`${where}说「卖出」，但仓位是 ${posPct(pend.tierFrom)} → ${posPct(pend.tierTo)}：「${txt}」`);
+    }
+  }
+
+  // 6c. 不许出现金额为 0 的操作指令 —— 「卖出第 1 份 0 元」是句没有意义的话
+  if (/(买入|卖出)[^，。]*\s0 元/.test(p.算主)) say(`计算器给出 0 元的操作指令：「${p.算主}」`);
+
+  // 6d. 已经做到挂单落点的人，绝不能被劝去反向操作
+  if (pend && calc && userTier === pend.tierTo) {
+    if (scolds) say(`已提前做到挂单落点 ${posPct(pend.tierTo)}，却被提示欠账/补齐：「${p.卡片}」`);
+    if (p.落差) say(`已提前做到位，落差框却让人反向操作：「${p.落差.slice(0, 40)}…」`);
+  }
+
+  // 7. 封顶封底：满仓不提买入，空仓不提卖出
+  if (ledgerTier >= 4 && !pend && /距离下一次买入/.test(p.卡片)) say('已满仓却提示还要买入');
+  if (ledgerTier <= 0 && !pend && /距离下一次卖出/.test(p.卡片)) say('已空仓却提示还要卖出');
+
+  // 8. 通用红线
+  const fr = fractionsIn(all);
+  if (fr.length) say(`出现分数「${fr.join('、')}」`);
+  for (const m of all.matchAll(/还需[跌涨] (-?[\d.]+)%/g)) {
+    if (Number(m[1]) < 0) say(`出现负百分比「${m[0]}」`);
+  }
+  for (const junk of ['undefined', 'NaN', 'null', 'Infinity']) {
+    if (all.includes(junk)) say(`文案里漏出 ${junk}`);
+  }
+  return p;
+}
+
+/** 跑一条剧本：从 tDate 起推进 n 天，在指定时刻按指定持仓查验 */
+async function walk(name, tDate, startTier, startChain, visits) {
+  console.log(`\n【${name}】`);
+  const i0 = SERIES.findIndex((r) => r.d === tDate);
+  const led = { schema: 1, launchDate: SERIES[i0 - 40].d, entries: [] };
+  // 先把起始档位的账本铺好
+  let prev = { tier: 0, pending: null };
+  startChain.forEach(([k, from, to], n) => led.entries.push({
+    seq: n + 1, date: SERIES[i0 - k].d, signalDate: SERIES[i0 - k - 1].d,
+    side: to > from ? 'BUY' : 'SELL', tierFrom: from, tierTo: to,
+    targetWeight: WEIGHTS[to], price: SERIES[i0 - k].c, etfPrice: ETF_PX, late: false,
+    recordedAt: `${SERIES[i0 - k].d} 21:00:45`,
+  }));
+  prev.tier = startTier;
+
+  const states = [];
+  // 每条剧本有自己的起算日：用模块级那个常量会让重放跳过本剧本铺的账本，
+  // 理论账户算成空仓，方向、金额全跟着错 —— 第一版就栽在这。
+  for (let d = 0; d <= 3; d++) {
+    const r = workerRun(i0 + d, prev, led, led.launchDate);
+    prev = r.state;
+    states.push({ ...r, ledger: JSON.parse(JSON.stringify(led)), day: SERIES[i0 + d].d });
+  }
+
+  // state.json 只在每天 21:00 更新：盘中打开面板，看到的还是**前一晚**那一版。
+  // 让剧本只写「哪天几点」，状态由这条规则自动挑 —— 手写 states[k] 极易挑错，
+  // 第一版就把 T+1 盘中配成了 T+1 晚上的状态，凭空多出一笔当天还没发生的记账。
+  const pick = (day, at) => {
+    const done = states.filter((s) => s.day < day || (s.day === day && at >= '21:00'));
+    return done[done.length - 1];
+  };
+  for (const v of visits) {
+    const at = v.at ?? '10:00';
+    const snap = pick(v.day, at);
+    if (!snap) { bad(`[${name} · ${v.label}] ${v.day} ${at} 之前没有任何一次运行`); continue; }
+    goto(v.day, at);
+    show(snap.state, snap.ledger, v.calc ?? null);
+    const tag = `${name} · ${v.label}`;
+    console.log(`  ── ${v.label}（${v.day} ${at}　面板数据截至 ${snap.state.asof}）`);
+    const pp = verify(tag, snap.state, snap.ledger, v.calc ?? null, v.day);
+    if (v.expect) v.expect(pp, (m) => bad(`[${tag}] ${m}`));
+  }
+  return states;
+}
+
+console.log('\n\n═════════════ 多角度矩阵 ═════════════');
+
+const hold = (tot, t) => ({ cash: Math.round(tot * (1 - WEIGHTS[t])), hold: Math.round(tot * WEIGHTS[t]) });
+const TOT = 1000000;
+
+/* ② 连续三天买入：T+1 当天既要记账、又冒出新挂单 —— 最容易搞混的一天 */
+await walk('连续买入信号', '2026-06-17', 1, [[40, 0, 1]], [
+  { day: '2026-06-17', at: '21:05', label: 'T 日晚·收到推送', calc: hold(TOT, 1) },
+  { day: '2026-06-18', at: '10:00', label: 'T+1 盘中·还没下单', calc: hold(TOT, 1) },
+  { day: '2026-06-18', at: '21:05', label: 'T+1 晚·按时做完了', calc: hold(TOT, 2) },
+  { day: '2026-06-22', at: '10:00', label: 'T+2 盘中·又一笔挂单在身', calc: hold(TOT, 2) },
+  { day: '2026-06-22', at: '10:00', label: 'T+2 盘中·上一笔也没做', calc: hold(TOT, 1) },
+]);
+
+/* ③ 卖出方向 */
+await walk('卖出信号', '2026-01-26', 3, [[40, 0, 1], [30, 1, 2], [20, 2, 3]], [
+  { day: '2026-01-26', at: '21:05', label: 'T 日晚·收到推送', calc: hold(TOT, 3) },
+  { day: '2026-01-27', at: '10:00', label: 'T+1 盘中·该卖了', calc: hold(TOT, 3) },
+  { day: '2026-01-27', at: '21:05', label: 'T+1 晚·卖完了', calc: hold(TOT, 2) },
+  { day: '2026-01-28', at: '10:00', label: 'T+2·忘了卖', calc: hold(TOT, 3) },
+]);
+
+/* ④ 连续卖出，一路卖到空仓 */
+await walk('连续卖出至空仓', '2026-01-28', 2, [[40, 0, 1], [30, 1, 2]], [
+  { day: '2026-01-28', at: '21:05', label: 'T 日晚', calc: hold(TOT, 2) },
+  { day: '2026-01-29', at: '21:05', label: 'T+1 晚·卖掉一档', calc: hold(TOT, 1) },
+  { day: '2026-01-30', at: '21:05', label: 'T+2 晚·再卖到空仓', calc: hold(TOT, 0) },
+]);
+
+/* ⑦ 跨五一长假：4-30 出信号，执行日 5-06，隔 6 个自然日 */
+await walk('跨五一长假', '2026-04-30', 2, [[40, 0, 1], [30, 1, 2]], [
+  { day: '2026-04-30', at: '21:05', label: 'T 日晚·节前最后一个交易日', calc: hold(TOT, 2) },
+  { day: '2026-05-03', at: '11:00', label: '假期中间打开面板', calc: hold(TOT, 2) },
+  { day: '2026-05-06', at: '10:00', label: '节后开市当天·就是执行日', calc: hold(TOT, 2) },
+  { day: '2026-05-06', at: '21:05', label: '节后当晚·做完了', calc: hold(TOT, 1) },
+]);
+
+/* 用户行为变体：都发生在 ① 那条剧本上 */
+await walk('用户行为变体', '2026-05-28', 0, [], [
+  { day: '2026-05-28', at: '21:30', label: 'T 日晚就提前买了', calc: hold(TOT, 1) },
+  { day: '2026-05-29', at: '10:00', label: 'T+1 盘中·只买了一半', calc: { cash: 875000, hold: 125000 } },
+  { day: '2026-05-29', at: '21:05', label: 'T+1 晚·做了却忘了更新计算器', calc: hold(TOT, 0) },
+  { day: '2026-06-01', at: '10:00', label: 'T+2·仍然没做', calc: hold(TOT, 0) },
+  { day: '2026-06-02', at: '10:00', label: 'T+3·才想起来', calc: hold(TOT, 0) },
+  { day: '2026-06-02', at: '15:30', label: 'T+3·补做完', calc: hold(TOT, 1) },
+]);
 
 console.log(`\n${fails ? `✗ 全流程有 ${fails} 处问题` : '✓ T / T+1 / T+2 三条路径全程畅通，无错报'}\n`);
 process.exitCode = fails ? 1 : 0;

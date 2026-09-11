@@ -433,9 +433,14 @@ function behindState() {
   // 拿它当欠账，T 日晚上刚出信号就会被骂「实盘和账本对不上」，
   // 而那时候你根本无单可下。
   const ledgerTier = S.state.tier;
-  if (r.tier === ledgerTier) return null;
-
   const pendingTo = S.state.pending ? S.state.pending.tierTo : null;
+  // 两种情况都不算欠账：
+  //   ① 实盘和账本对得上；
+  //   ② 实盘已经做到挂单的落点 —— 那是**提前把今天这笔做完了**，做得对。
+  //      今晚 21:00 账本记完就自然对上了。若不豁免，面板会说「实盘和账本
+  //      对不上」，落差框还会让他把刚买的全卖回去 —— 一个彻底的反向操作。
+  if (r.tier === ledgerTier || r.tier === pendingTo) return null;
+
   const target = pendingTo === null ? ledgerTier : pendingTo;
   const cu = calcCatchUp(man.cash, man.hold, target);
   return {
@@ -507,13 +512,13 @@ function renderNext(behind) {
       + (nMissed ? '' : '<br>账本里没有对得上的漏做记录 —— 可能是持仓涨跌跨过了档位边界，也可能是计算器里的数字填错了。')
       + `<br>补完之后才会回到正常的信号节奏。详见下方「每份该是多少钱」。`;
   } else if (mv.kind === 'pending') {
-    // 方向以目标市值公式实际算出来的为准：涨多了的时候「加一档」也可能要卖。
-    // 横幅和推送都是这么定方向的，这里必须一致 —— 否则同一屏上两处说反。
-    let buy = mv.side === 'BUY';
-    if (M) {
-      const o0 = plannedOrder(M.V, M.cash, mv.to);
-      if (o0.side !== 'NONE') buy = o0.side === 'BUY';
-    }
+    // 方向跟着仓位箭头走：50% → 25% 就是卖，这是定义，任何时候都自洽。
+    //
+    // 不要拿理论账户的 plannedOrder 来定方向 —— 账本一旦有偏差，
+    // 就会出现「仓位 50% → 25%」配「买入第 1 份」这种自相矛盾的标题。
+    // 持仓漂移导致实际该反向操作时，由下方计算器按你的真实数字说了算，
+    // 横幅里那句「按你填的实盘数字应为 …… —— 以这个为准」也会亮出来。
+    const buy = mv.to > mv.from;
     card.classList.add(buy ? 'buy' : 'sell');
     const share = buy ? mv.to : mv.from;
     // 金额是按本金推算的估算值，实盘有偏差时它就不准 —— 只放副行当量级参考。
@@ -790,6 +795,15 @@ function calc() {
     setOut('已满仓，无需买入', `${basis}：两栏合计 ${money(r.total)}，${wTxt}，已经是<b>满仓 100%</b>`);
   } else if (!r.ok && r.reason === 'EMPTY') {
     setOut('已空仓，无可卖出', `${basis}：两栏合计 ${money(r.total)}，${wTxt}，已经是<b>空仓 0%</b>`);
+  } else if (r.side === 'NONE' || Math.round(r.amount) === 0) {
+    // 已经正好在目标仓位上 —— 常见于「提前把今天这笔做完了」。
+    // 这时绝不能按方向渲染成「卖出第 1 份 0 元」，那是句没有意义的话。
+    const pd = S.state.pending;
+    const pex = pd ? execInfo(pd.signalDate) : null;
+    setOut('已在目标仓位，无需操作',
+      `${basis}：两栏合计 ${money(r.total)}，${wTxt}，已经是目标仓位 <b>${posPct(r.to ?? S.state.tier)}</b>`
+      + (pd ? `<br>你已经把 ${posPct(pd.tierFrom)} → ${posPct(pd.tierTo)} 这笔做到位了，账本会在 `
+        + `<b class="nb">${pex.day ? pex.L.label : '执行日'}</b>当晚 21:00 记账，届时就对上了。` : ''));
   } else {
     const px = S.state.etf && S.state.etf.close;
     const sh = px ? shares(r.amount, px) : null;
@@ -836,6 +850,17 @@ function renderTiming(behind) {
     const p = S.state.pending;
     const ex = execInfo(p.signalDate);
     tb.className = 'timingbox live';
+    // 提前做完的人不该再被催一遍「需在 X 收盘前完成」
+    const man0 = LS.get('calc', null);
+    if (man0 && isFinite(man0.cash) && isFinite(man0.hold) && (man0.cash + man0.hold) > 0) {
+      const now0 = calcStep(man0.cash, man0.hold, true);
+      if (now0.tier === p.tierTo) {
+        tb.innerHTML = `✓ <b>这笔你已经做到位了</b>　信号出在 ${p.signalDate}，`
+          + `仓位 ${posPct(p.tierFrom)} → ${posPct(p.tierTo)} 已经达成。`
+          + `账本会在 <b class="nb">${ex.day ? ex.L.label : '执行日'}</b>当晚 21:00 记账，届时就对上了。`;
+        return;
+      }
+    }
     // 执行日已过还打绿色对勾 + 「本次要执行」，等于说「一切正常」，和「已过期」直接打架
     const late = ex.when === 'past';
     tb.innerHTML = (late
@@ -863,9 +888,11 @@ function renderMismatch(r, behind) {
   // 挂单还没到执行日就算「落后」的话，每一个正常触发日这里都会冤枉你一次；
   // behindState 上一轮已经改成这个判据，这个框当时漏了，两处必须一致。
   const ledgerTier = S.state.tier;
+  const pendTo = S.state.pending ? S.state.pending.tierTo : null;
   // 注意用 r.tier 而不是 r.ok：实盘空仓而账本要卖出时 calcStep 会返回
   // EMPTY（ok=false），但那恰恰是最需要补齐提示的时候。
-  if (r.tier !== undefined && r.tier !== ledgerTier) {
+  // 已经做到挂单落点的要豁免，否则会劝人把刚做完的那笔反向做掉。
+  if (r.tier !== undefined && r.tier !== ledgerTier && r.tier !== pendTo) {
     const cu = calcCatchUp(cash, hold, ledgerTier);
     const px = S.state.etf && S.state.etf.close;
     const behind = ledgerTier - r.tier;
