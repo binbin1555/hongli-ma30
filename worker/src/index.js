@@ -12,7 +12,7 @@
 
 import {
   ma, signal, nextTier, replay, plannedOrder, shares, triggers, auditLedger, beijingDate, nextTradingDay, validateState,
-  dayLabel, NO_EXEC_DATE, CLOSE_TIP,
+  dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct,
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
 
@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '21eb111738';
+const BUILD = 'f4c67f02fe';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -624,7 +624,7 @@ async function runDaily(env, { force = false } = {}) {
   if (executed) files.push({ path: 'data/ledger.json', content: JSON.stringify(ledger, null, 2) });
 
   const msg = executed
-    ? `${today} 成交 ${executed.side === 'BUY' ? '买入' : '卖出'} 第 ${executed.tierTo} 档`
+    ? `${today} 成交 ${executed.side === 'BUY' ? '买入' : '卖出'} 至 ${posPct(executed.tierTo)}`
     : pending ? `${today} 出信号 ${pending.side === 'BUY' ? '买入' : '卖出'} → ${execDay || '下一交易日'} 执行`
       : `${today} 无操作`;
   const sha = await G.commit(files, `chore(daily): ${msg}`);
@@ -685,7 +685,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
   const warn = checks.some((c) => !c.ok) ? `\n⚠️ ${checks.filter((c) => !c.ok).map((c) => c.name).join('、')}` : '';
   const doneLine = executed
     ? `\n已记账：${executed.date}（${dayLabel(executed.date, today).wd}）`
-      + `${executed.side === 'BUY' ? '买入' : '卖出'}，档位 ${executed.tierFrom}→${executed.tierTo}`
+      + `${executed.side === 'BUY' ? '买入' : '卖出'}，仓位 ${posPct(executed.tierFrom)}→${posPct(executed.tierTo)}`
       + `${executed.late ? '（迟到执行）' : ''}`
     : '';
 
@@ -701,7 +701,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
     const w = execWording(today, execDay);
     await bark(env, {
       title: `${isBuy ? '🔴 买入' : '🟢 卖出'}第 ${share} 份　${w.short}`,
-      body: `档位 ${pending.tierFrom}/5 → ${pending.tierTo}/5，目标仓位 ${WEIGHTS[pending.tierTo] * 100}%${est}`
+      body: `仓位 ${posPct(pending.tierFrom)} → ${posPct(pending.tierTo)}${est}`
         + `\n${w.long}`
         + `\n${CLOSE_TIP}`
         + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${doneLine}${warn}`,
@@ -727,8 +727,8 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
     const td = dayLabel(today, today);
     const nd = execDay ? dayLabel(execDay, today) : null;
     const title = executed
-      ? `✅ ${td.md}已成交　${newState.tier}/5 档`
-      : `红利MA30 · ${td.md}无操作　${newState.tier}/5 档`;
+      ? `✅ ${td.md}已成交　仓位 ${posPct(newState.tier)}`
+      : `红利MA30 · ${td.md}无操作　仓位 ${posPct(newState.tier)}`;
     const nextLine = nd
       ? `\n${nd.label}无需操作`
       : `\n${NO_EXEC_DATE}无需操作`;
@@ -800,7 +800,7 @@ async function remind(env) {
   const L = dayLabel(today, today);
   await bark(env, {
     title: `⏰ ${L.md}收盘前${isBuy ? '买入' : '卖出'}第 ${share} 份`,
-    body: `档位 ${p.tierFrom}/5 → ${p.tierTo}/5，目标仓位 ${WEIGHTS[p.tierTo] * 100}%${est}`
+    body: `仓位 ${posPct(p.tierFrom)} → ${posPct(p.tierTo)}${est}`
       + `\n信号出在 ${p.signalDate}，执行日就是 ${today}（${L.wd}）。`
       + `\n${CLOSE_TIP}`,
     level: 'timeSensitive',

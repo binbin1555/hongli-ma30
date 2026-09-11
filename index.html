@@ -198,8 +198,8 @@ tr:last-child td{border-bottom:none}
       </div>
     </div>
     <div class="card">
-      <p class="k">当前档位</p>
-      <p class="big"><span id="tierNum">–</span> <span style="font-size:19px;color:var(--dm)">/ 5 份</span></p>
+      <p class="k">当前仓位</p>
+      <p class="big"><span id="tierNum">–</span></p>
       <div class="pips" id="pips"></div>
     </div>
   </div>
@@ -261,9 +261,9 @@ tr:last-child td{border-bottom:none}
     <p class="k">交易记录（不可更改）</p>
     <div id="ledgerWarn" class="errbox" style="display:none"></div>
     <div class="tbox"><table id="ledger"><thead><tr>
-      <th>#</th><th>执行日</th><th>方向</th><th>档位</th><th>指数收盘</th><th>当时理论金额</th>
+      <th>#</th><th>执行日</th><th>方向</th><th>仓位</th><th>指数收盘</th><th>当时理论金额</th>
     </tr></thead><tbody></tbody></table></div>
-    <p class="note">账本只记录日期、指数收盘价和档位变化，这三样一经写入就锁死在 Git 提交历史里，
+    <p class="note">账本只记录日期、指数收盘价和仓位变化，这三样一经写入就锁死在 Git 提交历史里，
       与计算器里填什么无关。<br>
       「当时理论金额」是<b>事后推导</b>出来的：从你设的本金出发，按账本逐日重放到那一天，
       再套目标市值法算出的数。它回答的是「那天理论上该成交多少」，
@@ -295,9 +295,9 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = 'ee65ff1b87';
+const CORE_VERSION = 'e8e2cc6eb3';
 const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries, validateState,
-        nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, CLOSE_TIP, WEIGHTS, COMMISSION }
+        nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct, WEIGHTS, COMMISSION }
   = await import(`./shared/strategy.js?v=${CORE_VERSION}`);
 
 const $ = (id) => document.getElementById(id);
@@ -489,14 +489,14 @@ function renderNext(behind) {
     $('nextLine').innerHTML = head
       + (amt ? `，需一次性<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'} ${amt}</b>补到位` : '');
     const days = nMissed
-      ? behind.missed.map((e) => `${e.date} ${e.side === 'BUY' ? '买' : '卖'}${e.tierFrom}→${e.tierTo}`).join('　')
+      ? behind.missed.map((e) => `${e.date} ${e.side === 'BUY' ? '买' : '卖'}${posPct(e.tierFrom)}→${posPct(e.tierTo)}`).join('　')
       : '';
     // 账本已经记下的档位、和挂单要去的档位，是两件事，不能混成一个数字说
     const pendNote = behind.pendingTo !== null && behind.pendingTo !== behind.ledgerTier
-      ? `，加上挂单那一笔，目标 <b>${behind.target}/5</b> 档` : '';
-    $('nextSub').innerHTML = `实盘 <b>${behind.actualTier}/5</b> 档`
+      ? `，加上挂单那一笔，目标 <b>${posPct(behind.target)}</b>` : '';
+    $('nextSub').innerHTML = `实盘仓位 <b>${posPct(behind.actualTier)}</b>`
       + (buy ? '，低于' : '，高于')
-      + `账本的 <b>${behind.ledgerTier}/5</b> 档${pendNote}`
+      + `账本的 <b>${posPct(behind.ledgerTier)}</b>${pendNote}`
       + (sh ? `　·　约 ${money(sh)} 股` : '')
       + (days ? `<br>漏掉的记录：${days}（${nMissed} 笔合起来只需这一次调仓）` : '')
       + (nMissed ? '' : '<br>账本里没有对得上的漏做记录 —— 可能是持仓涨跌跨过了档位边界，也可能是计算器里的数字填错了。')
@@ -532,7 +532,7 @@ function renderNext(behind) {
     const ex = execInfo(st.pending.signalDate);
     $('nextLine').innerHTML = ex.leadHtml
       + `<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'}第 ${share} 份</b>`;
-    $('nextSub').innerHTML = `档位 <b>${mv.from}/5</b> → <b>${mv.to}/5</b>，目标仓位 ${WEIGHTS[mv.to] * 100}%`
+    $('nextSub').innerHTML = `仓位 <b>${posPct(mv.from)}</b> → <b>${posPct(mv.to)}</b>`
       + est + realLine
       + `<br>信号日 ${st.pending.signalDate}`
       + (ex.when === 'today' ? `　·　<b style="color:var(--up)"><span class="nb">${ex.L.md}</span>收盘前必须完成</b>`
@@ -573,7 +573,7 @@ function renderNext(behind) {
     // 档位在 0–4 之间时这一支到不了（0 档能买、4 档能卖），
     // 真到了这里说明状态不对劲，别只写一句「暂无」让人干瞪眼。
     $('nextLine').innerHTML = '<b>算不出下一步操作</b>';
-    $('nextSub').innerHTML = `当前档位 ${tier}/5 既不能加仓也不能减仓，这不正常。`
+    $('nextSub').innerHTML = `当前仓位 ${posPct(tier)} 既不能加仓也不能减仓，这不正常。`
       + `<br>请查看下方「系统自检」，或重开页面；若持续如此，说明状态文件需要人工核对。`;
   }
 
@@ -602,9 +602,9 @@ function renderBanner(behind) {
     // 写死「下一个交易日」会在 T+1 当天和顶部卡片的「今天收盘前」正面矛盾 ——
     // 横幅是最显眼的地方，时点必须跟着日期走。
     const bex = execInfo(st.pending.signalDate);
-    $('bKick').textContent = `触发 · ${bex.kick}　档位 ${st.pending.tierFrom}/5 → ${st.pending.tierTo}/5`;
+    $('bKick').textContent = `触发 · ${bex.kick}　仓位 ${posPct(st.pending.tierFrom)} → ${posPct(st.pending.tierTo)}`;
     const bShare = buy ? st.pending.tierTo : st.pending.tierFrom;
-    $('bText').textContent = `${buy ? '买入' : '卖出'}第 ${bShare} 份　目标仓位 ${WEIGHTS[st.pending.tierTo] * 100}%`;
+    $('bText').textContent = `${buy ? '买入' : '卖出'}第 ${bShare} 份　目标仓位 ${posPct(st.pending.tierTo)}`;
 
     // 这里的金额是按本金重放出来的理论值，推送里也是同一个数。
     // 如果你在计算器里填过真实数字且差得明显，必须以真实数字为准 ——
@@ -648,8 +648,10 @@ function render() {
   const M = accountMoney();
 
   // ---- 档位 ----
-  $('tierNum').textContent = tier;
-  $('pips').innerHTML = [0, 1, 2, 3, 4].map((k) => `<div class="pip${k < tier ? ' on' : ''}"></div>`).join('');
+  // 4 个圆点，不是 5 个：从空仓到满仓一共买 4 次，满仓时必须全亮。
+  // 原先画 5 个、按 k < tier 点亮，满仓时永远剩一个暗点，看着像「还能再买一次」。
+  $('tierNum').textContent = posPct(tier);
+  $('pips').innerHTML = [0, 1, 2, 3].map((k) => `<div class="pip${k < tier ? ' on' : ''}"></div>`).join('');
 
   // ---- 指数与均线（显示取整；后台计算仍用原值）----
   $('idxClose').textContent = int(i.close);
@@ -738,11 +740,11 @@ function calc() {
     const sh0 = px0 ? shares(behind.order.amount, px0) : null;
     const isBuy0 = behind.order.side === 'BUY';
     setOut(
-      `补齐 ${Math.abs(behind.gap)} 档　${isBuy0 ? '买入' : '卖出'} ${money(behind.order.amount)} 元`
+      `补齐到 ${posPct(behind.target)}　${isBuy0 ? '买入' : '卖出'} ${money(behind.order.amount)} 元`
         + (sh0 ? `　约 ${money(sh0)} 股` : ''),
-      `你实盘在 <b>${behind.actualTier}/5</b> 档，账本已到 <b>${behind.ledgerTier}/5</b> 档`
+      `你实盘仓位 <b>${posPct(behind.actualTier)}</b>，账本已到 <b>${posPct(behind.ledgerTier)}</b>`
         + (behind.pendingTo !== null && behind.pendingTo !== behind.ledgerTier
-          ? `，再加上挂单那一笔，目标 <b>${behind.target}/5</b> 档。` : '。')
+          ? `，再加上挂单那一笔，目标 <b>${posPct(behind.target)}</b>。` : '。')
         + `补完这一笔就对上了。`
         // 只有真的差不止一档时才提「一档一档补」——
         // 差一档时这个数就等于上面那个数，写出来只会让人以为是两笔
@@ -761,16 +763,16 @@ function calc() {
   }
   const wTxt = `红利占 ${(r.weight * 100).toFixed(1)}%`;
   if (!r.ok && r.reason === 'FULL') {
-    setOut('已满仓，无需买入', `按你填的数字：总资产 ${money(r.total)}，${wTxt}，相当于 <b>5/5</b> 档`);
+    setOut('已满仓，无需买入', `按你填的数字：总资产 ${money(r.total)}，${wTxt}，已经是<b>满仓 100%</b>`);
   } else if (!r.ok && r.reason === 'EMPTY') {
-    setOut('已空仓，无可卖出', `按你填的数字：总资产 ${money(r.total)}，${wTxt}，相当于 <b>0/5</b> 档`);
+    setOut('已空仓，无可卖出', `按你填的数字：总资产 ${money(r.total)}，${wTxt}，已经是<b>空仓 0%</b>`);
   } else {
     const px = S.state.etf && S.state.etf.close;
     const sh = px ? shares(r.amount, px) : null;
     const isBuy = r.side === 'BUY';
     setOut(
       `${isBuy ? '买入' : '卖出'}第 ${isBuy ? r.to : r.tier} 份　${money(r.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : ''),
-      `按你填的数字：总资产 ${money(r.total)}，${wTxt}，相当于 <b>${r.tier}/5</b> 档 → 目标 <b>${r.to}/5</b> 档（${r.targetWeight * 100}%）`
+      `按你填的数字：总资产 ${money(r.total)}，${wTxt}，相当于仓位 <b>${posPct(r.tier)}</b> → 目标 <b>${posPct(r.to)}</b>`
         + (px ? '' : '　·　暂无 ETF 报价，只给金额'),
       isBuy ? 'var(--up)' : 'var(--dn)');
   }
@@ -788,14 +790,14 @@ function renderTiming(behind) {
     // 顶部卡片上一轮已经改掉了，这里当时漏了，两处必须一致。
     const head = behind.missed.length
       ? `⚠ <b>你还欠着 ${behind.missed.length} 笔操作</b>　账本已经记账，实盘没跟上。`
-      : `⚠ <b>实盘仓位和账本对不上</b>　账本在 ${behind.ledgerTier}/5 档，你填的数字相当于 ${behind.actualTier}/5 档。`;
+      : `⚠ <b>实盘仓位和账本对不上</b>　账本在 ${posPct(behind.ledgerTier)}，你填的数字相当于 ${posPct(behind.actualTier)}。`;
     // 欠账的同时还挂着单时，执行日不能消失 ——
     // 你正是在这个板块算金额、照着它下单的，不知道哪天下就等于没说。
     const p0 = S.state.pending;
     if (p0 && behind.pendingTo !== behind.ledgerTier) {
       const ex0 = execInfo(p0.signalDate);
       tb.innerHTML = head
-        + `上面的金额已经把 ${p0.tierFrom}/5 → ${p0.tierTo}/5 那笔挂单一起算进去了，`
+        + `上面的金额已经把仓位 ${posPct(p0.tierFrom)} → ${posPct(p0.tierTo)} 那笔挂单一起算进去了，`
         + `请在 <b class="nb">${ex0.day ? ex0.L.label : NO_EXEC_DATE}</b>收盘前一次做完。${CLOSE_TIP}。`;
     } else {
       tb.innerHTML = head + `先把上面这笔补掉，再等下一次信号。`;
@@ -810,7 +812,7 @@ function renderTiming(behind) {
       + (ex.when === 'past'
         ? `原定 <span class="nb">${ex.L.label}</span>收盘前执行，时点已过`
         : `需在 <b class="nb">${ex.day ? ex.L.label : NO_EXEC_DATE}</b>收盘前完成`)
-      + `（档位 ${p.tierFrom}/5 → ${p.tierTo}/5）。${CLOSE_TIP}。`;
+      + `（仓位 ${posPct(p.tierFrom)} → ${posPct(p.tierTo)}）。${CLOSE_TIP}。`;
   } else {
     tb.className = 'timingbox';
     tb.innerHTML = `目前<b>尚未触发</b>，这是下次触发时的预估金额，${dl(bjToday())}不需要下单。`
@@ -838,16 +840,16 @@ function renderMismatch(r, behind) {
     if (cu.ok && cu.side !== 'NONE') {
       const csh = px ? shares(cu.amount, px) : null;
       const col = cu.side === 'BUY' ? 'var(--up)' : 'var(--dn)';
-      line = `<div class="cu"><span>一次补齐到账本 ${ledgerTier}/5 档</span>`
+      line = `<div class="cu"><span>一次补齐到账本的 ${posPct(ledgerTier)}</span>`
         + `<b style="color:${col}">${cu.side === 'BUY' ? '买入' : '卖出'} ${money(cu.amount)} 元`
         + (csh ? `　约 ${money(csh)} 股` : '') + `</b></div>`;
     }
     box.hidden = false;
     box.innerHTML = `<b>实盘${behind > 0 ? '落后' : '超前'}账本 ${Math.abs(behind)} 档。</b>`
-      + `按你填的数字你在 <b>${r.tier}/5</b> 档，`
+      + `按你填的数字你的仓位是 <b>${posPct(r.tier)}</b>，`
       + (S.state.pending
-          ? `账本今晚执行完会是 <b>${ledgerTier}/5</b> 档。`
-          : `账本记录的是 <b>${ledgerTier}/5</b> 档。`)
+          ? `账本今晚执行完会是 <b>${posPct(ledgerTier)}</b>。`
+          : `账本记录的是 <b>${posPct(ledgerTier)}</b>。`)
       + `<div class="cu"><span>只走一档（上面那个数字）</span><b>`
       + (r.ok ? `${money(r.amount)} 元` : (r.reason === 'FULL' ? '已满仓' : '已空仓，走不了')) + `</b></div>`
       + line
@@ -909,7 +911,7 @@ function renderLedger(M) {
   } else box.style.display = 'none';
 
   if (!es.length) {
-    tb.innerHTML = `<tr><td colspan="6" class="empty">还没有交易。账本从 ${S.ledger.launchDate} 起算，当前 ${S.state.tier}/5 档。</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="6" class="empty">还没有交易。账本从 ${S.ledger.launchDate} 起算，当前仓位 ${posPct(S.state.tier)}。</td></tr>`;
     return;
   }
   const amounts = new Map();
@@ -940,7 +942,7 @@ function renderLedger(M) {
     const amt = amounts.has(e.date) ? money(amounts.get(e.date)) : '设本金后显示';
     return `<tr><td>${e.seq}</td><td>${e.date}</td>`
       + `<td class="side" style="color:${buy ? 'var(--up)' : 'var(--dn)'}">${buy ? '买入 B' : '卖出 S'}</td>`
-      + `<td>${e.tierFrom} → ${e.tierTo}</td><td>${int(e.price)}</td><td>${amt}</td></tr>`;
+      + `<td>${posPct(e.tierFrom)} → ${posPct(e.tierTo)}</td><td>${int(e.price)}</td><td>${amt}</td></tr>`;
   }).join('');
 }
 

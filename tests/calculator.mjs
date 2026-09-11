@@ -119,7 +119,7 @@ for (const c of CASES) {
 
   // ---- 措辞对不对：没到执行日就不该说「欠着」----
   // 注意别误伤 CLOSE_TIP 里的「买太早会和账本对不上」，那是提示不是指责
-  const scolds = /你还欠着|笔操作还没做|实盘仓位和账本对不上/.test(timing) || /补齐 \d+ 档/.test(main);
+  const scolds = /你还欠着|笔操作还没做|实盘仓位和账本对不上/.test(timing) || /补齐到 /.test(main);
   if (scolds !== c.expectBehindWording) {
     bad(scolds
       ? `不该说成欠账（${c.why}）—— 时点行：「${timing}」`
@@ -139,6 +139,33 @@ for (const c of CASES) {
     if (!anywhere.includes('尾盘')) bad('有挂单却没给尾盘提示 —— 你不知道该几点下单');
   }
   console.log('');
+}
+
+/* ---------------- 仓位卡片：别再用分数 ---------------- */
+/*
+ * 原先写「N/5 档」，并画 5 个圆点按 k < tier 点亮 ——
+ * 满仓显示成「4/5 档」、永远剩一个暗点，看着像「还能再买一次」，
+ * 而那一次根本不存在（canBuy = tier < MAX_TIER，到 4 就买不动了）。
+ * 使用者据此问出「0 到 5 档分别对应多少钱」，说明它确实在误导人。
+ */
+console.log('\n================ 仓位卡片 ================\n');
+{
+  const chains = [[], [[40, 0, 1]], [[40, 0, 1], [30, 1, 2]], [[40, 0, 1], [30, 1, 2], [20, 2, 3]],
+    [[40, 0, 1], [35, 1, 2], [30, 2, 3], [25, 3, 4]]];
+  const want = ['0%', '25%', '50%', '75%', '100%'];
+  for (let t = 0; t <= 4; t++) {
+    put({ tier: t, chain: chains[t], index: at(6000, 6000) });
+    H.render();
+    const txt = el('tierNum').textContent.trim();
+    const dots = el('pips').innerHTML.match(/class="pip[^"]*"/g) || [];
+    const lit = dots.filter((d) => d.includes(' on')).length;
+    console.log(`  ${t} 档　卡片「${txt}」　圆点 ${dots.map((d) => (d.includes(' on') ? '●' : '○')).join('')}`);
+    if (txt !== want[t]) bad(`第 ${t} 档卡片显示「${txt}」，应为「${want[t]}」`);
+    if (dots.length !== 4) bad(`圆点画了 ${dots.length} 个，应为 4 个（空仓到满仓一共买 4 次）`);
+    if (lit !== t) bad(`第 ${t} 档亮了 ${lit} 个点，应为 ${t} 个`);
+    if (t === 4 && lit !== dots.length) bad('满仓时还有暗点 —— 会被读成「还能再买一次」');
+    if (/\d\s*\/\s*\d/.test(txt)) bad(`卡片又用回了分数：「${txt}」`);
+  }
 }
 
 console.log(`${fails ? `✗ ${fails} 处有问题` : '✓ 时间线全部正确'}\n`);

@@ -34,6 +34,9 @@ class El {
   appendChild() {}
   insertAdjacentHTML() {}
   querySelectorAll() { return []; }
+  // render() 里 renderLedger 要 $('ledger').querySelector('tbody')，
+  // 给每个元素挂一个惰性子节点，让整条 render 链在假 DOM 里也能跑通
+  querySelector(sel) { return (this._kids ||= {})[sel] ||= new El(sel); }
   addEventListener() {}
   getBoundingClientRect() { return { left: 0, top: 0, width: 880, height: 300 }; }
 }
@@ -71,7 +74,7 @@ if (!m) { console.log('✗ index.html 里找不到 <script type="module">'); pro
 export const CORE_URL = pathToFileURL(join(ROOT, 'shared', 'strategy.js')).href;
 const src = m[1].replace('`./shared/strategy.js?v=', `\`${CORE_URL}?v=`)
   + '\nglobalThis.__H = { get S() { return S; }, set S(v) { S = v; },'
-  + ' renderInputDependent, execInfo, behindState, nextMove, calc, LS };\n';
+  + ' renderInputDependent, render, execInfo, behindState, nextMove, calc, LS };\n';
 const tmp = join(tmpdir(), `hlma30-harness-${process.pid}.mjs`);
 writeFileSync(tmp, src, 'utf8');
 await import(pathToFileURL(tmp).href);
