@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '26dc12c6e6';
+const BUILD = 'c0b3878af4';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -955,6 +955,35 @@ export default {
         if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
         return json(await keepAlive(ctx, runDaily(env, { force: url.searchParams.get('force') === '1' })));
       }
+      /**
+       * 通道测试：只发一条推送，什么都不写。
+       *
+       * 这套系统唯一的输出通道就是推送，可它失败时又没法用推送告诉你 ——
+       * 所以必须有个办法在不碰账本的前提下问一句「通道还通吗」。
+       *
+       * ?wait=N 让它先等 N 秒再发推送（上限 25）。用来验 waitUntil：
+       * 你把 curl 的超时设得比 N 小，连接断在推送之前；推送要是照样到了，
+       * 就证明「触发器超时断开也不会掐断运行」这条修复真的生效了 ——
+       * 这正是 2026-09-11 漏发的那个根因。
+       */
+      if (path === '/ping') {
+        if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
+        const wait = Math.min(25, Math.max(0, +url.searchParams.get('wait') || 0));
+        const started = beijingStamp();
+        const p = (async () => {
+          if (wait) await new Promise((r) => setTimeout(r, wait * 1000));
+          return bark(env, {
+            title: '🔔 红利MA30 · 通道测试',
+            body: `这是一条测试推送，不是操作提醒。\n发起 ${started}`
+              + (wait ? `\n服务端故意等了 ${wait} 秒才发 —— 你要是在这之前就断开了连接而它仍然到达，`
+                + '说明「触发器超时也不会掐断运行」已经修好。' : '')
+              + '\n账本、状态文件都没有被改动。',
+            level: 'active',
+          });
+        })();
+        const r = await keepAlive(ctx, p);
+        return json({ ok: !!(r && r.ok), waited: wait, startedAt: started, reason: r && r.reason });
+      }
       if (path === '/remind') {
         if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
         return json(await keepAlive(ctx, remind(env)));
@@ -963,7 +992,7 @@ export default {
         if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
         return json(await keepAlive(ctx, refreshCalendar(env)));
       }
-      return json({ ok: false, error: '未知路径', paths: ['/run', '/remind', '/calendar/refresh', '/health'] }, 404);
+      return json({ ok: false, error: '未知路径', paths: ['/run', '/remind', '/calendar/refresh', '/ping', '/health'] }, 404);
     } catch (e) {
       await bark(env, {
         title: '❌ 红利MA30 · 运行异常',
