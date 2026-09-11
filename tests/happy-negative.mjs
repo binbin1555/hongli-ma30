@@ -49,11 +49,19 @@ const MUTANTS = [
     "body = `现在还做不了 —— 这笔要等到 <b>${bex.L.label}</b>收盘前。`",
     "body = `无论点不点，系统都已按规则把这笔操作写进不可更改的记录。`", 'banners'],
   ['又只剩最新那一条', 'page',
-    'for (const it of todo.slice(0, MAX_BANNERS)) box.appendChild(oneBanner(it, M));',
-    'for (const it of todo.slice(0, 1)) box.appendChild(oneBanner(it, M));', 'banners'],
+    'for (const it of todo.slice(0, MAX_BANNERS)) {',
+    'for (const it of todo.slice(0, 1)) {', 'banners'],
   ['点一条把别条也收了', 'page',
     'LS.set(`ack.${item.signalDate}`, canDo ? true : bjToday());\n    renderInputDependent();',
     '(S.ledger.entries || []).forEach((e) => LS.set(`ack.${e.signalDate}`, true));\n    LS.set(`ack.${item.signalDate}`, canDo ? true : bjToday());\n    renderInputDependent();', 'banners'],
+
+  // —— 「不点就不消失」这条铁律 ——
+  ['建好之前先清空', 'page', 'box.replaceChildren(...built);', 'box.replaceChildren();', 'banner-persistence'],
+  ['坏记录被无声吞掉', 'page',
+    "catch (e) { pushNotice(built, '这笔读不出来', it.signalDate, e); }", 'catch (e) { /* 吞掉 */ }', 'banner-persistence'],
+  ['重复信号日不合并', 'page',
+    'if (seen.has(it.signalDate)) { dup.push(it.signalDate); continue; }',
+    'if (seen.has(it.signalDate) && false) { dup.push(it.signalDate); continue; }', 'banner-persistence'],
 
   // —— 卡片与算法 ——
   ['买入金额漏算手续费', 'core', '(target - V) / (1 + w * c)', '(target - V)', 'happy'],

@@ -756,7 +756,6 @@ function acked(signalDate) {
  */
 function renderBanner(behind) {
   const box = $('banners');
-  box.replaceChildren();
   const M = accountMoney();
   const entries = S.ledger.entries || [];
 
@@ -766,11 +765,64 @@ function renderBanner(behind) {
   for (const e of [...entries].reverse()) {
     items.push({ signalDate: e.signalDate, tierFrom: e.tierFrom, tierTo: e.tierTo, date: e.date, done: true });
   }
-  const todo = items.filter((it) => !acked(it.signalDate));
 
-  for (const it of todo.slice(0, MAX_BANNERS)) box.appendChild(oneBanner(it, M));
+  // 一个信号日只可能对应一笔操作（一天最多走一档）。真出现两笔就是账本坏了。
+  // 而它们共用同一个确认标记 —— 排成两条的话，点一条会连带把另一条收掉，
+  // 在你眼里就是「我没点的那条自己消失了」。所以合并成一条，另行报警。
+  const seen = new Set(), dup = [], uniq = [];
+  for (const it of items) {
+    if (seen.has(it.signalDate)) { dup.push(it.signalDate); continue; }
+    seen.add(it.signalDate); uniq.push(it);
+  }
+  const todo = uniq.filter((it) => !acked(it.signalDate));
+
+  // 先全部建好，最后一次性换上去。
+  // 原先是先清空、再边建边挂 —— 中途任何一笔抛错，整片横幅就此消失，
+  // 而页面其余部分看着一切正常。那是最危险的一种坏法：你以为今天没事，
+  // 其实是提醒被抹掉了。实测一笔坏记录就能抹掉全部 8 条。
+  const built = [];
+  for (const it of todo.slice(0, MAX_BANNERS)) {
+    try { built.push(oneBanner(it, M)); }
+    catch (e) { pushNotice(built, '这笔读不出来', it.signalDate, e); }
+  }
   const rest = todo.slice(MAX_BANNERS);
-  if (rest.length) box.appendChild(rollupBanner(rest));
+  if (rest.length) {
+    try { built.push(rollupBanner(rest)); }
+    catch (e) { pushNotice(built, '更早那几笔读不出来', rest[0] && rest[0].signalDate, e); }
+  }
+  if (dup.length) pushNotice(built, '账本里有重复记录', dup.join('、'), null);
+  box.replaceChildren(...built);
+}
+
+/**
+ * 出了岔子时顶上的那条。
+ * 按钮只收起当天 —— 数据没修好之前，它明天还会回来，
+ * 绝不让一次点击把一个读不出来的操作永久藏掉。
+ */
+function pushNotice(built, title, what, err) {
+  // 这条也认确认标记，否则点完下一瞬就又回来了
+  if (acked(`notice.${title}.${what}`)) return;
+  const bn = document.createElement('div');
+  bn.className = 'bn';
+  const bm = document.createElement('div');
+  bm.className = 'bm';
+  const kick = document.createElement('p'); kick.className = 'bk';
+  const text = document.createElement('p'); text.className = 'bt';
+  const sub = document.createElement('p'); sub.className = 'bs';
+  kick.textContent = '数据有问题';
+  text.textContent = title;
+  sub.innerHTML = (what ? `涉及信号日 <b>${what}</b>。` : '')
+    + '这条不是操作提醒，是在告诉你账本读出来不对劲。'
+    + '请到下方「交易记录（不可更改）」核对，并在 GitHub 的提交历史里回看上一版 ledger.json。'
+    + (err ? `<br>技术细节：${String(err.message || err).slice(0, 120)}` : '')
+    + `<br>按钮只收起 ${md(bjToday())} 这一天，数据没修好之前它还会回来。`;
+  bm.appendChild(kick); bm.appendChild(text); bm.appendChild(sub);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = '知道了';
+  btn.onclick = () => { LS.set(`notice.${title}.${what}`, bjToday()); renderInputDependent(); };
+  bn.appendChild(bm); bn.appendChild(btn);
+  built.push(bn);
 }
 
 /** 一条横幅 */
