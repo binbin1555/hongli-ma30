@@ -45,19 +45,25 @@ body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-
 .pill:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 .pill.ok{color:var(--dn)} .pill.bad{color:var(--up)} .pill.warn{color:var(--warn)}
 
-/* 触发横幅 */
-#banner{display:none;background:var(--up);color:#fff;border-radius:12px;padding:24px 22px;
+/* 触发横幅：没确认的操作有几笔就排几条，各自一个按钮 */
+#banners{display:flex;flex-direction:column;gap:12px}
+#banners:empty{display:none}
+.bn{display:flex;background:var(--up);color:#fff;border-radius:12px;padding:24px 22px;
   gap:16px;align-items:center;flex-wrap:wrap;box-shadow:0 6px 24px rgba(214,60,72,.32)}
-#banner.on{display:flex}
-#banner.sell{background:var(--dn);box-shadow:0 6px 24px rgba(14,155,96,.32)}
-#banner .bm{flex:1 1 280px;min-width:0}
-#banner .bk{font-size:11.5px;letter-spacing:.16em;margin:0 0 6px;opacity:.9}
-#banner .bt{font-size:clamp(26px,6.4vw,40px);font-weight:700;margin:0;line-height:1.16;letter-spacing:-.02em}
-#banner .bs{font-size:12.5px;margin:10px 0 0;opacity:.92;line-height:1.55;max-width:48ch}
-#banner button{font-family:inherit;font-size:16px;font-weight:700;padding:15px 34px;border-radius:8px;
+.bn.sell{background:var(--dn);box-shadow:0 6px 24px rgba(14,155,96,.32)}
+.bn .bm{flex:1 1 280px;min-width:0}
+.bn .bk{font-size:11.5px;letter-spacing:.16em;margin:0 0 6px;opacity:.9}
+.bn .bt{font-size:clamp(26px,6.4vw,40px);font-weight:700;margin:0;line-height:1.16;letter-spacing:-.02em}
+.bn .bs{font-size:12.5px;margin:10px 0 0;opacity:.92;line-height:1.55;max-width:48ch}
+.bn button{font-family:inherit;font-size:16px;font-weight:700;padding:15px 34px;border-radius:8px;
   border:none;background:#fff;color:var(--up);cursor:pointer;flex:none}
-#banner.sell button{color:var(--dn)}
-#banner button:focus-visible{outline:3px solid #fff;outline-offset:3px}
+.bn.sell button{color:var(--dn)}
+.bn button:focus-visible{outline:3px solid #fff;outline-offset:3px}
+/* 第一条是眼下要做的那笔，留足分量；下面几条是「你做了吗」的回头确认，
+   同样大的字连排四条会糊成一堵墙，收一号 */
+.bn:not(:first-child){padding:16px 20px}
+.bn:not(:first-child) .bt{font-size:clamp(19px,4.4vw,26px)}
+.bn:not(:first-child) button{font-size:14px;padding:11px 24px}
 
 /* 下一次操作 —— 页面的主角 */
 #nextCard{background:var(--pan);border-radius:14px;padding:30px 26px;
@@ -184,14 +190,8 @@ tr:last-child td{border-bottom:none}
     <button class="pill" id="healthPill" type="button">加载中…</button>
   </div>
 
-  <div id="banner">
-    <div class="bm">
-      <p class="bk" id="bKick">触发 · 执行日以面板为准</p>
-      <p class="bt" id="bText">—</p>
-      <p class="bs" id="bSub"></p>
-    </div>
-    <button type="button" id="bDone">已完成</button>
-  </div>
+  <!-- 每一笔没确认的操作各占一条，上下排开，各有各的按钮 -->
+  <div id="banners"></div>
 
   <div id="nextCard">
     <p class="k">下一次操作</p>
@@ -737,49 +737,77 @@ function renderNext(behind) {
  * 两种状态共用同一个确认标记（挂单和成交记录的 signalDate 是同一个），
  * 所以执行前点过「已完成」，执行后不会再问一遍。
  */
+/** 一次最多排几条；再多就并成一条汇总，免得整页变成一堵横幅墙 */
+const MAX_BANNERS = 5;
+
+/** 这笔确认过了没。ack 存 true 是永久收起，存某一天则只收起那一天 */
+function acked(signalDate) {
+  const v = LS.get(`ack.${signalDate}`, false);
+  return v === true || v === bjToday();
+}
+
+/**
+ * 需要你确认的操作，有几笔就排几条，各有各的按钮。
+ *
+ * 原先只有一条横幅、永远只显示最新那笔 —— 连着触发时，早先那笔的确认
+ * 按钮从此再也不出现，只在末尾留一句「另有 N 笔没确认过」，而那个数
+ * 你无论如何都清不掉（实测：两笔都做完、能点的都点了，它还挂在那）。
+ * 现在点哪条收哪条，没点的一直留着。
+ */
 function renderBanner(behind) {
-  const st = S.state;
+  const box = $('banners');
+  box.replaceChildren();
   const M = accountMoney();
-  const bn = $('banner');
   const entries = S.ledger.entries || [];
-  const last = entries.length ? entries[entries.length - 1] : null;
 
-  // 需要你确认的那一笔：优先还没执行的，其次是最近一笔已记账的
-  const item = st.pending
-    ? { ...st.pending, done: false }
-    : last
-      ? { signalDate: last.signalDate, tierFrom: last.tierFrom, tierTo: last.tierTo, date: last.date, done: true }
-      : null;
-  const ackKey = item ? `ack.${item.signalDate}` : null;
+  // 待办排最前 —— 那是眼下要做的事；其余按信号日从新到旧
+  const items = [];
+  if (S.state.pending) items.push({ ...S.state.pending, done: false });
+  for (const e of [...entries].reverse()) {
+    items.push({ signalDate: e.signalDate, tierFrom: e.tierFrom, tierTo: e.tierTo, date: e.date, done: true });
+  }
+  const todo = items.filter((it) => !acked(it.signalDate));
 
-  if (!item || LS.get(ackKey, false)) { bn.classList.remove('on'); return; }
+  for (const it of todo.slice(0, MAX_BANNERS)) box.appendChild(oneBanner(it, M));
+  const rest = todo.slice(MAX_BANNERS);
+  if (rest.length) box.appendChild(rollupBanner(rest));
+}
 
-  // 方向跟着仓位箭头走（定义如此，任何时候自洽）；金额仍按理论账户估
+/** 一条横幅 */
+function oneBanner(item, M) {
+  const st = S.state;
   const buy = item.tierTo > item.tierFrom;
+  const share = buy ? item.tierTo : item.tierFrom;
+  const posArrow = `仓位 ${posPct(item.tierFrom)} → ${posPct(item.tierTo)}`;
+  const bex = item.done ? null : execInfo(item.signalDate);
+  // 执行日还没到 = 此刻什么都做不了。这时候按钮绝不能叫「已完成」：
+  // 照字面点下去，会把真正该下单那天的提醒一起关掉（实测会）。
+  const canDo = item.done || bex.when !== 'future';
+
+  const bn = document.createElement('div');
+  bn.className = 'bn' + (buy ? '' : ' sell');
+  const bm = document.createElement('div');
+  bm.className = 'bm';
+  const kick = document.createElement('p'); kick.className = 'bk';
+  const text = document.createElement('p'); text.className = 'bt';
+  const sub = document.createElement('p'); sub.className = 'bs';
+
+  if (item.done) {
+    kick.textContent = `${dayLabel(item.date, bjToday()).label}已按收盘价记账　${posArrow}`;
+    text.textContent = `${buy ? '买入' : '卖出'}第 ${share} 份　你做了吗？`;
+  } else {
+    kick.textContent = `触发 · ${bex.kick}　${posArrow}`;
+    text.textContent = `${buy ? '买入' : '卖出'}第 ${share} 份`;
+  }
+
+  // 金额按理论账户估；实盘数字差得明显时以计算器为准
   let estTxt = '';
   if (M) {
     const o = plannedOrder(M.V, M.cash, item.tierTo);
     const sh = st.etf && st.etf.close ? shares(o.amount, st.etf.close) : null;
-    estTxt = o.side === 'NONE' ? '' : `估算约 ${money(o.amount)} 元` + (sh ? `（约 ${money(sh)} 股）` : '')
-      + '，按本金推算';
+    estTxt = o.side === 'NONE' ? '' : `估算约 ${money(o.amount)} 元`
+      + (sh ? `（约 ${money(sh)} 股）` : '') + '，按本金推算';
   }
-  bn.classList.add('on'); bn.classList.toggle('sell', !buy);
-
-  const posArrow = `仓位 ${posPct(item.tierFrom)} → ${posPct(item.tierTo)}`;
-  if (item.done) {
-    const dl = dayLabel(item.date, bjToday());
-    $('bKick').textContent = `${dl.label}已按收盘价记账　${posArrow}`;
-    $('bText').textContent = `${buy ? '买入' : '卖出'}第 ${buy ? item.tierTo : item.tierFrom} 份　你做了吗？`;
-    $('bDone').textContent = '我做了';
-  } else {
-    const bex = execInfo(item.signalDate);
-    $('bKick').textContent = `触发 · ${bex.kick}　${posArrow}`;
-    $('bText').textContent = `${buy ? '买入' : '卖出'}第 ${buy ? item.tierTo : item.tierFrom} 份`;
-    $('bDone').textContent = '已完成';
-  }
-
-  // 计算器里填过真实数字、且和理论值差得明显时，必须以真实数字为准 ——
-  // 照着理论值下单会买错量。
   const man = typedCalc();
   let realNote = '';
   if (man && (man.cash + man.hold) > 0 && M) {
@@ -791,22 +819,68 @@ function renderBanner(behind) {
         + `${money(rr.amount)} 元 —— 以这个为准。</b>上面是按本金推算的理论值。<br>`;
     }
   }
-  const nxDay = item.done ? nextTradingDay(S.cal, bjToday() > item.date ? bjToday() : item.date) : null;
-  // 还有几笔更早的也没确认过？一并说一声，免得只盯着最新这条
-  const older = entries.filter((e) => e.signalDate !== item.signalDate && !LS.get(`ack.${e.signalDate}`, false)).length;
 
-  $('bSub').innerHTML = (estTxt ? estTxt + '，下单以下方计算器为准。<br>' : '')
-    + realNote
-    + (item.done
-      // 补做金额取决于你**真实**的持仓，理论账户早就执行过了、算出来是 0，
-      // 所以这里不能说「照上面的金额补」—— 上面根本没有金额。
-      ? '系统已按规则把这笔写进不可更改的记录，但它<b>看不到你券商里的真实成交</b>。'
-        + '做了就点「我做了」，这条会一直挂着直到你点它；'
-        + `没做的话，${nxDay ? `请在 ${dayLabel(nxDay, bjToday()).label}尾盘补上` : '请在下一个交易日尾盘补上（交易日历取不到，给不出具体日期）'}`
-        + ' —— 到下方「每份该是多少钱」填入你的真实持仓，它会算出该补多少。'
-      : '点「已完成」把这条收起来。<b>无论点不点，系统都已按规则把这笔操作写进不可更改的记录。</b>')
-    + (older ? `<br>另有 ${older} 笔更早的操作也没确认过。` : '');
-  $('bDone').onclick = () => { LS.set(ackKey, true); bn.classList.remove('on'); };
+  let body;
+  if (item.done) {
+    // 补做金额取决于你**真实**的持仓，理论账户早就执行过了、算出来是 0，
+    // 所以这里不能说「照上面的金额补」—— 上面根本没有金额。
+    const nxDay = nextTradingDay(S.cal, bjToday() > item.date ? bjToday() : item.date);
+    body = '系统已按规则把这笔写进不可更改的记录，但它<b>看不到你券商里的真实成交</b>。'
+      + '做了就点「我做了」，这条会一直挂着直到你点它；'
+      + `没做的话，${nxDay ? `请在 ${dayLabel(nxDay, bjToday()).label}尾盘补上` : '请在下一个交易日尾盘补上（交易日历取不到，给不出具体日期）'}`
+      + ' —— 到下方「每份该是多少钱」填入你的真实持仓，它会算出该补多少。';
+  } else if (canDo) {
+    // 记账是按规则记的，跟你有没有真去下单无关 —— 这是警告，不是安慰。
+    // 「当晚」必须挨着具体日期，否则一张放了一夜的页面上它指的是哪一晚全靠猜。
+    const evening = bex.L ? `${bex.L.md}当晚 21:00` : '执行日当晚 21:00（交易日历取不到，给不出具体日期）';
+    body = '做完点「已完成」，这条才收起；不点它会一直挂着。'
+      + `<b>系统会在 ${evening} 按规则把这笔写进不可更改的记录 —— 不管你有没有真的下单</b>，所以别漏做。`;
+  } else {
+    // 执行日还没到。原先这里写「无论点不点，系统都已把这笔写进不可更改的
+    // 记录」—— 那时账本里一笔都没有，纯属假话，还会让人以为不用管了。
+    body = `现在还做不了 —— 这笔要等到 <b>${bex.L.label}</b>收盘前。`
+      + `点「知道了」只收起今天，到了 ${bex.L.md} 它会再出现提醒你。`
+      + `<br><b>那天晚上 21:00 系统会按规则把这笔写进不可更改的记录 —— 不管你有没有真的下单</b>，所以别漏做。`;
+  }
+  sub.innerHTML = (estTxt ? estTxt + '，下单以下方计算器为准。<br>' : '') + realNote + body;
+
+  bm.appendChild(kick); bm.appendChild(text); bm.appendChild(sub);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = item.done ? '我做了' : canDo ? '已完成' : '知道了';
+  btn.onclick = () => {
+    LS.set(`ack.${item.signalDate}`, canDo ? true : bjToday());
+    renderInputDependent();
+  };
+  bn.appendChild(bm); bn.appendChild(btn);
+  return bn;
+}
+
+/** 攒太多时的汇总条 —— 可以一次确认掉，但绝不替你悄悄收起 */
+function rollupBanner(rest) {
+  const bn = document.createElement('div');
+  bn.className = 'bn';
+  const bm = document.createElement('div');
+  bm.className = 'bm';
+  const kick = document.createElement('p'); kick.className = 'bk';
+  const text = document.createElement('p'); text.className = 'bt';
+  const sub = document.createElement('p'); sub.className = 'bs';
+  const days = rest.map((r) => dayLabel(r.date || r.signalDate, bjToday()).md).join('、');
+  kick.textContent = '更早的操作';
+  text.textContent = `还有 ${rest.length} 笔没确认`;
+  sub.innerHTML = `分别是 ${days}。这些都已按规则写进不可更改的记录。`
+    + '<br>都做过了就点「这些我都做了」一次收起；'
+    + '拿不准的话，到下方「交易记录（不可更改）」逐笔对一遍你的券商流水。';
+  bm.appendChild(kick); bm.appendChild(text); bm.appendChild(sub);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = '这些我都做了';
+  btn.onclick = () => {
+    rest.forEach((r) => LS.set(`ack.${r.signalDate}`, true));
+    renderInputDependent();
+  };
+  bn.appendChild(bm); bn.appendChild(btn);
+  return bn;
 }
 
 /**

@@ -17,6 +17,7 @@ class El {
   constructor(id = '') {
     this.id = id; this._t = ''; this._h = ''; this.value = '';
     this.dataset = {}; this.style = {}; this.clientWidth = 880;
+    this.tagName = ''; this.children = [];
     this.classes = new Set();
     this.classList = {
       add: (...c) => c.forEach((x) => this.classes.add(x)),
@@ -25,18 +26,36 @@ class El {
       contains: (c) => this.classes.has(c),
     };
   }
-  set textContent(v) { this._t = String(v); this._h = ''; }
-  get textContent() { return this._h ? this._h.replace(/<br\s*\/?>/g, ' ⏎ ').replace(/<[^>]*>/g, '') : this._t; }
-  set innerHTML(v) { this._h = String(v); this._t = ''; }
+  // 真的挂上子节点。原先 appendChild 是空操作 —— 代码只要改成
+  // 「建元素再挂上去」，测试就什么都看不见，还一路绿灯。
+  appendChild(c) { this.children.push(c); c.parentNode = this; return c; }
+  replaceChildren(...cs) { this.children = []; cs.forEach((c) => this.appendChild(c)); }
+  set className(v) { this.classes = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get className() { return [...this.classes].join(' '); }
+  set textContent(v) { this._t = String(v); this._h = ''; this.children = []; }
+  get textContent() {
+    if (this.children.length) return this.children.map((c) => c.textContent).join('　');
+    return this._h ? this._h.replace(/<br\s*\/?>/g, ' ⏎ ').replace(/<[^>]*>/g, '') : this._t;
+  }
+  set innerHTML(v) { this._h = String(v); this._t = ''; this.children = []; }
   get innerHTML() { return this._h; }
+  /** 只认得 .class、tag、tag.class —— 够用就行，别把假 DOM 写成真 DOM */
+  matches(sel) {
+    const m = String(sel).match(/^([a-z]*)(?:\.([\w-]+))?$/i);
+    if (!m) return false;
+    return (!m[1] || this.tagName === m[1].toUpperCase()) && (!m[2] || this.classes.has(m[2]));
+  }
+  queryAll(sel, out = []) {
+    for (const c of this.children) { if (c.matches(sel)) out.push(c); c.queryAll(sel, out); }
+    return out;
+  }
   setAttribute(k, v) { this[k] = v; }
   getAttribute(k) { return this[k]; }
-  appendChild() {}
   insertAdjacentHTML() {}
-  querySelectorAll() { return []; }
-  // render() 里 renderLedger 要 $('ledger').querySelector('tbody')，
-  // 给每个元素挂一个惰性子节点，让整条 render 链在假 DOM 里也能跑通
-  querySelector(sel) { return (this._kids ||= {})[sel] ||= new El(sel); }
+  querySelectorAll(sel) { return this.queryAll(sel); }
+  // 先找真的子节点；找不到再退回惰性子节点 ——
+  // renderLedger 要 $('ledger').querySelector('tbody')，那条链没有真节点
+  querySelector(sel) { return this.queryAll(sel)[0] || ((this._kids ||= {})[sel] ||= new El(sel)); }
   // 真的存下监听器：本金输入这类交互只有点得动才测得了
   addEventListener(type, fn) { (this._ls ||= {})[type] = [...(this._ls?.[type] || []), fn]; }
   click() {
@@ -55,7 +74,7 @@ export const store = new Map();
 globalThis.document = {
   getElementById: el,
   querySelector: () => el('__q'),
-  createElement: () => new El(),
+  createElement: (tag) => { const e = new El(); e.tagName = String(tag).toUpperCase(); return e; },
   documentElement: { setAttribute() {}, removeAttribute() {} },
   body: new El('body'),
   addEventListener() {},
@@ -99,6 +118,22 @@ await new Promise((r) => setTimeout(r, 60));   // 等 load() 把真实数据读�
 
 export const H = globalThis.__H;
 if (!H || !H.S || !H.S.state) { console.log('✗ 页面模块没能加载出数据'); process.exit(1); }
+
+/**
+ * 当前排着的横幅，从上到下。
+ * 横幅从一条变成一列之后，测试不能再去摸 bKick/bText 这些 id ——
+ * 它们已经不存在了，摸到的是空字符串，断言会一路绿灯却什么都没验。
+ */
+export const banners = () => el('banners').children.map((b) => ({
+  el: b,
+  sell: b.classes.has('sell'),
+  kick: (b.queryAll('.bk')[0] || {}).textContent?.replace(/\s+/g, ' ').trim() || '',
+  text: (b.queryAll('.bt')[0] || {}).textContent?.replace(/\s+/g, ' ').trim() || '',
+  sub: (b.queryAll('.bs')[0] || {}).textContent?.replace(/\s+/g, ' ').trim() || '',
+  btn: b.queryAll('button')[0],
+}));
+/** 横幅整屏的文字，用来做「这一屏提到了什么」这类检查 */
+export const bannerText = () => banners().map((b) => `${b.kick}　${b.text}　${b.sub}　[${b.btn.textContent}]`).join('\n');
 
 export const BASE = JSON.parse(JSON.stringify(H.S.state));
 export const CAL = H.S.cal;

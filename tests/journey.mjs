@@ -28,7 +28,7 @@ const goto = (day, hhmm) => {
   FAKE = Date.parse(`${day}T00:00:00Z`) + (h - 8) * 3600000 + m * 60000;
 };
 
-const { H, el, store, ROOT, CORE, ROWS, CAL, fractionsIn } = await import('./harness.mjs');
+const { H, el, store, ROOT, CORE, ROWS, CAL, fractionsIn, banners } = await import('./harness.mjs');
 const { ma, signal, nextTier, triggers, WEIGHTS, MA_LEN, orderAmount, COMMISSION, posPct } = CORE;
 
 let fails = 0;
@@ -139,9 +139,13 @@ function show(state, ledger, calc) {
 
 /** 打印这一刻面板上的全部操作相关文字 */
 function panel() {
-  const on = el('banner').classList.contains('on');
+  const bs = banners();
+  const on = bs.length > 0;
   const out = {
-    横幅: on ? `${el('bKick').textContent}｜${el('bText').textContent}` : null,
+    横幅: on ? bs.map((b) => `${b.kick}｜${b.text}`).join(' ∥ ') : null,
+    // 最上面那条才是「眼下要做的那笔」。下面几条是早先记过账、等你回头确认的，
+    // 它们的方向和日期本来就可能和挂单不同 —— 拿它们去比一致性是冤枉人。
+    横幅首: on ? `${bs[0].kick}｜${bs[0].text}` : null,
     卡片: el('nextLine').textContent.trim(),
     卡片副: el('nextSub').textContent.trim(),
     仓位: el('tierNum').textContent.trim(),
@@ -220,7 +224,7 @@ function verify(tag, state, ledger, calc, todayStr) {
       if (p.卡片.includes('（今天') !== isToday) {
         say(`执行日 ${execDay}，今天 ${todayStr}，卡片${isToday ? '没说' : '却说'}「今天」：「${p.卡片}」`);
       }
-      if (p.横幅 && p.横幅.includes('（今天') !== isToday) say(`横幅与卡片的「今天」不一致：「${p.横幅}」`);
+      if (p.横幅首 && p.横幅首.includes('（今天') !== isToday) say(`横幅与卡片的「今天」不一致：「${p.横幅首}」`);
     }
     if (calc && userTier === pend.tierTo) {
       if (!/已经做到位/.test(p.时点)) say(`已提前做到位，时点行还在催「${p.时点.slice(0, 26)}…」`);
@@ -261,7 +265,7 @@ function verify(tag, state, ledger, calc, todayStr) {
   //     「仓位 50% → 25%」配「买入第 1 份」是自相矛盾，读的人只会懵。
   if (pend && owed === 0) {
     const arrowBuy = pend.tierTo > pend.tierFrom;
-    for (const [where, txt] of [['卡片', p.卡片], ['横幅', p.横幅]]) {
+    for (const [where, txt] of [['卡片', p.卡片], ['横幅', p.横幅首]]) {
       if (!txt) continue;
       if (/买入第/.test(txt) && !arrowBuy) say(`${where}说「买入」，但仓位是 ${posPct(pend.tierFrom)} → ${posPct(pend.tierTo)}：「${txt}」`);
       if (/卖出第/.test(txt) && arrowBuy) say(`${where}说「卖出」，但仓位是 ${posPct(pend.tierFrom)} → ${posPct(pend.tierTo)}：「${txt}」`);
@@ -288,8 +292,9 @@ function verify(tag, state, ledger, calc, todayStr) {
   if (ledgerTier <= 0 && !pend && /距离下一次卖出/.test(p.卡片)) say('已空仓却提示还要卖出');
 
   // 7b. 这几个元素是用 textContent 写的，塞标签进去会把 <b> 原样印在页面上
-  for (const [nm, id] of [['计算器主行', 'oMain'], ['仓位卡片', 'tierNum'], ['横幅大字', 'bText'], ['横幅顶行', 'bKick']]) {
-    const t = el(id).textContent;
+  const tagChecks = [['计算器主行', el('oMain').textContent], ['仓位卡片', el('tierNum').textContent],
+    ...banners().flatMap((b, k) => [[`第${k + 1}条横幅大字`, b.text], [`第${k + 1}条横幅顶行`, b.kick]])];
+  for (const [nm, t] of tagChecks) {
     if (/<[a-zA-Z/]/.test(t)) say(`${nm}里漏出了 HTML 标签（该元素用 textContent 写）：「${t.slice(0, 48)}」`);
   }
 
@@ -462,9 +467,9 @@ const p1c = panel();
 // 它撑到你亲口确认为止，这样忘了做也不会静悄悄过去
 if (!p1c.横幅) bad('这笔已记账但还没确认，横幅该留下来追问一句');
 if (p1c.横幅 && !/你做了吗/.test(p1c.横幅)) bad(`记账后横幅没改口追问：「${p1c.横幅}」`);
-el('bDone').click();          // 你点了「我做了」
+banners()[0].btn.click();     // 你点了「我做了」
 H.render();
-if (el('banner').classList.contains('on')) bad('点过「我做了」，横幅仍不收起');
+if (banners().length) bad('点过「我做了」，横幅仍不收起');
 if (/欠着|还没做|对不上|补齐/.test(`${p1c.卡片}${p1c.时点}${p1c.算主}`)) {
   bad(`按时做完了却仍提示欠账：卡片「${p1c.卡片}」时点「${p1c.时点}」`);
 }
@@ -941,7 +946,7 @@ console.log('\n  ── 状态文件损坏时列出的问题');
  */
 console.log('\n\n═════════════ 交互序列 ═════════════');
 
-const bannerOn = () => el('banner').classList.contains('on');
+const bannerOn = () => banners().length > 0;
 
 /* ① 「已完成」按钮的跨日行为 */
 console.log('\n【点「已完成」之后】');
@@ -971,7 +976,7 @@ console.log('\n【点「已完成」之后】');
   console.log(`  T 日晚打开　　　　　　横幅 ${bannerOn() ? '显示' : '收起'}`);
   if (!bannerOn()) bad('[已完成] T 日晚横幅没显示');
 
-  el('bDone').onclick();
+  banners()[0].btn.onclick();
   console.log(`  点「已完成」　　　　　横幅 ${bannerOn() ? '显示' : '收起'}`);
   if (bannerOn()) bad('[已完成] 点了按钮横幅还在');
 

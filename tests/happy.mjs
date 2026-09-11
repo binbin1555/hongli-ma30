@@ -23,7 +23,7 @@ const goto = (day, hhmm) => {
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-const { H, el, store, ROOT, ROWS, CAL, CORE, fractionsIn } = await import('./harness.mjs');
+const { H, el, store, ROOT, ROWS, CAL, CORE, fractionsIn, banners } = await import('./harness.mjs');
 const { ma, signal, nextTier, triggers, orderAmount, WEIGHTS, MA_LEN, COMMISSION, posPct } = CORE;
 
 let fails = 0;
@@ -90,8 +90,8 @@ function type(cash, hold) {
 }
 
 const view = () => ({
-  横幅: el('banner').classList.contains('on')
-    ? `${el('bKick').textContent.trim()}｜${el('bText').textContent.trim()}｜按钮「${el('bDone').textContent.trim()}」`
+  横幅: banners().length
+    ? banners().map((b) => `${b.kick}｜${b.text}｜按钮「${b.btn.textContent}」`).join(' ∥ ')
     : null,
   卡片: el('nextLine').textContent.trim(),
   仓位: el('tierNum').textContent.trim(),
@@ -126,8 +126,8 @@ function assertReset(typed, where) {
  * 计算器只管算，不许把自己的状态漏到页面别处去。
  */
 const outside = () => [
-  el('banner').classList.contains('on') ? 'on' : 'off',
-  el('bKick').textContent, el('bText').textContent, el('bSub').textContent, el('bDone').textContent,
+  `横幅 ${banners().length} 条`,
+  ...banners().map((b) => `${b.kick}|${b.text}|${b.sub}|${b.btn.textContent}`),
   el('nextLine').textContent, el('nextSub').textContent,
   el('tierNum').textContent, el('pips').innerHTML,
   el('pnl').textContent, el('pnlCum').textContent, el('pnlTot').textContent,
@@ -221,20 +221,22 @@ show(view());
 console.log(`\n${'═'.repeat(60)}\n横幅只管盯 —— 连刷三次、跨一天，不点就不消失\n${'═'.repeat(60)}`);
 for (const [d, t] of [[T1, '21:10'], [T1, '23:00'], [T2, '09:00']]) {
   await refresh(d, t);
-  const on = el('banner').classList.contains('on');
+  const on = banners().length > 0;
   console.log(`  ${d} ${t}　横幅 ${on ? '仍在' : '不见了'}`);
   if (!on) bad(`${d} ${t} 没点确认，横幅却消失了`);
 }
 okline('三次刷新 + 跨日，横幅都还在');
 
 console.log('\n  ── 点一下「我做了」');
-el('bDone').click();
-console.log(`    点完：横幅 ${el('banner').classList.contains('on') ? '还在' : '收起'}`);
-if (el('banner').classList.contains('on')) bad('点了确认横幅还不收');
+// 横幅数量不对时要给出断言失败，不能让测试崩掉 —— 崩掉就看不出是哪条坏了
+if (!banners().length) bad('该有一条横幅可点，实际一条都没有');
+else banners()[0].btn.click();
+console.log(`    点完：横幅 ${banners().length ? '还在' : '收起'}`);
+if (banners().length) bad('点了确认横幅还不收');
 
 await refresh(T2, '09:05');
-console.log(`    再刷新：横幅 ${el('banner').classList.contains('on') ? '又冒出来了' : '仍然收起'}`);
-if (el('banner').classList.contains('on')) bad('确认过的那笔，刷新后横幅又冒出来了');
+console.log(`    再刷新：横幅 ${banners().length ? '又冒出来了' : '仍然收起'}`);
+if (banners().length) bad('确认过的那笔，刷新后横幅又冒出来了');
 else okline('确认一次就永久收起');
 
 /* ---------------- T+2 日 ---------------- */

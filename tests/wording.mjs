@@ -75,7 +75,7 @@ function relativeOffenders(text) {
 /* ---------------- 共享测试台 ---------------- */
 // DOM 假件、抠模块、造场景的工具都在 harness.mjs 里，和 calculator.mjs 共用。
 // 别在这里再写一份 —— 两份迟早分家（calc 曾经因此一直拿 0 在算）。
-import { H, el, store, ROOT, CAL, TODAY, CORE, put, at, pend, SIG, fractionsIn } from './harness.mjs';
+import { H, el, store, ROOT, CAL, TODAY, CORE, put, at, pend, SIG, fractionsIn, banners } from './harness.mjs';
 
 const S_pendingNow = () => !!(H && H.S && H.S.state && H.S.state.pending);
 
@@ -110,10 +110,11 @@ for (const [name, over] of SCEN) {
   H.renderInputDependent();
   const line = el('nextLine').textContent.trim();
   const sub = el('nextSub').textContent.trim();
-  const kick = el('bKick').textContent.trim();
-  const btxt = el('bText').textContent.trim();
-  const bsub = el('bSub').textContent.trim();
-  const on = el('banner').classList.contains('on');
+  const bs = banners();
+  const on = bs.length > 0;
+  const kick = bs.map((b) => b.kick).join(' ∥ ');
+  const btxt = bs.map((b) => b.text).join(' ∥ ');
+  const bsub = bs.map((b) => b.sub).join(' ∥ ');
   const behind = H.behindState();
 
   console.log(`【${name}】`);
