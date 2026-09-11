@@ -285,6 +285,7 @@ tr:last-child td{border-bottom:none}
         <button class="setbtn" id="pBtn" type="button">设置</button>
       </div>
     </div>
+    <p id="staleWarn" hidden class="errbox"></p>
     <p id="pushWarn" hidden class="errbox"></p>
     <div class="checks" id="checks"></div>
     <p class="note" id="dataNote">–</p>
@@ -422,6 +423,31 @@ const nextMove = () => nextMoveFn(S.state.index, S.state.tier, S.state.pending);
  * 实盘是否落后于账本。
  * 只有你在计算器里真的填过数字才判定 —— 默认值就是账本推算值，永远不会误报。
  */
+/**
+ * 数据落后了几个交易日。
+ *
+ * 系统每个交易日 21:00 跑一次，所以任何时刻 asof 都应该是
+ * 「最近一个已经过了 21:00 的交易日」。落后就说明有运行没跑成 ——
+ * 而这是最凶险的一种坏法：面板照常显示，胶囊还是绿的「校验 10/10 通过」，
+ * 你完全看不出系统其实已经死了。推送也不会来，但「没收到」这件事
+ * 人是不会主动察觉的。
+ */
+function staleDays() {
+  if (!S.cal || !S.cal.length || !S.state.asof) return 0;
+  const today = bjToday();
+  const hh = +beijingStamp1().slice(11, 13);
+  const due = S.cal.filter((d) => d < today || (d === today && hh >= 21));
+  if (!due.length) return 0;
+  const want = S.cal.indexOf(due[due.length - 1]);
+  const have = S.cal.indexOf(S.state.asof);
+  if (want < 0 || have < 0) return 0;
+  return Math.max(0, want - have);
+}
+/** 北京时间的「YYYY-MM-DD HH:MM」，只用来取小时 */
+function beijingStamp1() {
+  return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ');
+}
+
 function behindState() {
   const man = LS.get('calc', null);
   if (!man || !isFinite(man.cash) || !isFinite(man.hold)) return null;
@@ -462,6 +488,20 @@ function behindState() {
  * 卡片叫「下一次操作」，只写一边容易被读成「方向已经定了」——
  * 把另一边的触发点也写出来，才不会在反向走的时候措手不及。
  */
+/**
+ * 「破了线却没挂单」的解释。
+ * 数据只是没跑完和系统已经停了两周，是完全不同的两件事 ——
+ * 对停了两周的人说「稍等再刷新」，等于把他按在原地。
+ */
+function staleNote(st) {
+  const s = staleDays();
+  return s >= 2
+    ? `<br><b>数据已经 ${s} 个交易日没更新了</b>（停在 ${md(st.asof)}），所以这里看不到新挂单。`
+      + `这不是「再等等」能解决的，请看下方「设置与数据健康」。`
+    : `<br>若 ${md(st.asof)} 21:00 的运行还没跑完，稍等再刷新；`
+      + `若已过 ${md(st.asof)} 22:00 仍是这样，请看下方「设置与数据健康」。`;
+}
+
 function otherSide(kind, tier, i) {
   if (kind === 'buy' && tier > 0) {
     const need = Math.max(0, (i.sellTrigger - i.close) / i.close * 100);
@@ -557,8 +597,7 @@ function renderNext(behind) {
       $('nextLine').innerHTML = `${dl(st.asof)}收盘已跌破买入线，<b style="color:var(--up)">但还没生成挂单</b>`;
       $('nextSub').innerHTML = `${md(st.asof)}（${wd(st.asof)}）收盘 <b>${int(i.close)}</b> 已在买入线 <b>${int(i.buyTrigger)}</b> 之下`
         + `　·　按规则应挂单买入第 ${tier + 1} 份`
-        + `<br>若 ${md(st.asof)} 21:00 的运行还没跑完，稍等再刷新；`
-        + `若已过 ${md(st.asof)} 22:00 仍是这样，请看下方「设置与数据健康」。`;
+        + staleNote(st);
     } else {
       $('nextLine').innerHTML = `距离下一次买入，还需中证红利<b style="color:var(--up)">跌 ${mv.need.toFixed(2)}%</b>`;
       $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　买入第 <b>${tier + 1}</b> 份（仓位 ${posPct(tier)} → ${posPct(tier + 1)}）`
@@ -573,8 +612,7 @@ function renderNext(behind) {
       $('nextLine').innerHTML = `${dl(st.asof)}收盘已涨破卖出线，<b style="color:var(--dn)">但还没生成挂单</b>`;
       $('nextSub').innerHTML = `${md(st.asof)}（${wd(st.asof)}）收盘 <b>${int(i.close)}</b> 已在卖出线 <b>${int(i.sellTrigger)}</b> 之上`
         + `　·　按规则应挂单卖出第 ${tier} 份`
-        + `<br>若 ${md(st.asof)} 21:00 的运行还没跑完，稍等再刷新；`
-        + `若已过 ${md(st.asof)} 22:00 仍是这样，请看下方「设置与数据健康」。`;
+        + staleNote(st);
     } else {
       $('nextLine').innerHTML = `距离下一次卖出，还需中证红利<b style="color:var(--dn)">涨 ${mv.need.toFixed(2)}%</b>`;
       $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　卖出第 <b>${tier}</b> 份（仓位 ${posPct(tier)} → ${posPct(tier - 1)}）`
@@ -850,6 +888,15 @@ function renderTiming(behind) {
     const p = S.state.pending;
     const ex = execInfo(p.signalDate);
     tb.className = 'timingbox live';
+    // 连金额都还算不出来时（本金没设、两栏是空的），不能指着一个不存在的
+    // 数字说「这就是本次要执行的金额」。
+    const c0 = num($('inCash').value), h0 = num($('inHold').value);
+    if (!(c0 + h0 > 0)) {
+      tb.innerHTML = `⚠ <b>这笔要在 <span class="nb">${ex.day ? ex.L.label : '执行日'}</span>收盘前做</b>　`
+        + `信号出在 ${p.signalDate}，仓位 ${posPct(p.tierFrom)} → ${posPct(p.tierTo)}。`
+        + `先在上面填入你的可用资金和已持有红利，才能算出该下多少钱。${CLOSE_TIP}。`;
+      return;
+    }
     // 提前做完的人不该再被催一遍「需在 X 收盘前完成」
     const man0 = LS.get('calc', null);
     if (man0 && isFinite(man0.cash) && isFinite(man0.hold) && (man0.cash + man0.hold) > 0) {
@@ -1005,7 +1052,10 @@ function renderLedger(M) {
     const amt = amounts.has(e.date) ? money(amounts.get(e.date)) : '设本金后显示';
     return `<tr><td>${e.seq}</td><td>${e.date}</td>`
       + `<td class="side" style="color:${buy ? 'var(--up)' : 'var(--dn)'}">${buy ? '买入 B' : '卖出 S'}</td>`
-      + `<td>${posPct(e.tierFrom)} → ${posPct(e.tierTo)}</td><td>${int(e.price)}</td><td>${amt}</td></tr>`;
+      + `<td>${posPct(e.tierFrom)} → ${posPct(e.tierTo)}`
+      // 迟到成交要标出来：拖过了 T+1，成交价和账本记的理论价差得更远
+      + (e.late ? `<br><span style="color:var(--up);font-size:11px">迟到成交（信号 ${e.signalDate}）</span>` : '')
+      + `</td><td>${int(e.price)}</td><td>${amt}</td></tr>`;
   }).join('');
 }
 
@@ -1181,11 +1231,24 @@ function renderHealth() {
       + `这意味着即使触发了买卖信号，你手机上也收不到通知。请检查 Cloudflare 里的 BARK_KEY 是否还有效。`;
   } else pw.hidden = true;
 
-  const ok = !neverRan && failed.length === 0 && !pushBad;
+  // 数据停更比任何一项校验失败都严重：校验说的是「上次跑的那次对不对」，
+  // 而停更说的是「根本没再跑过」。两者都绿着才算健康。
+  const stale = staleDays();
+  const sw = $('staleWarn');
+  if (stale >= 2) {
+    sw.hidden = false;
+    sw.innerHTML = `<b>数据已经 ${stale} 个交易日没有更新了。</b>`
+      + `面板上的指数、仓位、触发点位全部停在 ${S.state.asof}，不是最新的。<br>`
+      + `这通常意味着每日运行没跑成（Cloudflare 的 cron 停了、GitHub 令牌过期、或数据源持续失败）。`
+      + `在修好之前，<b>不要照这个页面下单</b> —— 信号可能早就变了。`;
+  } else sw.hidden = true;
+
+  const ok = !neverRan && failed.length === 0 && !pushBad && stale < 2;
   pill.textContent = neverRan ? '等待首次运行'
+    : stale >= 2 ? `数据停更 ${stale} 个交易日`
     : pushBad ? '推送失败'
     : ok ? `校验 ${c.passed}/${c.total} 通过` : `校验 ${c.passed}/${c.total}　${failed.length} 项未过`;
-  pill.className = 'pill ' + (neverRan ? 'warn' : ok ? 'ok' : 'bad');
+  pill.className = 'pill ' + (neverRan || stale >= 2 ? 'bad' : ok ? 'ok' : 'bad');
   pill.onclick = () => $('checks').scrollIntoView({ behavior: 'smooth', block: 'center' });
 
   const names = {

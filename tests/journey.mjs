@@ -86,12 +86,23 @@ function workerRun(dayIdx, prev, ledger, launchDate = LAUNCH) {
   return { state, executed, pending, sig, close, ma30 };
 }
 
+/**
+ * 页面的 onCalcInput 会先用 num() 清洗再存 localStorage —— 它只留数字和小数点，
+ * 负号会被吃掉。测试必须走同一套清洗，否则断言拿原始值去算，
+ * 会测出一个现实中不存在的"不一致"。
+ */
+const cleanCalc = (c) => {
+  const f = (v) => Number(String(v).replace(/[^\d.]/g, '')) || 0;
+  return { cash: f(c.cash), hold: f(c.hold) };
+};
+
 /** 把状态装进面板并渲染 */
 function show(state, ledger, calc) {
   if (calc) {
-    store.set('hlma30.calc', JSON.stringify(calc));
-    el('inCash').value = String(calc.cash);
-    el('inHold').value = String(calc.hold);
+    const cc = cleanCalc(calc);
+    store.set('hlma30.calc', JSON.stringify(cc));
+    el('inCash').value = String(cc.cash);
+    el('inHold').value = String(cc.hold);
   } else {
     store.delete('hlma30.calc');
     el('inCash').value = '';
@@ -443,6 +454,12 @@ function verify(tag, state, ledger, calc, todayStr) {
     if (p.落差) say(`已提前做到位，落差框却让人反向操作：「${p.落差.slice(0, 40)}…」`);
   }
 
+  // 6e. 没有金额可算时，不许指着不存在的数字说「这就是本次要执行的金额」
+  if (/先填可用资金|两栏加起来要大于 0/.test(p.算主 + p.算副)
+      && /这就是本次要执行的金额/.test(p.时点)) {
+    say(`计算器还没有数字（「${p.算主}」），时点行却说「这就是本次要执行的金额」`);
+  }
+
   // 7. 封顶封底：满仓不提买入，空仓不提卖出
   if (ledgerTier >= 4 && !pend && /距离下一次买入/.test(p.卡片)) say('已满仓却提示还要买入');
   if (ledgerTier <= 0 && !pend && /距离下一次卖出/.test(p.卡片)) say('已空仓却提示还要卖出');
@@ -498,7 +515,7 @@ async function walk(name, tDate, startTier, startChain, visits) {
     show(snap.state, snap.ledger, v.calc ?? null);
     const tag = `${name} · ${v.label}`;
     console.log(`  ── ${v.label}（${v.day} ${at}　面板数据截至 ${snap.state.asof}）`);
-    const pp = verify(tag, snap.state, snap.ledger, v.calc ?? null, v.day);
+    const pp = verify(tag, snap.state, snap.ledger, v.calc ? cleanCalc(v.calc) : null, v.day);
     if (v.expect) v.expect(pp, (m) => bad(`[${tag}] ${m}`));
   }
   return states;
@@ -550,6 +567,119 @@ await walk('用户行为变体', '2026-05-28', 0, [], [
   { day: '2026-06-02', at: '10:00', label: 'T+3·才想起来', calc: hold(TOT, 0) },
   { day: '2026-06-02', at: '15:30', label: 'T+3·补做完', calc: hold(TOT, 1) },
 ]);
+
+/* ==================================================================== */
+/*
+ * 边缘但真实的状态：新用户还没设本金、ETF 报价取不到、封顶封底、
+ * 系统漏跑一天、周末打开面板、系统彻底停跑、计算器乱填。
+ * 这些都不是「假设」——前两条此刻线上就是。
+ */
+console.log('\n\n═════════════ 边缘状态 ═════════════');
+
+/** 直接摆一个状态渲染，不走状态机 */
+function raw(label, { tier, pending, chain = [], asof, day, at = '10:00', calc, etf = { code: '515180', close: ETF_PX, asof: null, stale: false }, principal = PRINCIPAL, ledgerExtra = [], checks }) {
+  const i0 = SERIES.findIndex((r) => r.d === asof);
+  const launch = SERIES[i0 - 40].d;
+  const led = {
+    schema: 1, launchDate: launch,
+    entries: chain.map(([k, f, t], n) => ({
+      seq: n + 1, date: SERIES[i0 - k].d, signalDate: SERIES[i0 - k - 1].d,
+      side: t > f ? 'BUY' : 'SELL', tierFrom: f, tierTo: t, targetWeight: WEIGHTS[t],
+      price: SERIES[i0 - k].c, etfPrice: ETF_PX, late: false, recordedAt: `${SERIES[i0 - k].d} 21:00:45`,
+    })).concat(ledgerExtra),
+  };
+  const close = SERIES[i0].c;
+  const ma30 = ma(SERIES.slice(0, i0 + 1).map((r) => r.c), MA_LEN);
+  const tg = triggers(close, ma30);
+  const state = {
+    schema: 1, launchDate: launch, asof, lastRun: `${asof} 21:00:45`, tier, pending: pending ?? null,
+    index: {
+      code: 'H00922', close: +close.toFixed(2), ma30: +ma30.toFixed(2), ratio: +tg.ratio.toFixed(4),
+      changePct: 0.2, buyTrigger: +tg.buyAt.toFixed(2), sellTrigger: +tg.sellAt.toFixed(2),
+      pctToBuy: +tg.pctToBuy.toFixed(2), pctToSell: +tg.pctToSell.toFixed(2),
+    },
+    bond: { code: 'H11001', close: SERIES[i0].b },
+    etf: etf ? { ...etf, asof: etf.asof ?? asof } : null,
+    checks: checks ?? { passed: 10, total: 10, failed: [], ranAt: `${asof} 21:00:45` },
+  };
+  store.set('hlma30.principal', String(principal));
+  goto(day, at);
+  show(state, led, calc ?? null);
+  console.log(`\n  ── ${label}（今天 ${day} ${at}　数据截至 ${asof}）`);
+  const pp = verify(label, state, led, calc ? cleanCalc(calc) : null, day);
+  pp.胶囊 = el('healthPill').textContent.trim();
+  pp.陈旧告警 = el('staleWarn').hidden === true ? null : el('staleWarn').textContent.trim();
+  console.log(`    胶囊　　　 ${pp.胶囊}`);
+  if (pp.陈旧告警) console.log(`    陈旧告警　 ${pp.陈旧告警}`);
+  store.set('hlma30.principal', String(PRINCIPAL));
+  return pp;
+}
+
+const A = '2026-05-28', A1 = '2026-05-29';
+const pendBuy = { signalDate: A, tierFrom: 0, tierTo: 1, side: 'BUY' };
+
+// ① 新用户第一天：还没设本金，却已经出了信号
+raw('新用户·本金未设置 + 有挂单', { tier: 0, pending: pendBuy, asof: A, day: A1, principal: 0 });
+
+// ② ETF 报价取不到（线上此刻就是这个状态）
+raw('ETF 报价取不到', { tier: 0, pending: pendBuy, asof: A, day: A1, calc: hold(TOT, 0),
+  etf: { code: '515180', close: null, asof: null, stale: true },
+  checks: { passed: 9, total: 10, failed: [{ id: 8, name: 'ETF 报价日期与指数一致', detail: '未取到 ETF 报价' }], ranAt: `${A} 21:00:45` } });
+
+// ③ 封顶：已满仓，指数继续跌
+raw('已满仓·指数继续跌', { tier: 4, chain: [[40, 0, 1], [35, 1, 2], [30, 2, 3], [25, 3, 4]], asof: A, day: A1, calc: hold(TOT, 4) });
+
+// ④ 封底：已空仓，指数继续涨
+raw('已空仓·指数继续涨', { tier: 0, chain: [], asof: '2026-01-26', day: '2026-01-27', calc: hold(TOT, 0) });
+
+// ⑤ 周末打开面板：数据停在周五，今天是周日
+raw('周末打开面板', { tier: 1, chain: [[40, 0, 1]], asof: A1, day: '2026-05-31', at: '09:00', calc: hold(TOT, 1) });
+
+// ⑥ 系统彻底停跑：数据停在两周前
+{
+  const r = raw('系统停跑两周', { tier: 1, chain: [[40, 0, 1]], asof: A, day: '2026-06-15', calc: hold(TOT, 1) });
+  if (!r.陈旧告警) bad('[系统停跑两周] 数据停了 11 个交易日，却没有任何陈旧告警');
+  if (/通过/.test(r.胶囊)) bad(`[系统停跑两周] 系统已经停跑，健康胶囊却还显示「${r.胶囊}」`);
+  if (/稍等再刷新/.test(r.卡片副)) bad('[系统停跑两周] 停了两周还在说「稍等再刷新」');
+}
+// 正常当天不该误报陈旧
+{
+  const r = raw('数据正常（当天下午）', { tier: 1, chain: [[40, 0, 1]], asof: A1, day: A1, at: '14:00', calc: hold(TOT, 1) });
+  if (r.陈旧告警) bad(`[数据正常] 当天下午却报了陈旧：「${r.陈旧告警.slice(0, 30)}…」`);
+  if (!/通过/.test(r.胶囊)) bad(`[数据正常] 一切正常，胶囊却是「${r.胶囊}」`);
+}
+
+// ⑦ 挂单迟到执行：系统漏跑，T 的挂单拖到 T+2 才记
+{
+  const i0 = SERIES.findIndex((r) => r.d === '2026-06-01');
+  raw('挂单迟到执行（系统漏跑一天）', {
+    tier: 1, chain: [], asof: '2026-06-01', day: '2026-06-02', calc: hold(TOT, 1),
+    ledgerExtra: [{
+      seq: 1, date: '2026-06-01', signalDate: '2026-05-28', side: 'BUY',
+      tierFrom: 0, tierTo: 1, targetWeight: WEIGHTS[1], price: SERIES[i0].c,
+      etfPrice: ETF_PX, late: true, recordedAt: '2026-06-01 21:00:45',
+    }],
+  });
+  const tb = el('ledger').querySelector('tbody').innerHTML.replace(/<[^>]*>/g, ' ');
+  console.log(`    交易记录：${tb.replace(/\s+/g, ' ').trim().slice(0, 90)}`);
+  if (!/迟到/.test(tb)) {
+    bad('[挂单迟到执行] 账本里 late=true，交易记录却完全看不出这笔是迟到成交的');
+  }
+}
+
+// ⑧ 计算器乱填
+console.log('\n  ── 计算器异常输入');
+for (const [label, c] of [
+  ['只填可用资金', { cash: 1000000, hold: 0 }],
+  ['只填已持有', { cash: 0, hold: 1000000 }],
+  ['两栏都是 0', { cash: 0, hold: 0 }],
+  ['负数', { cash: -5000, hold: 100000 }],
+  ['极小本金（1 万）', { cash: 10000, hold: 0 }],
+  ['正好卡在四舍五入边界 12.5%', { cash: 875000, hold: 125000 }],
+  ['正好卡在四舍五入边界 37.5%', { cash: 625000, hold: 375000 }],
+]) {
+  raw(`乱填·${label}`, { tier: 0, pending: pendBuy, asof: A, day: A1, calc: c });
+}
 
 console.log(`\n${fails ? `✗ 全流程有 ${fails} 处问题` : '✓ T / T+1 / T+2 三条路径全程畅通，无错报'}\n`);
 process.exitCode = fails ? 1 : 0;
