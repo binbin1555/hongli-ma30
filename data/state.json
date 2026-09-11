@@ -1,43 +1,38 @@
 {
   "schema": 1,
   "launchDate": "2026-09-10",
-  "asof": "2026-09-10",
-  "lastRun": "2026-09-10 21:00:45",
+  "asof": "2026-09-11",
+  "lastRun": "2026-09-11 21:00:37",
   "tier": 0,
   "pending": null,
   "index": {
     "code": "H00922",
-    "close": 12304.81,
-    "ma30": 12095.43,
-    "ratio": 1.0173,
-    "changePct": -0.67,
-    "buyTrigger": 11732.57,
-    "sellTrigger": 12337.34,
-    "pctToBuy": -4.65,
-    "pctToSell": 0.26
+    "close": 12094.98,
+    "ma30": 12097.21,
+    "ratio": 0.9998,
+    "changePct": -1.71,
+    "buyTrigger": 11734.29,
+    "sellTrigger": 12339.15,
+    "pctToBuy": -2.98,
+    "pctToSell": 2.02
   },
   "bond": {
     "code": "H11001",
-    "close": 267.45
+    "close": 267.39
   },
   "etf": {
     "code": "515180",
-    "close": null,
-    "asof": null,
-    "stale": true
+    "close": 1.435,
+    "asof": "2026-09-11",
+    "stale": false
   },
   "checks": {
-    "passed": 7,
-    "total": 8,
-    "failed": [
-      {
-        "id": 8,
-        "name": "ETF 报价日期与指数一致",
-        "detail": "未取到 ETF 报价"
-      }
-    ],
-    "ranAt": "2026-09-10 21:00:45"
+    "passed": 10,
+    "total": 10,
+    "failed": [],
+    "ranAt": "2026-09-11 21:00:37"
   },
   "consecutiveTradingDays": 0,
-  "lastExecuted": null
+  "lastExecuted": null,
+  "push": null
 }
