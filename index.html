@@ -295,7 +295,7 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = 'e8e2cc6eb3';
+const CORE_VERSION = 'ff05a573b8';
 const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries, validateState,
         nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct, WEIGHTS, COMMISSION }
   = await import(`./shared/strategy.js?v=${CORE_VERSION}`);

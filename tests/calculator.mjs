@@ -103,7 +103,7 @@ for (const c of CASES) {
     if (!isFinite(shown)) {
       bad(`主行里读不出金额：「${main}」`);
     } else if (Math.abs(shown - want.amount) > 1) {
-      bad(`金额不对：显示 ${shown}，按目标市值法补到 ${c.target}/5 档应为 ${Math.round(want.amount)}`);
+      bad(`金额不对：显示 ${shown}，按目标市值法补到 ${CORE.posPct(c.target)} 应为 ${Math.round(want.amount)}`);
     }
     const saysBuy = main.includes('买入');
     if (saysBuy !== (want.side === 'BUY')) {
@@ -114,7 +114,7 @@ for (const c of CASES) {
       bad(`目标档位不对：behindState 给的是 ${behind ? behind.target : '无'}，应为 ${c.target}`);
     }
     if (!c.expectBehindWording && behind) {
-      bad(`实盘和账本对得上（都在 ${behind.ledgerTier}/5 档），不该判成欠账`);
+      bad(`实盘和账本对得上（都在 ${CORE.posPct(behind.ledgerTier)}），不该判成欠账`);
     }
   }
 
