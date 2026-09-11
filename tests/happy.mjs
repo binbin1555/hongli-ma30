@@ -110,18 +110,28 @@ const show = (o) => {
 };
 
 /**
- * 「刷新就重置」到底该重置成什么：
- * 你亲手打的数字必须消失（localStorage 里不留），两个框回到账本按当前
- * 行情现算出来的值 —— 那个值每次加载都重算，不会隔夜变味。
+ * 「刷新就重置」的定义：两个框变成空白，localStorage 里一个字不留。
+ * 不再替你填账本推算值 —— 框里出现你没打过的数字，本身就是个误会源。
  */
 const typedLeft = () => { const v = store.get('hlma30.calc'); return v && v !== 'null' ? v : null; };
-function assertReset(typed, derived, where) {
+function assertReset(typed, where) {
   const now = view().输入框;
   if (typedLeft()) bad(`${where}：刷新后 localStorage 里还留着计算器数字 ${typedLeft()}`);
-  else if (now === typed) bad(`${where}：刷新后框里还是你打的 ${typed}`);
-  else if (derived && now !== derived) bad(`${where}：该回到账本现算值 ${derived}，实际 ${now}`);
-  else okline(`${where}：你打的 ${typed} 已清空，框里换回账本现算的 ${now}`);
+  else if (now !== '｜') bad(`${where}：刷新后两个框该是空白，实际「${now}」`);
+  else okline(`${where}：你打的 ${typed} 已清空，两个框空白`);
 }
+
+/**
+ * 计算器之外的一切。空框时这些必须和「从没碰过计算器」一模一样 ——
+ * 计算器只管算，不许把自己的状态漏到页面别处去。
+ */
+const outside = () => [
+  el('banner').classList.contains('on') ? 'on' : 'off',
+  el('bKick').textContent, el('bText').textContent, el('bSub').textContent, el('bDone').textContent,
+  el('nextLine').textContent, el('nextSub').textContent,
+  el('tierNum').textContent, el('pips').innerHTML,
+  el('pnl').textContent, el('pnlCum').textContent, el('pnlTot').textContent,
+].join('\n');
 
 /** 目标市值法独立验算 —— 不复用被测代码 */
 const wantAmt = (cash, hold, tier) => {
@@ -157,9 +167,10 @@ show(view());
   const v = view();
   if (!v.横幅) bad('T 日晚没有横幅');
   if (!v.卡片.includes('5 月 29 日')) bad(`卡片没写出执行日：「${v.卡片}」`);
-  okline(`两个框账本已自动填好：${v.输入框}（本金 100 万按行情现算）`);
+  if (v.输入框 !== '｜') bad(`打开时两个框该是空白，实际「${v.输入框}」`);
+  else okline('打开时两个框空白 —— 没有替你预填任何数字');
+  if (!/等你填/.test(v.算主)) bad(`空框时主位该说等你填，实际「${v.算主}」`);
 }
-const derived = view().输入框;   // 账本现算值，刷新后该回到这里
 
 console.log('\n  ── 在计算器里填入真实持仓：1000000 / 0');
 type(1000000, 0);
@@ -178,7 +189,7 @@ console.log('\n  ── 10:00 刷新打开（这是一次真刷新）');
 show(view());
 {
   const v = view();
-  assertReset('1000000｜0', derived, '隔夜刷新');
+  assertReset('1000000｜0', '隔夜刷新');
   if (!v.卡片.includes('（今天')) bad(`执行日当天卡片该说「今天」：「${v.卡片}」`);
   if (!v.横幅) bad('执行日当天横幅不见了');
 }
@@ -235,8 +246,50 @@ show(view());
   if (v.横幅) bad(`已确认过，不该再有横幅：「${v.横幅}」`);
   if (!/距离下一次/.test(v.卡片)) bad(`该回到等待态：「${v.卡片}」`);
   if (/欠着|还没做|补齐/.test(`${v.卡片}${v.时点}${v.算主}`)) bad(`一切正常却提示欠账：「${v.卡片}」`);
-  assertReset('1000000｜0', null, '跨日刷新');
+  assertReset('1000000｜0', '跨日刷新');
 }
+
+/* ---- 空框时必须彻底静默：计算器的状态不许漏到页面别处 ---- */
+console.log('\n  ── 空框时页面上方长什么样，先记下来');
+const quiet = outside();
+console.log('     故意填一个和账本对不上的数：说自己全是现金（0%），而账本已记到 25%');
+type(1000000, 0);
+console.log(`     卡片变成 → ${el('nextLine').textContent.trim()}`);
+if (outside() === quiet) bad('填了明显对不上的数字，页面上方却毫无反应 —— 这个检查本身测不出东西');
+else okline('填了对不上的数字，页面上方确实会改口（说明这个检查有效）');
+
+await refresh(T2, '09:10');
+console.log(`     刷新后卡片 → ${el('nextLine').textContent.trim()}`);
+if (outside() !== quiet) bad('刷新后页面上方没回到空框时的样子 —— 计算器把状态漏出去了');
+else okline('刷新后页面上方逐字回到空框时的样子');
+assertReset('1000000｜0', '漏没漏出去');
+
+/* ---- 自动预填没了，改成一个按钮；按钮填的数字不算「实盘证据」---- */
+console.log('\n  ── 懒得查券商时，点「用账本数字填入」');
+if (el('resetBasis').hidden) bad('本金已设，按钮却藏着 —— 那就永远没人点得到');
+el('resetBasis').click();
+console.log(`     两个框 → ${view().输入框}　标签 → ${el('basisChip').textContent.trim()}`);
+console.log(`     算主　 → ${el('oMain').textContent.trim()}`);
+{
+  if (view().输入框 === '｜') bad('点了按钮，两个框还是空的');
+  if (!/账本/.test(el('basisChip').textContent)) bad(`标签该说明数字来自账本，实际「${el('basisChip').textContent}」`);
+  if (/按你填的数字/.test(el('oSub').textContent)) bad('按钮填的数字被说成「按你填的数字」—— 那不是你填的');
+  // 关键：账本推算值不是你券商里的真实持仓，不能拿它去判「实盘对不上」。
+  // 行情一涨一跌，推算出的占比随时会跨过档位边界，凭空报一条假警报。
+  if (outside() !== quiet) bad('按钮填的账本推算值影响了页面上方 —— 它不该被当成实盘证据');
+  else okline('按钮填入后页面上方纹丝不动 —— 账本推算值没被当成实盘证据');
+}
+await refresh(T2, '09:15');
+assertReset('账本推算值', '按钮填的也一样清空');
+
+// 上面那条「纹丝不动」只说明这次没出事：本轮行情没漂移，账本推算值正好
+// 落在账本档位上，就算闸门失灵也看不出来。所以直球验一下闸门本身 ——
+// 塞一份明显对不上的数字、标成账本来源，判断实盘落后的那套必须照样闭嘴。
+store.set('hlma30.calc', JSON.stringify({ cash: 1000000, hold: 0, at: `${T2} 09:15`, from: 'ledger' }));
+if (H.behindState() !== null) bad('标成账本来源的数字仍被当成实盘证据 —— 行情一漂移就会报假警报');
+else okline('标成账本来源的数字不参与「实盘对不上」判断');
+store.set('hlma30.calc', 'null');
+H.renderInputDependent();
 
 console.log('\n  ── 填入成交后的真实持仓，看它怎么说');
 const typed2 = `${Math.round(cash)}｜${Math.round(hold)}`;
@@ -262,7 +315,7 @@ show(view());
 {
   const v = view();
   if (/欠着|还没做|补齐/.test(`${v.卡片}${v.时点}`)) bad(`当晚仍提示欠账：「${v.卡片}」`);
-  assertReset(typed2, null, '当晚刷新');
+  assertReset(typed2, '当晚刷新');
 }
 
 console.log(`\n${fails ? `✗ ${fails} 处有问题` : '✓ 正常路径全程无误：文案、金额、计算器重置、横幅保持，全部符合预期'}\n`);

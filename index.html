@@ -237,8 +237,8 @@ tr:last-child td{border-bottom:none}
   <div class="card">
     <div class="cardhead">
       <p class="k" style="margin:0">每份该是多少钱</p>
-      <span class="chip" id="basisChip">按账本自动填入</span>
-      <button class="linkbtn" id="resetBasis" type="button" hidden>恢复账本数字</button>
+      <span class="chip" id="basisChip">等你填入真实持仓</span>
+      <button class="linkbtn" id="resetBasis" type="button" hidden>用账本数字填入</button>
     </div>
     <div class="calc">
       <div><label for="inCash">可用资金（元）</label><input id="inCash" type="text" inputmode="decimal"></div>
@@ -254,7 +254,9 @@ tr:last-child td{border-bottom:none}
       两者相加＝下面说的「两栏合计」。它和上方「账户盈亏」里的总资产是两个数：
       那个按本金和账本推算，这个按你填的真实持仓。<br>
       这个板块<b>只是个计算器</b>——你在这里填什么都不会影响上面的操作提醒，也不会影响交易记录。
-      它按你填的数字反推你现在在第几档，再算下一步该动多少钱。默认填入账本推算值，改了可以点「恢复账本数字」还原。<br>
+      它按你填的数字反推你现在在第几档，再算下一步该动多少钱。
+      两个框<b>刷新网页就清空</b>，空着的时候它什么都不算、也不会在页面上冒出任何提示；
+      懒得去券商查真实持仓时，可以点「用账本数字填入」，让它按本金和交易记录推算一份。<br>
       算法是目标市值法（说明文档 3.5）：买 X =（w×S − V）÷（1 + w×c），佣金 c = 万分之 0.45。股数按 <span id="etfLabel">ETF</span> 收盘价向下取整到 100 股。</p>
   </div>
 
@@ -462,9 +464,21 @@ function beijingStamp1() {
 /** 北京时间的小时（0–23） */
 const bjHour = () => +beijingStamp1().slice(11, 13);
 
+/**
+ * 你亲手填进计算器的持仓数字 —— 只有这个才算「实盘证据」。
+ *
+ * 点「用账本数字填入」得到的那份是账本推算值，不是你券商里的真实持仓，
+ * 拿它去判断「实盘和账本对不上」等于自己跟自己比，毫无意义；
+ * 行情一涨一跌，推算出来的占比还可能正好跨过档位边界，凭空报出一条假警报。
+ */
+function typedCalc() {
+  const m = LS.get('calc', null);
+  return m && m.from !== 'ledger' && isFinite(m.cash) && isFinite(m.hold) ? m : null;
+}
+
 function behindState() {
-  const man = LS.get('calc', null);
-  if (!man || !isFinite(man.cash) || !isFinite(man.hold)) return null;
+  const man = typedCalc();
+  if (!man) return null;
   const r = calcStep(man.cash, man.hold, true);
   if (r.tier === undefined) return null;
 
@@ -535,7 +549,7 @@ function staleCalcNote(behind) {
   const n = behind.since.length;
   return `<br><b>注意：你填的数字是 ${md(behind.filledAt.slice(0, 10))}填的，那之后账本又记了 ${n} 笔。</b>`
     + `如果你已经在券商 App 里做过了，把下面两栏改成现在的真实持仓 —— `
-    + `或者直接点「恢复账本数字」，这条提示就会消失；`
+    + `或者直接点「换成账本数字」，这条提示就会消失；`
     + `确实没做的话，再照上面的金额补。`;
 }
 
@@ -612,8 +626,8 @@ function renderNext(behind) {
       const o = plannedOrder(M.V, M.cash, mv.to);
       if (o.side !== 'NONE') {
         est = `<br>估算约 <b>${money(o.amount)}</b> 元（按本金推算，仅供估量）`;
-        const man = LS.get('calc', null);
-        if (man && isFinite(man.cash) && isFinite(man.hold) && (man.cash + man.hold) > 0) {
+        const man = typedCalc();
+        if (man && (man.cash + man.hold) > 0) {
           const rr = calcCatchUp(man.cash, man.hold, mv.to);
           if (rr.ok && rr.side !== 'NONE' && Math.abs(rr.amount - o.amount) / o.amount > 0.02) {
             realLine = `<br><b style="color:var(--${rr.side === 'BUY' ? 'up' : 'dn'})">`
@@ -735,9 +749,9 @@ function renderBanner(behind) {
 
   // 计算器里填过真实数字、且和理论值差得明显时，必须以真实数字为准 ——
   // 照着理论值下单会买错量。
-  const man = LS.get('calc', null);
+  const man = typedCalc();
   let realNote = '';
-  if (man && isFinite(man.cash) && isFinite(man.hold) && (man.cash + man.hold) > 0 && M) {
+  if (man && (man.cash + man.hold) > 0 && M) {
     const rr = calcCatchUp(man.cash, man.hold, item.tierTo);
     const theo = plannedOrder(M.V, M.cash, item.tierTo);
     if (rr.ok && rr.side !== 'NONE' && theo.side !== 'NONE'
@@ -824,13 +838,14 @@ function render() {
   $('pView').textContent = pv ? money(pv) + ' 元' : '未设置';
   $('pView').style.color = pv ? 'var(--tx)' : 'var(--dm)';
 
-  // ---- 计算器输入框：先填值，再算 ----
+  // ---- 计算器输入框 ----
+  // 不再默认替你填账本推算值。两个框只在你这次会话里亲手填过、
+  // 或点过「用账本数字填入」时才有内容 —— 刷新一次就空回去。
+  // 空框时计算器全程静默，页面其它部分完全当它不存在。
   $('etfLabel').textContent = st.etf?.code || 'ETF';
   const man = LS.get('calc', null);
   if (man && isFinite(man.cash) && isFinite(man.hold)) {
     $('inCash').value = money(man.cash); $('inHold').value = money(man.hold);
-  } else if (M) {
-    $('inCash').value = money(M.cash); $('inHold').value = money(M.V);
   } else {
     $('inCash').value = ''; $('inHold').value = '';
   }
@@ -845,14 +860,19 @@ function render() {
 function calc() {
   const cash = num($('inCash').value), hold = num($('inHold').value);
   const chip = $('basisChip'), reset = $('resetBasis');
-  const edited = !!LS.get('calc', null);
-  // 本金没设时账本推算不出金额，两个框是空的 —— 这时候说「已自动填入」是假话
-  const autoOK = !!accountMoney();
-  chip.textContent = edited ? '按你填的数字' : (autoOK ? '按账本自动填入' : '请先设本金，或直接手填');
-  // 副行的口径必须和这个标签一致：没填过就说「按账本推算」，
-  // 否则标签写「按账本自动填入」而下面写「按你填的数字」，同屏自相矛盾。
-  const basis = edited ? '按你填的数字' : '按账本推算';
-  reset.hidden = !edited;
+  const man = LS.get('calc', null);
+  const blank = !(cash + hold > 0);
+  // 数字从哪来，标签就说哪来。三种状态各说各的话，混了就会自相矛盾：
+  //   空着 —— 还没填，它什么都不算
+  //   你打的 —— 按你填的数字
+  //   点按钮填的 —— 按账本推算，不能冒充成「你填的」
+  const fromLedger = !!(man && man.from === 'ledger');
+  chip.textContent = blank ? '等你填入真实持仓' : fromLedger ? '按账本推算填入' : '按你填的数字';
+  const basis = fromLedger ? '按账本推算' : '按你填的数字';
+  // 一键填入账本推算值。只要本金设了就一直摆着 ——
+  // 原先要先填点什么才会冒出来，而现在两个框默认是空的，那样等于永远见不到。
+  reset.hidden = !accountMoney();
+  reset.textContent = blank ? '用账本数字填入' : '换成账本数字';
 
   // 有挂单时，目标就是挂单那一档 —— 从你实际位置直接调过去。
   // 不能用「再走一档」：若你实盘已经差不多在目标档位上，走一档会多算整整一档。
@@ -899,7 +919,7 @@ function calc() {
   }
 
   if (!r.ok && r.reason === 'NO_INPUT') {
-    setOut('先填可用资金', '两栏加起来要大于 0');
+    setOut('等你填数字', '填入上面两栏，这里会算出该动多少钱');
     $('mismatch').hidden = true;
     // 这里也要刷新时点行再返回：否则你把两个框清空之后，
     // 上一次的「⚠ 你还欠着 2 笔操作」会原样留在屏幕上，
@@ -976,7 +996,7 @@ function renderTiming(behind) {
       tb.innerHTML = head
         + (behind.since && behind.since.length
           ? `你填的数字是 ${md(behind.filledAt.slice(0, 10))}填的，那之后账本又记了 ${behind.since.length} 笔 —— `
-            + `若已在券商做过，改一下下面两栏、或点「恢复账本数字」即可。`
+            + `若已在券商做过，改一下下面两栏、或点「换成账本数字」即可。`
           : '先把上面这笔补掉，再等下一次信号。');
     }
     return;
@@ -989,9 +1009,12 @@ function renderTiming(behind) {
     // 数字说「这就是本次要执行的金额」。
     const c0 = num($('inCash').value), h0 = num($('inHold').value);
     if (!(c0 + h0 > 0)) {
-      tb.innerHTML = `⚠ <b>这笔要在 <span class="nb">${ex.day ? ex.L.label : '执行日'}</span>收盘前做</b>　`
-        + `信号出在 ${p.signalDate}，仓位 ${posPct(p.tierFrom)} → ${posPct(p.tierTo)}。`
-        + `先在上面填入你的可用资金和已持有红利，才能算出该下多少钱。${CLOSE_TIP}。`;
+      // 空框时计算器不下任何判断，但执行日和尾盘时点照说不误 ——
+      // 那是挂单本身的事实，不是计算器算出来的东西。
+      // 少了这句，两个框空着时整页就再也没人告诉你别买太早。
+      tb.innerHTML = `<b>这笔要在 <span class="nb">${ex.day ? ex.L.label : '执行日'}</span>收盘前做</b>　`
+        + `仓位 ${posPct(p.tierFrom)} → ${posPct(p.tierTo)}，信号出在 ${p.signalDate}。`
+        + `填入上面两栏就能算出该下多少钱。${CLOSE_TIP}。`;
       return;
     }
     // 提前做完的人不该再被催一遍「需在 X 收盘前完成」
@@ -1031,8 +1054,13 @@ function renderTiming(behind) {
       + `（仓位 ${posPct(p.tierFrom)} → ${posPct(p.tierTo)}）。${CLOSE_TIP}。`;
   } else {
     tb.className = 'timingbox';
-    tb.innerHTML = `目前<b>尚未触发</b>，这是下次触发时的预估金额，${dl(bjToday())}不需要下单。`
-      + `真正触发时这里会变成蓝色，注明「本次要执行的金额」，并写出该在哪一天收盘前下单。`;
+    // 空框时上面根本没有金额，不能说「这是下次触发时的预估金额」——
+    // 那是指着一个不存在的数字说话。
+    tb.innerHTML = !(num($('inCash').value) + num($('inHold').value) > 0)
+      ? `目前<b>尚未触发</b>，${dl(bjToday())}不需要下单。`
+        + `填入上面两栏，这里会算出下次触发时大概要动多少钱。`
+      : `目前<b>尚未触发</b>，这是下次触发时的预估金额，${dl(bjToday())}不需要下单。`
+        + `真正触发时这里会变成蓝色，注明「本次要执行的金额」，并写出该在哪一天收盘前下单。`;
   }
 
 }
@@ -1096,7 +1124,15 @@ function onCalcInput() {
 }
 $('inCash').addEventListener('input', onCalcInput);
 $('inHold').addEventListener('input', onCalcInput);
-$('resetBasis').addEventListener('click', () => { LS.set('calc', null); render(); });
+// 一键把账本推算值填进两个框。标记 from:'ledger'，让下面的口径照实说
+// 「按账本推算」，也让「实盘和账本对不上」这类判断自动跳过它。
+$('resetBasis').addEventListener('click', () => {
+  const M = accountMoney();
+  if (!M) return;
+  $('inCash').value = money(M.cash); $('inHold').value = money(M.V);
+  LS.set('calc', { cash: Math.round(M.cash), hold: Math.round(M.V), at: beijingStamp1(), from: 'ledger' });
+  renderInputDependent();
+});
 
 /* ==================== 本金设置 ==================== */
 function setEditing(on) {

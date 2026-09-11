@@ -24,6 +24,11 @@ for (const ev of ['exit', 'SIGINT', 'SIGTERM', 'uncaughtException']) {
 
 const MUTANTS = [
   ['刷新不再清空计算器', 'page', "LS.set('calc', null);", '/* 改坏 */'],
+  ['刷新后又替你预填', 'page',
+    "$('etfLabel').textContent = st.etf?.code || 'ETF';\n  const man = LS.get('calc', null);",
+    "$('etfLabel').textContent = st.etf?.code || 'ETF';\n  const man = LS.get('calc', null) || (M ? { cash: M.cash, hold: M.V } : null);"],
+  ['按钮填的被当实盘证据', 'page', "m.from !== 'ledger' && isFinite(m.cash)", 'isFinite(m.cash)'],
+  ['填账本的按钮藏起来', 'page', 'reset.hidden = !accountMoney();', 'reset.hidden = true;'],
   ['横幅记账后自行消失', 'page', ': last\n      ? { signalDate:', ': false\n      ? { signalDate:'],
   ['点完成不写进记忆', 'page', 'LS.set(ackKey, true)', 'LS.set(ackKey, false)'],
   ['买入金额漏算手续费', 'core', '(target - V) / (1 + w * c)', '(target - V)'],
