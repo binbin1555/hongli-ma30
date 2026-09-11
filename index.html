@@ -104,6 +104,19 @@ svg.ch{display:block;width:100%;height:auto}
 .linkbtn{font-family:inherit;font-size:11.5px;background:none;border:none;color:var(--ac);
   cursor:pointer;padding:2px 4px;text-decoration:underline;text-underline-offset:2px}
 .linkbtn:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:4px}
+/* 「这是怎么运作的」折叠块：等待触发时那几句不变的说明，平时收起来 */
+.how{margin:10px 0 0}
+.how summary{cursor:pointer;color:var(--ac);font-size:13px;list-style:none;
+  display:inline-flex;align-items:center;gap:5px;padding:2px 0}
+.how summary::-webkit-details-marker{display:none}
+/* 三角形用 CSS 画，不用 ▸ 这类字符 —— 字体里没有就会退化成一个小点，
+   看着像个装饰符号，根本不像可以点开的东西 */
+.how summary::before{content:'';width:0;height:0;flex:none;
+  border:4.5px solid transparent;border-left-color:currentColor;
+  margin-left:2px;transition:transform .15s}
+.how[open] summary::before{transform:rotate(90deg)}
+.how summary:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:4px}
+.how .body{margin:8px 0 0;padding-left:15px;border-left:2px solid var(--ln)}
 .calc{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
 .calc label{font-size:11.5px;color:var(--dm);display:block;margin:0 0 5px;letter-spacing:.03em}
 .calc input{font-family:var(--mono);font-size:16px;padding:10px 12px;border-radius:7px;width:170px;
@@ -554,15 +567,37 @@ function staleCalcNote(behind) {
 }
 
 function otherSide(kind, tier, i) {
+  // 反向触发只留「价位 + 会变成什么」。原先还带着百分比和仓位箭头，
+  // 四十多个字挂在最显眼的卡片上，而它说的是一件还没发生、也不用你
+  // 做任何事的事。真反过来了，这张卡片会整个改写，到时候自然写全。
   if (kind === 'buy' && tier > 0) {
-    const need = Math.max(0, (i.sellTrigger - i.close) / i.close * 100);
-    return `<br>反向也可能先到：涨 ${need.toFixed(2)}% 到 <b>${int(i.sellTrigger)}</b> 则改为卖出第 ${tier} 份（仓位 ${posPct(tier)} → ${posPct(tier - 1)}）。`;
+    return `<br>或涨到 <b>${int(i.sellTrigger)}</b> 转为卖出第 ${tier} 份`;
   }
   if (kind === 'sell' && tier < 4) {
-    const need = Math.max(0, (i.close - i.buyTrigger) / i.close * 100);
-    return `<br>反向也可能先到：跌 ${need.toFixed(2)}% 到 <b>${int(i.buyTrigger)}</b> 则改为买入第 ${tier + 1} 份（仓位 ${posPct(tier)} → ${posPct(tier + 1)}）。`;
+    return `<br>或跌到 <b>${int(i.buyTrigger)}</b> 转为买入第 ${tier + 1} 份`;
   }
   return '';
+}
+
+/**
+ * 「这是怎么运作的」—— 等待触发时的那几句说明，默认收起。
+ *
+ * 这三件事每天一模一样，却占掉最显眼那张卡片一半以上的篇幅，
+ * 而它们只在你第一次看、或者忘了规则时才有用。收进折叠块里：
+ * 想不起来就点开，平时只留一行。
+ *
+ * 用原生 <details>，不存展开状态 —— 每次打开页面都是收起的，
+ * 行为可预期，也不用再多一个 localStorage 键。
+ *
+ * 买入和卖出两支原先各抄了一份，改一处漏一处是迟早的事，合并到这里。
+ */
+function howItWorks(st, i) {
+  return `<details class="how"><summary>这是怎么运作的</summary><div class="body">`
+    + `触发当日 21:00 系统会记下这笔操作（<b>不需要你去券商挂条件单</b>），`
+    + `再下一个交易日<b>收盘前执行</b> —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
+    + `<br>百分比按 ${md(st.asof)}（${wd(st.asof)}）收盘 ${int(i.close)} 计，`
+    + `盘中实时价请自行对照上面的触发点位。`
+    + `</div></details>`;
 }
 
 function renderNext(behind) {
@@ -660,9 +695,7 @@ function renderNext(behind) {
       $('nextLine').innerHTML = `距离下一次买入，还需中证红利<b style="color:var(--up)">跌 ${mv.need.toFixed(2)}%</b>`;
       $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　买入第 <b>${tier + 1}</b> 份（仓位 ${posPct(tier)} → ${posPct(tier + 1)}）`
         + otherSide('buy', tier, i)
-        + `<br>触发当日 21:00 系统会记下这笔操作（<b>不需要你去券商挂条件单</b>），再下一个交易日<b>收盘前执行</b>`
-        + ` —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
-        + `<br>百分比按 ${md(st.asof)}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
+        + howItWorks(st, i);
     }
   } else if (mv.kind === 'sell') {
     card.classList.add('sell');
@@ -675,9 +708,7 @@ function renderNext(behind) {
       $('nextLine').innerHTML = `距离下一次卖出，还需中证红利<b style="color:var(--dn)">涨 ${mv.need.toFixed(2)}%</b>`;
       $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　卖出第 <b>${tier}</b> 份（仓位 ${posPct(tier)} → ${posPct(tier - 1)}）`
         + otherSide('sell', tier, i)
-        + `<br>触发当日 21:00 系统会记下这笔操作（<b>不需要你去券商挂条件单</b>），再下一个交易日<b>收盘前执行</b>`
-        + ` —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
-        + `<br>百分比按 ${md(st.asof)}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
+        + howItWorks(st, i);
     }
   } else {
     // 档位在 0–4 之间时这一支到不了（0 档能买、4 档能卖），
