@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '22f0aec08f';
+const BUILD = 'fa43bff3d2';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -151,7 +151,7 @@ async function fetchCalendarMonth(month) {
   return out;
 }
 
-/** 中证指数日线。返回升序 [{d,c,pct}]，已剔除周末 / 元旦 / 幽灵行 */
+/** 中证指数日线。返回升序 [{d,c,pct}]，已剔除周末、元旦、以及接口重复抄来的假数据行 */
 async function fetchCSI(code, startYmd, endYmd) {
   const r = await retryFetch(
     `${CSI}?indexCode=${code}&startDate=${compact(startYmd)}&endDate=${compact(endYmd)}`,
@@ -266,8 +266,8 @@ export function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar,
   // 之所以还要补记，是因为不记的话 state 里 total=8、页面却列 10 项，数字对不上。
   // 名字里不写「今天」：面板显示的是上一次运行的结果，隔夜再看「今天」就是假话。
   // 具体是哪一天由 detail 里的日期负责。
-  add(1, '运行日在交易日历内', true, `${today} 在交易所日历里`);
-  add(2, '中证运行日数据已到位', true, `最新数据日期 ${today}`);
+  add(1, '这一天确实是交易日', true, `${today} 在交易所日历里`);
+  add(2, '当天的中证红利收盘价已经拿到', true, `最新数据日期 ${today}`);
 
   // 3 结构：日期严格递增、无重复、清洗后每一天都在官方交易日历里
   let structOk = true, structMsg = '';
@@ -284,7 +284,7 @@ export function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar,
       structMsg = `有 ${strays.length} 天不在官方交易日历里：${strays.slice(0, 3).join('、')}`;
     }
   }
-  add(3, '结构：日期递增且都是官方交易日', structOk, structMsg || `${rows.length} 行，逐日核对交易所日历一致`);
+  add(3, '行情日期没有乱序，也没有混进非交易日', structOk, structMsg || `${rows.length} 行，逐日核对交易所日历一致`);
 
   // 4 幽灵行：清洗掉了多少 + 清洗后确认已无残留
   let ghost = '';
@@ -297,7 +297,7 @@ export function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar,
   const cutDetail = removed
     ? `剔除 ${cut} 行（幽灵 ${removed.ghost.length}／周末 ${removed.weekend.length}／元旦 ${removed.newyear.length}／重复 ${removed.dup.length}）`
     : '无清洗信息';
-  add(4, '幽灵行已清除', !ghost, ghost || cutDetail);
+  add(4, '没有混进重复抄来的假数据', !ghost, ghost || cutDetail);
 
   // 5 涨跌幅逐行对账
   let pctBad = '';
@@ -308,7 +308,7 @@ export function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar,
       pctBad = `${rows[i].d} 接口报 ${rows[i].pct}%，自算 ${computed.toFixed(3)}%`; break;
     }
   }
-  add(5, '涨跌幅与收盘价对账', !pctBad, pctBad || '逐行一致');
+  add(5, '涨跌幅和收盘价能对得上', !pctBad, pctBad || '逐行一致');
 
   // 6 异常波动
   let wild = '';
@@ -316,15 +316,15 @@ export function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar,
     const ch = Math.abs(rows[i].c / rows[i - 1].c - 1);
     if (ch > 0.11) { wild = `${rows[i].d} 单日 ${(ch * 100).toFixed(2)}%`; break; }
   }
-  add(6, '单日波动在 ±11% 内', !wild, wild || '通过');
+  add(6, '没有异常的单日暴涨暴跌（超过 ±11% 视为数据出错）', !wild, wild || '通过');
 
   // 7 MA30 完整性
   const enough = rows.length >= MA_LEN;
-  add(7, `MA30 有满 ${MA_LEN} 个交易日`, enough, `${rows.length} / ${MA_LEN}`);
+  add(7, `算均线要的 ${MA_LEN} 天行情是齐的`, enough, `${rows.length} / ${MA_LEN}`);
 
   // 8 ETF 日期与指数日期一致（拦盘中实时条）—— 非致命，失败只是不给股数
   const etfOk = !!etf && etf.d === today;
-  add(8, 'ETF 报价日期与指数一致', etfOk,
+  add(8, 'ETF 报价和指数是同一天的', etfOk,
     etf ? `ETF ${etf.d} vs 指数 ${today}` : '未取到 ETF 报价', false);
 
   // 9 state 与账本一致：state.tier 必须等于账本最后一笔的目标档位。
@@ -334,7 +334,7 @@ export function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar,
   const lastEntry = ledgerEntries.length ? ledgerEntries[ledgerEntries.length - 1] : null;
   const expectTier = lastEntry ? lastEntry.tierTo : 0;
   const stateOk = tierFrom === expectTier && Math.abs(tierTo - tierFrom) <= 1 && tierTo >= 0 && tierTo <= 4;
-  add(9, 'state 档位与账本一致', stateOk,
+  add(9, '当前仓位和交易记录对得上', stateOk,
     stateOk ? `${tierFrom} → ${tierTo}，与账本最后一笔（${lastEntry ? lastEntry.date + ' → ' + lastEntry.tierTo + '档' : '无记录，应为 0 档'}）吻合`
       : `state 记为 ${tierFrom} 档，但账本最后一笔指向 ${expectTier} 档 —— 两者已脱节`);
 
@@ -550,7 +550,7 @@ async function runDaily(env, { force = false } = {}) {
   //    这一项防的是"算得出结果但结果是错的"——比直接报错危险得多。
   const audit = auditLedger(rows, ledger.entries, state.launchDate);
   checks.push({
-    id: 10, name: '账本自审：日期与档位链完整', ok: audit.length === 0,
+    id: 10, name: '交易记录前后连得上', ok: audit.length === 0,
     detail: audit.length ? audit.slice(0, 3).map((a) => a.msg).join('；') : `${ledger.entries.length} 笔全部自洽`,
     fatal: true,
   });
@@ -745,8 +745,8 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
   }
   if (late && executed) {
     await bark(env, {
-      title: '⚠️ 红利MA30 · 挂单迟到执行',
-      body: `信号出在 ${executed.signalDate}，本该在它的下一个交易日收盘前成交，`
+      title: '⚠️ 红利MA30 · 操作迟到成交',
+      body: `信号出在 ${executed.signalDate}，本该在它的下一个交易日收盘前做掉，`
         + `实际拖到 ${executed.date}（${dayLabel(executed.date, today).wd}）才记上。`
         + '\n中间可能有交易日漏跑，请核对账本。',
       level: 'timeSensitive',
@@ -771,7 +771,7 @@ async function remind(env) {
 
   const state = await G.readJSON('data/state.json');
   if (!state || !state.pending) {
-    return { ok: true, today, skipped: '没有待执行的挂单，静默' };
+    return { ok: true, today, skipped: '没有待执行的操作，静默' };
   }
 
   // 挂单该在哪天执行 —— 周五出的信号要到下周一，不能简单加一天

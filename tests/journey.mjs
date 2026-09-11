@@ -32,6 +32,30 @@ const { ma, signal, nextTier, triggers, WEIGHTS, MA_LEN, orderAmount, COMMISSION
 
 let fails = 0;
 const bad = (msg) => { fails++; console.log(`    ✗ ${msg}`); };
+
+/*
+ * 黑话清单：只有写这套系统的人才懂的词，一个都不许出现在页面上。
+ * 半年后回来看的人也包括作者自己 —— 到时候「幽灵行」「档位链」
+ * 一样得现想半天。
+ *
+ * 「挂单」尤其要紧：A 股里它特指去券商挂委托单，而这里指的是
+ * 系统自己记下的一笔待办，照字面理解会跑去券商设条件单。
+ */
+const SLANG = {
+  挂单: '在 A 股里特指去券商挂委托单，这里说的是系统记下的待办 —— 用「待执行的操作」',
+  幽灵行: '自造词，没人懂 —— 说「重复抄来的假数据」',
+  档位链: '自造词 —— 说「交易记录前后连得上」',
+  自审: '自造词 —— 直说在查什么',
+  对账: '会计术语，这里其实是「能不能对得上」',
+  股票腿: '衍生品术语（leg）—— 说「买了红利的那部分」',
+  理论口径: '「口径」是统计术语 —— 直说「理论值」',
+  '结构：': '开发者写法，标题里不该有冒号分类',
+};
+function slangIn(text) {
+  const hit = [];
+  for (const [w, why] of Object.entries(SLANG)) if (String(text).includes(w)) hit.push(`${w}（${why}）`);
+  return hit;
+}
 const ok = (label, v) => console.log(`    · ${label.padEnd(10, '　')} ${v}`);
 
 /* ---------------- 剧本 ---------------- */
@@ -465,6 +489,7 @@ function verify(tag, state, ledger, calc, todayStr) {
   if (ledgerTier <= 0 && !pend && /距离下一次卖出/.test(p.卡片)) say('已空仓却提示还要卖出');
 
   // 8. 通用红线
+  for (const h of slangIn(all)) say(`文案里出现黑话：${h}`);
   const fr = fractionsIn(all);
   if (fr.length) say(`出现分数「${fr.join('、')}」`);
   for (const m of all.matchAll(/还需[跌涨] (-?[\d.]+)%/g)) {
@@ -609,6 +634,11 @@ function raw(label, { tier, pending, chain = [], asof, day, at = '10:00', calc, 
   const pp = verify(label, state, led, calc ? cleanCalc(calc) : null, day);
   pp.胶囊 = el('healthPill').textContent.trim();
   pp.陈旧告警 = el('staleWarn').hidden === true ? null : el('staleWarn').textContent.trim();
+  // 自检列表和脚注平时没人细读，恰恰最容易攒黑话
+  const extra = [el('checks').textContent, el('dataNote').textContent,
+    el('healthPill').textContent, el('staleWarn').textContent, el('pushWarn').textContent,
+    el('ledgerWarn').textContent].join('｜');
+  for (const h of slangIn(extra)) bad(`[${label}] 健康区出现黑话：${h}`);
   console.log(`    胶囊　　　 ${pp.胶囊}`);
   if (pp.陈旧告警) console.log(`    陈旧告警　 ${pp.陈旧告警}`);
   store.set('hlma30.principal', String(PRINCIPAL));
@@ -679,6 +709,90 @@ for (const [label, c] of [
   ['正好卡在四舍五入边界 37.5%', { cash: 625000, hold: 375000 }],
 ]) {
   raw(`乱填·${label}`, { tier: 0, pending: pendBuy, asof: A, day: A1, calc: c });
+}
+
+/* ==================================================================== */
+/*
+ * 出错时才会出现的文案 —— 平时看不到，出事那天却是唯一的指引。
+ * 顺带把每一句都拿去过一遍「黑话」筛子。
+ */
+console.log('\n\n═════════════ 出错时的文案 ═════════════');
+
+const health = () => ({
+  胶囊: el('healthPill').textContent.trim(),
+  自检: el('checks').textContent.replace(/\s+/g, ' ').trim(),
+  推送告警: el('pushWarn').hidden === true ? null : el('pushWarn').textContent.trim(),
+  陈旧告警: el('staleWarn').hidden === true ? null : el('staleWarn').textContent.trim(),
+  账本告警: el('ledgerWarn').style.display === 'none' ? null : el('ledgerWarn').textContent.trim(),
+  脚注: el('dataNote').textContent.replace(/\s+/g, ' ').trim(),
+});
+
+function showHealth(label, over) {
+  raw(label, { tier: 1, chain: [[40, 0, 1]], asof: A1, day: A1, at: '22:00', calc: hold(TOT, 1), ...over });
+  const h = health();
+  for (const [k, v] of Object.entries(h)) if (v) console.log(`    ${k.padEnd(5, '　')} ${v}`);
+  return h;
+}
+
+// ① 还没跑过第一次
+showHealth('首次运行之前', { checks: {} });
+
+// ② 推送失败
+{
+  const i0 = SERIES.findIndex((r) => r.d === A1);
+  const st0 = { passed: 10, total: 10, failed: [], ranAt: `${A1} 21:00:45` };
+  raw('推送失败', { tier: 1, chain: [[40, 0, 1]], asof: A1, day: A1, at: '22:00', calc: hold(TOT, 1), checks: st0 });
+  // push 字段要手工塞进去再渲染一次
+  H.S = { ...H.S, state: { ...H.S.state, push: { ok: false, at: `${A1} 21:00:47`, reason: 'Bark 返回 400：device_key 无效' } } };
+  H.render();
+  const h = health();
+  for (const [k, v] of Object.entries(h)) if (v) console.log(`    ${k.padEnd(5, '　')} ${v}`);
+  if (!h.推送告警) bad('[推送失败] 推送发不出去，面板上却没有任何提示');
+}
+
+// ③ 多项校验未过 —— 把每条的名字和说明都亮出来
+showHealth('多项校验未过', {
+  checks: {
+    passed: 6, total: 10, ranAt: `${A1} 21:00:45`,
+    failed: [
+      { id: 4, name: '幽灵行已清除', detail: '2026-05-20 与前一日收盘价完全相同' },
+      { id: 5, name: '涨跌幅与收盘价对账', detail: '2026-05-21 涨跌幅对不上，差 0.42%' },
+      { id: 8, name: 'ETF 报价日期与指数一致', detail: '未取到 ETF 报价' },
+      { id: 10, name: '账本自审：日期与档位链完整', detail: '第 2 笔的起始档位与第 1 笔的落点对不上' },
+    ],
+  },
+});
+
+// ④ 账本自审异常
+{
+  raw('账本自身有异常', {
+    tier: 2, chain: [], asof: A1, day: A1, at: '22:00', calc: hold(TOT, 2),
+    ledgerExtra: [
+      { seq: 1, date: '2026-05-20', signalDate: '2026-05-19', side: 'BUY', tierFrom: 0, tierTo: 1, targetWeight: WEIGHTS[1], price: 11800, etfPrice: ETF_PX, late: false, recordedAt: '' },
+      { seq: 2, date: '2026-05-21', signalDate: '2026-05-20', side: 'BUY', tierFrom: 3, tierTo: 4, targetWeight: WEIGHTS[4], price: 11810, etfPrice: ETF_PX, late: false, recordedAt: '' },
+    ],
+  });
+  const h = health();
+  if (h.账本告警) console.log(`    账本告警　 ${h.账本告警}`);
+  else bad('[账本自身有异常] 账本档位链断了，却没有任何告警');
+}
+
+// ⑤ 状态文件损坏时，整页会被这些话取代
+console.log('\n  ── 状态文件损坏时列出的问题');
+{
+  const base = JSON.parse(JSON.stringify(H.S.state));
+  const cases = [
+    ['档位越界', { ...base, tier: 7 }],
+    ['档位不是整数', { ...base, tier: 1.5 }],
+    ['日期格式不对', { ...base, asof: '2026/05/29' }],
+    ['买入线高于卖出线', { ...base, index: { ...base.index, buyTrigger: 99999 } }],
+    ['挂单跨了两档', { ...base, pending: { signalDate: A, tierFrom: 0, tierTo: 3, side: 'BUY' } }],
+  ];
+  for (const [nm, st] of cases) {
+    const probs = CORE.validateState(st);
+    console.log(`    ${nm.padEnd(9, '　')} ${probs.join('；') || '（没查出问题）'}`);
+    if (!probs.length) bad(`[状态损坏·${nm}] 明显不合法却没被 validateState 拦下`);
+  }
 }
 
 console.log(`\n${fails ? `✗ 全流程有 ${fails} 处问题` : '✓ T / T+1 / T+2 三条路径全程畅通，无错报'}\n`);

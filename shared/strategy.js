@@ -144,7 +144,7 @@ export function validateState(st) {
   if (!st || typeof st !== 'object') return ['state.json 不是对象'];
 
   if (!Number.isInteger(st.tier) || st.tier < 0 || st.tier > MAX_TIER) {
-    bad.push(`档位 ${JSON.stringify(st.tier)} 不是 0–${MAX_TIER} 的整数`);
+    bad.push(`仓位档位 ${JSON.stringify(st.tier)} 不是 0–${MAX_TIER} 的整数`);
   }
   const d = /^\d{4}-\d{2}-\d{2}$/;
   if (!d.test(st.asof || '')) bad.push(`数据日期 ${JSON.stringify(st.asof)} 格式不对`);
@@ -168,11 +168,11 @@ export function validateState(st) {
         if (!Number.isInteger(p[k]) || p[k] < 0 || p[k] > MAX_TIER) bad.push(`pending.${k} = ${JSON.stringify(p[k])} 越界`);
       }
       if (Number.isInteger(p.tierFrom) && Number.isInteger(p.tierTo) && Math.abs(p.tierTo - p.tierFrom) !== 1) {
-        bad.push(`挂单跨了 ${Math.abs(p.tierTo - p.tierFrom)} 档，一次只能动一档`);
+        bad.push(`待执行的操作跨了 ${Math.abs(p.tierTo - p.tierFrom)} 档，一次只能动一档`);
       }
       if (!d.test(p.signalDate || '')) bad.push(`pending.signalDate ${JSON.stringify(p.signalDate)} 格式不对`);
       if (Number.isInteger(st.tier) && Number.isInteger(p.tierFrom) && p.tierFrom !== st.tier) {
-        bad.push(`挂单起始档 ${p.tierFrom} 与当前档位 ${st.tier} 对不上`);
+        bad.push(`待执行操作的起始仓位 ${p.tierFrom} 与当前仓位 ${st.tier} 对不上`);
       }
     }
   }
