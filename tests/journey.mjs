@@ -458,7 +458,13 @@ console.log('\n  ── 21:05 用户再打开面板，填入成交后的真实�
 goto(T1, '21:05');
 show(st, ledger, { cash: Math.round(realCash), hold: Math.round(realHold) });
 const p1c = panel();
-if (p1c.横幅) bad('挂单已执行，横幅还挂着');
+// 记账之后横幅不再自动消失，而是改口追问「你做了吗」——
+// 它撑到你亲口确认为止，这样忘了做也不会静悄悄过去
+if (!p1c.横幅) bad('这笔已记账但还没确认，横幅该留下来追问一句');
+if (p1c.横幅 && !/你做了吗/.test(p1c.横幅)) bad(`记账后横幅没改口追问：「${p1c.横幅}」`);
+el('bDone').click();          // 你点了「我做了」
+H.render();
+if (el('banner').classList.contains('on')) bad('点过「我做了」，横幅仍不收起');
 if (/欠着|还没做|对不上|补齐/.test(`${p1c.卡片}${p1c.时点}${p1c.算主}`)) {
   bad(`按时做完了却仍提示欠账：卡片「${p1c.卡片}」时点「${p1c.时点}」`);
 }
@@ -475,7 +481,8 @@ console.log('  设定：T+1 那天已经按时买好了，实盘和账本对得�
   goto(T2, '09:00');
   show(st, ledger, goodCalc);
   const a = verify('T+2 正常·开盘前', st, ledger, cleanCalc(goodCalc), T2);
-  if (a.横幅) bad('[T+2 正常] 没有待执行的操作，横幅不该出现');
+  // 上一段已经点过「我做了」，所以这里不该再挂着
+  if (a.横幅) bad(`[T+2 正常] 已经确认过的那笔，横幅不该再出现：「${a.横幅}」`);
   if (/欠着|还没做|补齐/.test(`${a.卡片}${a.时点}${a.算主}`)) bad(`[T+2 正常] 一切正常却提示欠账：「${a.卡片}」`);
   if (!/距离下一次/.test(a.卡片)) bad(`[T+2 正常] 该显示等待态，实际「${a.卡片}」`);
   if (!/预估/.test(a.算主)) bad(`[T+2 正常] 没有待执行的操作，计算器该标「预估」：「${a.算主}」`);
@@ -939,6 +946,9 @@ const bannerOn = () => el('banner').classList.contains('on');
 /* ① 「已完成」按钮的跨日行为 */
 console.log('\n【点「已完成」之后】');
 {
+  // 确认标记存在 localStorage 里会跨用例残留 —— 上一段点过的「我做了」
+  // 会让这一段以为横幅本来就该收起。每段开头清一次。
+  for (const k of [...store.keys()]) if (k.startsWith('hlma30.ack.')) store.delete(k);
   const i0 = SERIES.findIndex((r) => r.d === A);
   const led0 = { schema: 1, launchDate: SERIES[i0 - 40].d, entries: [] };
   const mk = (asof, pending, tier) => {

@@ -374,6 +374,11 @@ let S = {};        // state / ledger / series
 let curFrom = 0;   // 当前图表起点索引
 
 async function load() {
+  // 计算器只当次会话有效：刷新一次就清空。
+  // 它存的是「你此刻的真实持仓」，而这个数隔一天就可能不准了 ——
+  // 留着它反而会在你其实已经操作过之后误报「实盘和账本对不上」。
+  // 该不该提醒你补做，交给横幅负责：它撑到你亲口确认为止。
+  LS.set('calc', null);
   const bust = '?t=' + Date.now();
   const [state, ledger, series] = await Promise.all([
     fetch('./data/state.json' + bust).then((r) => r.json()),
@@ -674,54 +679,89 @@ function renderNext(behind) {
  * 触发横幅。抽成函数是因为它也依赖计算器里填的实盘数字
  * （用来提示「理论值和你的实盘对不上」），输入变化时必须一起刷新。
  */
+/**
+ * 触发横幅 —— 撑到你亲口确认为止。
+ *
+ * 原先它只跟「有没有待执行的操作」绑定：当晚 21:00 系统一记账，
+ * pending 清空，横幅就跟着没了 —— 和你点没点确认无关。于是你要是
+ * 那天忘了做，第二天打开什么提示都没有，静悄悄地一直差一档。
+ *
+ * 现在改成跟「有没有一笔还没被你确认的操作」绑定：
+ *   还没到执行日 → 提示你去做
+ *   已经记账、但你没确认过 → 追问你到底做没做
+ * 两种状态共用同一个确认标记（挂单和成交记录的 signalDate 是同一个），
+ * 所以执行前点过「已完成」，执行后不会再问一遍。
+ */
 function renderBanner(behind) {
   const st = S.state;
   const M = accountMoney();
   const bn = $('banner');
-  const ackKey = st.pending ? `ack.${st.pending.signalDate}` : null;
-  if (st.pending && !LS.get(ackKey, false)) {
-    let side = st.pending.side, estTxt = '';
-    if (M) {
-      const o = plannedOrder(M.V, M.cash, st.pending.tierTo);
-      if (o.side !== 'NONE') side = o.side;
-      const sh = st.etf && st.etf.close ? shares(o.amount, st.etf.close) : null;
-      estTxt = o.side === 'NONE' ? '' : `估算约 ${money(o.amount)} 元` + (sh ? `（约 ${money(sh)} 股）` : '')
-        + '，按本金推算';
-    }
-    const buy = side === 'BUY';
-    bn.classList.add('on'); bn.classList.toggle('sell', !buy);
-    // 写死「下一个交易日」会在 T+1 当天和顶部卡片的「今天收盘前」正面矛盾 ——
-    // 横幅是最显眼的地方，时点必须跟着日期走。
-    const bex = execInfo(st.pending.signalDate);
-    $('bKick').textContent = `触发 · ${bex.kick}　仓位 ${posPct(st.pending.tierFrom)} → ${posPct(st.pending.tierTo)}`;
-    const bShare = buy ? st.pending.tierTo : st.pending.tierFrom;
-    // 顶行已经写了「仓位 25% → 50%」，大字再写一遍目标仓位是同一句话说两遍
-    $('bText').textContent = `${buy ? '买入' : '卖出'}第 ${bShare} 份`;
+  const entries = S.ledger.entries || [];
+  const last = entries.length ? entries[entries.length - 1] : null;
 
-    // 这里的金额是按本金重放出来的理论值，推送里也是同一个数。
-    // 如果你在计算器里填过真实数字且差得明显，必须以真实数字为准 ——
-    // 照着理论值下单会买错量。
-    const man = LS.get('calc', null);
-    let realNote = '';
-    if (man && isFinite(man.cash) && isFinite(man.hold) && (man.cash + man.hold) > 0 && M) {
-      const rr = calcCatchUp(man.cash, man.hold, st.pending.tierTo);
-      const theo = plannedOrder(M.V, M.cash, st.pending.tierTo);
-      if (rr.ok && rr.side !== 'NONE' && theo.side !== 'NONE'
-          && Math.abs(rr.amount - theo.amount) / theo.amount > 0.02) {
-        realNote = `<br><b>按你填的实盘数字应为 ${rr.side === 'BUY' ? '买入' : '卖出'} `
-          + `${money(rr.amount)} 元 —— 以这个为准。</b>上面是按本金推算的理论值。`;
-      }
-    }
-    $('bSub').innerHTML = (estTxt ? estTxt + '，下单以下方计算器为准。<br>' : '')
-      + realNote.replace(/^<br>/, '')
-      + (realNote ? '<br>' : '')
-      + '点「已完成」只是把这条横幅收起来。<b>无论点不点，系统都已按规则把这笔操作写进不可更改的记录；'
-      + '而系统判断你实盘做没做，只看下方计算器里你填的数字。</b>';
-    $('bDone').onclick = () => { LS.set(ackKey, true); bn.classList.remove('on'); };
+  // 需要你确认的那一笔：优先还没执行的，其次是最近一笔已记账的
+  const item = st.pending
+    ? { ...st.pending, done: false }
+    : last
+      ? { signalDate: last.signalDate, tierFrom: last.tierFrom, tierTo: last.tierTo, date: last.date, done: true }
+      : null;
+  const ackKey = item ? `ack.${item.signalDate}` : null;
+
+  if (!item || LS.get(ackKey, false)) { bn.classList.remove('on'); return; }
+
+  // 方向跟着仓位箭头走（定义如此，任何时候自洽）；金额仍按理论账户估
+  const buy = item.tierTo > item.tierFrom;
+  let estTxt = '';
+  if (M) {
+    const o = plannedOrder(M.V, M.cash, item.tierTo);
+    const sh = st.etf && st.etf.close ? shares(o.amount, st.etf.close) : null;
+    estTxt = o.side === 'NONE' ? '' : `估算约 ${money(o.amount)} 元` + (sh ? `（约 ${money(sh)} 股）` : '')
+      + '，按本金推算';
+  }
+  bn.classList.add('on'); bn.classList.toggle('sell', !buy);
+
+  const posArrow = `仓位 ${posPct(item.tierFrom)} → ${posPct(item.tierTo)}`;
+  if (item.done) {
+    const dl = dayLabel(item.date, bjToday());
+    $('bKick').textContent = `${dl.label}已按收盘价记账　${posArrow}`;
+    $('bText').textContent = `${buy ? '买入' : '卖出'}第 ${buy ? item.tierTo : item.tierFrom} 份　你做了吗？`;
+    $('bDone').textContent = '我做了';
   } else {
-    bn.classList.remove('on');
+    const bex = execInfo(item.signalDate);
+    $('bKick').textContent = `触发 · ${bex.kick}　${posArrow}`;
+    $('bText').textContent = `${buy ? '买入' : '卖出'}第 ${buy ? item.tierTo : item.tierFrom} 份`;
+    $('bDone').textContent = '已完成';
   }
 
+  // 计算器里填过真实数字、且和理论值差得明显时，必须以真实数字为准 ——
+  // 照着理论值下单会买错量。
+  const man = LS.get('calc', null);
+  let realNote = '';
+  if (man && isFinite(man.cash) && isFinite(man.hold) && (man.cash + man.hold) > 0 && M) {
+    const rr = calcCatchUp(man.cash, man.hold, item.tierTo);
+    const theo = plannedOrder(M.V, M.cash, item.tierTo);
+    if (rr.ok && rr.side !== 'NONE' && theo.side !== 'NONE'
+        && Math.abs(rr.amount - theo.amount) / theo.amount > 0.02) {
+      realNote = `<b>按你填的实盘数字应为 ${rr.side === 'BUY' ? '买入' : '卖出'} `
+        + `${money(rr.amount)} 元 —— 以这个为准。</b>上面是按本金推算的理论值。<br>`;
+    }
+  }
+  const nxDay = item.done ? nextTradingDay(S.cal, bjToday() > item.date ? bjToday() : item.date) : null;
+  // 还有几笔更早的也没确认过？一并说一声，免得只盯着最新这条
+  const older = entries.filter((e) => e.signalDate !== item.signalDate && !LS.get(`ack.${e.signalDate}`, false)).length;
+
+  $('bSub').innerHTML = (estTxt ? estTxt + '，下单以下方计算器为准。<br>' : '')
+    + realNote
+    + (item.done
+      // 补做金额取决于你**真实**的持仓，理论账户早就执行过了、算出来是 0，
+      // 所以这里不能说「照上面的金额补」—— 上面根本没有金额。
+      ? '系统已按规则把这笔写进不可更改的记录，但它<b>看不到你券商里的真实成交</b>。'
+        + '做了就点「我做了」，这条会一直挂着直到你点它；'
+        + `没做的话，${nxDay ? `请在 ${dayLabel(nxDay, bjToday()).label}尾盘补上` : '请在下一个交易日尾盘补上（交易日历取不到，给不出具体日期）'}`
+        + ' —— 到下方「每份该是多少钱」填入你的真实持仓，它会算出该补多少。'
+      : '点「已完成」把这条收起来。<b>无论点不点，系统都已按规则把这笔操作写进不可更改的记录。</b>')
+    + (older ? `<br>另有 ${older} 笔更早的操作也没确认过。` : '');
+  $('bDone').onclick = () => { LS.set(ackKey, true); bn.classList.remove('on'); };
 }
 
 /**

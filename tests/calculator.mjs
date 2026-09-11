@@ -9,6 +9,17 @@
  *
  * 用法：npm run calc（npm test 里也会跑）
  */
+/* ---- 把时刻钉在盘中 10:00：日期仍跟着今天走，但小时固定 ----
+ * 不钉的话，同一份测试上午跑和收盘后跑会走进不同分支
+ * （执行日 15:00 之后面板会改说「今天已经收盘了」），
+ * 结果随运行时刻变化，红绿全看运气。
+ */
+const _REAL_NOW = Date.now();
+Date.now = () => {
+  const d = new Date(_REAL_NOW + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  return Date.parse(d + 'T02:00:00Z');   // 北京 10:00
+};
+
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { H, el, put, at, pend, D, CAL, TODAY, CORE, ROOT, fractionsIn } from './harness.mjs';
