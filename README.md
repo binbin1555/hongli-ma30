@@ -156,6 +156,7 @@ Worker 会自动向 GitHub 查询默认分支，`main` 还是 `master` 都不用
 npm test            # 回归测试（含文案与计算器测试）
 npm run wording     # 只跑文案：打印每种状态的真实句子
 npm run calc        # 只跑计算器：T 日／T+1 日／T+N 日的时间线
+npm run journey     # 全流程走查：T 出信号 → T+1 按时做 → T+2 迟到补做
 npm run sweep       # 状态空间穷举（2808 组）
 npm run check:sources   # 三个外部数据源体检
 npm run check:deploy -- <worker 地址>   # 线上跑的是不是本地这一版

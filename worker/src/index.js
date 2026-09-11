@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '3478fa4b1e';
+const BUILD = '22f0aec08f';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -709,13 +709,18 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       group: '红利MA30·操作',
     });
   } else {
-    // 已经破线却没出挂单，只可能是满仓/空仓挡住了。
-    // 这时说「还需跌 X%」是假话（abs 会把负数翻正），得直说已经破线。
+    // 已经破线却没出挂单，只可能是满仓/空仓挡住了，这时要直说已经破线。
+    //
+    // 注意 pctToBuy 和 pctToSell 的符号约定是**相反**的（见 triggers）：
+    //   pctToBuy  = (买入线 / 收盘 − 1)　→ 正数 = 收盘已在买入线之下
+    //   pctToSell = (卖出线 / 收盘 − 1)　→ 正数 = 还需再涨这么多
+    // 照着卖出侧的写法套到买入侧，判断就整个反过来 ——
+    // 每天最常见的「无操作」推送会在没破线时说「已跌破买入线」。
     const dist = newState.tier >= 4
       ? '已满仓，不再加仓'
-      : i.pctToBuy <= 0
+      : i.pctToBuy >= 0
         ? `已跌破买入线（${i.buyTrigger}）`
-        : `距买入还需跌 ${i.pctToBuy.toFixed(2)}%（${i.buyTrigger}）`;
+        : `距买入还需跌 ${Math.abs(i.pctToBuy).toFixed(2)}%（${i.buyTrigger}）`;
     const dist2 = newState.tier <= 0
       ? '　当前空仓，没有可卖的份额'
       : i.pctToSell <= 0

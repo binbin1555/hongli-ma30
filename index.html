@@ -727,6 +727,9 @@ function calc() {
   // 本金没设时账本推算不出金额，两个框是空的 —— 这时候说「已自动填入」是假话
   const autoOK = !!accountMoney();
   chip.textContent = edited ? '按你填的数字' : (autoOK ? '按账本自动填入' : '请先设本金，或直接手填');
+  // 副行的口径必须和这个标签一致：没填过就说「按账本推算」，
+  // 否则标签写「按账本自动填入」而下面写「按你填的数字」，同屏自相矛盾。
+  const basis = edited ? '按你填的数字' : '按账本推算';
   reset.hidden = !edited;
 
   // 有挂单时，目标就是挂单那一档 —— 从你实际位置直接调过去。
@@ -784,9 +787,9 @@ function calc() {
   }
   const wTxt = `红利占 ${(r.weight * 100).toFixed(1)}%`;
   if (!r.ok && r.reason === 'FULL') {
-    setOut('已满仓，无需买入', `按你填的数字：两栏合计 ${money(r.total)}，${wTxt}，已经是<b>满仓 100%</b>`);
+    setOut('已满仓，无需买入', `${basis}：两栏合计 ${money(r.total)}，${wTxt}，已经是<b>满仓 100%</b>`);
   } else if (!r.ok && r.reason === 'EMPTY') {
-    setOut('已空仓，无可卖出', `按你填的数字：两栏合计 ${money(r.total)}，${wTxt}，已经是<b>空仓 0%</b>`);
+    setOut('已空仓，无可卖出', `${basis}：两栏合计 ${money(r.total)}，${wTxt}，已经是<b>空仓 0%</b>`);
   } else {
     const px = S.state.etf && S.state.etf.close;
     const sh = px ? shares(r.amount, px) : null;
@@ -797,7 +800,7 @@ function calc() {
     setOut(
       (live ? '' : '预估 · ')
         + `${isBuy ? '买入' : '卖出'}第 ${isBuy ? r.to : r.tier} 份　${money(r.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : ''),
-      `按你填的数字：两栏合计 ${money(r.total)}，${wTxt}，相当于仓位 <b>${posPct(r.tier)}</b> → 目标 <b>${posPct(r.to)}</b>`
+      `${basis}：两栏合计 ${money(r.total)}，${wTxt}，相当于仓位 <b>${posPct(r.tier)}</b> → 目标 <b>${posPct(r.to)}</b>`
         + (px ? '' : '　·　暂无 ETF 报价，只给金额'),
       live ? (isBuy ? 'var(--up)' : 'var(--dn)') : 'var(--dm)');
   }
