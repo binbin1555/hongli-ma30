@@ -341,6 +341,13 @@ function execInfo(signalDate) {
   }
   const L = dayLabel(day, today);
   const nb = `<span class="nb">${L.label}</span>`;
+  // 执行日当天、但已经过了 15:00：今天再说「收盘前下单」就是句办不到的话。
+  // 下班后看手机正好落在 15:00–21:00 这段，这时候人最需要知道的是
+  //「今天已经没机会了，接下来该怎么办」。
+  if (day === today && bjHour() >= 15) {
+    return { day, when: 'closed', L, lead: `本该在 ${L.label}收盘前`, leadHtml: `本该在 ${nb}收盘前`,
+      kick: `${L.label}已收盘 · 今天的机会已过` };
+  }
   if (day === today) return { day, when: 'today', L, lead: `${L.label}收盘前`, leadHtml: `${nb}收盘前`, kick: `${L.label}收盘前执行` };
   if (day > today) return { day, when: 'future', L, lead: `${L.label}收盘前`, leadHtml: `${nb}收盘前`, kick: `${L.label}收盘前执行` };
   return { day, when: 'past', L, lead: `本应在 ${L.label}收盘前`, leadHtml: `本应在 ${nb}收盘前`, kick: `${L.label}收盘前执行 · 已过期，请尽快补做` };
@@ -447,6 +454,8 @@ function staleDays() {
 function beijingStamp1() {
   return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ');
 }
+/** 北京时间的小时（0–23） */
+const bjHour = () => +beijingStamp1().slice(11, 13);
 
 function behindState() {
   const man = LS.get('calc', null);
@@ -585,7 +594,8 @@ function renderNext(behind) {
     $('nextSub').innerHTML = `仓位 <b>${posPct(mv.from)}</b> → <b>${posPct(mv.to)}</b>`
       + est + realLine
       + `<br>信号日 ${st.pending.signalDate}`
-      + (ex.when === 'today' ? `　·　<b style="color:var(--up)"><span class="nb">${ex.L.md}</span>收盘前必须完成</b>`
+      + (ex.when === 'closed' ? `　·　<b style="color:var(--up)">${ex.L.md}已经收盘，今天做不了了</b>`
+        : ex.when === 'today' ? `　·　<b style="color:var(--up)"><span class="nb">${ex.L.md}</span>收盘前必须完成</b>`
         : ex.when === 'past' ? `　·　执行日 ${ex.day}（${ex.L.wd}）已过，账本当日 21:00 已按规则记上，实盘请尽快补做`
         : ex.day ? `　·　执行日 ${ex.day}（${ex.L.wd}）`
           + (ex.L.diff > 1 ? `，距今 ${ex.L.diff} 天，中间的休市日不用操作` : '')
@@ -845,15 +855,24 @@ function calc() {
   } else {
     const px = S.state.etf && S.state.etf.close;
     const sh = px ? shares(r.amount, px) : null;
+    // shares() 不足一手时返回 0，而 0 是假值 —— 原先直接被 `sh ? …` 吞掉，
+    // 于是显示「买入 125 元」却不提这点钱连一手都买不到，照着下单会失败。
+    // 注意：这串要进 oMain，而 setOut 对 oMain 用的是 textContent ——
+    // 放标签进去会把 <b> 原样印在页面上。强调留给下面用 innerHTML 的副行。
+    const lotTip = px && sh === 0 ? '　不足一手，买不了'
+      : (sh ? `　约 ${money(sh)} 股` : '');
     const isBuy = r.side === 'BUY';
     // 没挂单时这只是「下次触发会是多少」的预估。用红绿大字写出来，
     // 扫一眼就像今天该下单 —— 所以加前缀、并改成灰色。
     const live = !!S.state.pending;
     setOut(
       (live ? '' : '预估 · ')
-        + `${isBuy ? '买入' : '卖出'}第 ${isBuy ? r.to : r.tier} 份　${money(r.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : ''),
+        + `${isBuy ? '买入' : '卖出'}第 ${isBuy ? r.to : r.tier} 份　${money(r.amount)} 元` + lotTip,
       `${basis}：两栏合计 ${money(r.total)}，${wTxt}，相当于仓位 <b>${posPct(r.tier)}</b> → 目标 <b>${posPct(r.to)}</b>`
-        + (px ? '' : '　·　暂无 ETF 报价，只给金额'),
+        + (px && sh === 0
+          ? `<br><b>这笔金额买不了：</b>ETF 最少一手 100 股，按 ${px} 元算约 ${money(px * 100)} 元，`
+            + `而这一档只需要 ${money(r.amount)} 元。等本金再大一些，或者接受偏离一档去买一手。`
+          : px ? '' : '　·　暂无 ETF 报价，只给金额'),
       live ? (isBuy ? 'var(--up)' : 'var(--dn)') : 'var(--dm)');
   }
 
@@ -907,6 +926,16 @@ function renderTiming(behind) {
           + `账本会在 <b class="nb">${ex.day ? ex.L.label : '执行日'}</b>当晚 21:00 记账，届时就对上了。`;
         return;
       }
+    }
+    // 今天已经收盘，就别再教人「请在尾盘下单」了 —— 那件事今天已经做不成
+    if (ex.when === 'closed') {
+      const nx = nextTradingDay(S.cal, ex.day);
+      tb.innerHTML = `⚠ <b>${ex.L.md}已经收盘了</b>　这笔本该在今天尾盘做完（仓位 `
+        + `${posPct(p.tierFrom)} → ${posPct(p.tierTo)}）。`
+        + `<br>已经做了的话，等今晚 21:00 系统记账就对上了；`
+        + `没做的话，${nx ? `请在 <b class="nb">${dayLabel(nx, bjToday()).label}</b>尾盘` : '下一个交易日尾盘（日历取不到，给不出具体日期）'}`
+        + `照上面的金额补，越早越好 —— 拖得越久，成交价离账本越远。`;
+      return;
     }
     // 执行日已过还打绿色对勾 + 「本次要执行」，等于说「一切正常」，和「已过期」直接打架
     const late = ex.when === 'past';

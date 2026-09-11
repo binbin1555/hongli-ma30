@@ -488,6 +488,12 @@ function verify(tag, state, ledger, calc, todayStr) {
   if (ledgerTier >= 4 && !pend && /距离下一次买入/.test(p.卡片)) say('已满仓却提示还要买入');
   if (ledgerTier <= 0 && !pend && /距离下一次卖出/.test(p.卡片)) say('已空仓却提示还要卖出');
 
+  // 7b. 这几个元素是用 textContent 写的，塞标签进去会把 <b> 原样印在页面上
+  for (const [nm, id] of [['计算器主行', 'oMain'], ['仓位卡片', 'tierNum'], ['横幅大字', 'bText'], ['横幅顶行', 'bKick']]) {
+    const t = el(id).textContent;
+    if (/<[a-zA-Z/]/.test(t)) say(`${nm}里漏出了 HTML 标签（该元素用 textContent 写）：「${t.slice(0, 48)}」`);
+  }
+
   // 8. 通用红线
   for (const h of slangIn(all)) say(`文案里出现黑话：${h}`);
   const fr = fractionsIn(all);
@@ -792,6 +798,124 @@ console.log('\n  ── 状态文件损坏时列出的问题');
     const probs = CORE.validateState(st);
     console.log(`    ${nm.padEnd(9, '　')} ${probs.join('；') || '（没查出问题）'}`);
     if (!probs.length) bad(`[状态损坏·${nm}] 明显不合法却没被 validateState 拦下`);
+  }
+}
+
+/* ==================================================================== */
+/*
+ * 交互序列：前面查的都是「某一刻显示什么」，这里查的是
+ * 「点了、改了、隔了一天之后，显示还对不对」——
+ * 状态残留和跨日行为只有连着走才看得出来。
+ */
+console.log('\n\n═════════════ 交互序列 ═════════════');
+
+const bannerOn = () => el('banner').classList.contains('on');
+
+/* ① 「已完成」按钮的跨日行为 */
+console.log('\n【点「已完成」之后】');
+{
+  const i0 = SERIES.findIndex((r) => r.d === A);
+  const led0 = { schema: 1, launchDate: SERIES[i0 - 40].d, entries: [] };
+  const mk = (asof, pending, tier) => {
+    const cl = SERIES[SERIES.findIndex((r) => r.d === asof)].c;
+    const m3 = ma(SERIES.slice(0, SERIES.findIndex((r) => r.d === asof) + 1).map((r) => r.c), MA_LEN);
+    const tg = triggers(cl, m3);
+    return {
+      schema: 1, launchDate: led0.launchDate, asof, lastRun: `${asof} 21:00:45`, tier, pending,
+      index: { code: 'H00922', close: +cl.toFixed(2), ma30: +m3.toFixed(2), ratio: +tg.ratio.toFixed(4),
+        changePct: 0.1, buyTrigger: +tg.buyAt.toFixed(2), sellTrigger: +tg.sellAt.toFixed(2),
+        pctToBuy: +tg.pctToBuy.toFixed(2), pctToSell: +tg.pctToSell.toFixed(2) },
+      bond: { code: 'H11001', close: 267 },
+      etf: { code: '515180', close: ETF_PX, asof, stale: false },
+      checks: { passed: 10, total: 10, failed: [], ranAt: `${asof} 21:00:45` },
+    };
+  };
+  const pA = { signalDate: A, tierFrom: 0, tierTo: 1, side: 'BUY' };
+
+  goto(A, '21:05'); show(mk(A, pA, 0), led0, null);
+  console.log(`  T 日晚打开　　　　　　横幅 ${bannerOn() ? '显示' : '收起'}`);
+  if (!bannerOn()) bad('[已完成] T 日晚横幅没显示');
+
+  el('bDone').onclick();
+  console.log(`  点「已完成」　　　　　横幅 ${bannerOn() ? '显示' : '收起'}`);
+  if (bannerOn()) bad('[已完成] 点了按钮横幅还在');
+
+  goto(A, '21:10'); show(mk(A, pA, 0), led0, null);
+  console.log(`  同一天刷新页面　　　　横幅 ${bannerOn() ? '显示' : '收起'}`);
+  if (bannerOn()) bad('[已完成] 同一天刷新后横幅又冒出来了');
+
+  goto(A1, '10:00'); show(mk(A, pA, 0), led0, null);
+  console.log(`  T+1 执行日当天打开　　横幅 ${bannerOn() ? '显示' : '收起'}　卡片「${el('nextLine').textContent.trim()}」`);
+  if (!/今天/.test(el('nextLine').textContent)) {
+    bad('[已完成] 横幅已收起，顶部卡片必须还在提醒今天要做 —— 否则点过按钮就彻底没提示了');
+  }
+
+  // T+1 晚执行 + 又出新信号 → 新的信号日，横幅必须重新出现
+  const led1 = { ...led0, entries: [{ seq: 1, date: A1, signalDate: A, side: 'BUY', tierFrom: 0, tierTo: 1,
+    targetWeight: WEIGHTS[1], price: SERIES[i0 + 1].c, etfPrice: ETF_PX, late: false, recordedAt: `${A1} 21:00:45` }] };
+  const pB = { signalDate: A1, tierFrom: 1, tierTo: 2, side: 'BUY' };
+  goto(A1, '21:05'); show(mk(A1, pB, 1), led1, null);
+  console.log(`  T+1 晚又出新信号　　　横幅 ${bannerOn() ? '显示' : '收起'}`);
+  if (!bannerOn()) bad('[已完成] 换了新信号，横幅必须重新出现 —— 否则这笔永远没人提醒');
+}
+
+/* ② 同一天不同时刻打开，时点提示是否始终成立 */
+console.log('\n【同一天从早到晚】');
+{
+  const i0 = SERIES.findIndex((r) => r.d === A);
+  const led = { schema: 1, launchDate: SERIES[i0 - 40].d, entries: [] };
+  const pA = { signalDate: A, tierFrom: 0, tierTo: 1, side: 'BUY' };
+  const st1 = { schema: 1, launchDate: led.launchDate, asof: A, lastRun: `${A} 21:00:45`, tier: 0, pending: pA,
+    index: { code: 'H00922', close: 11646.8, ma30: 12017.48, ratio: 0.9691, changePct: -0.17,
+      buyTrigger: 11656.95, sellTrigger: 12257.83, pctToBuy: 0.09, pctToSell: 5.25 },
+    bond: { code: 'H11001', close: 267 }, etf: { code: '515180', close: ETF_PX, asof: A, stale: false },
+    checks: { passed: 10, total: 10, failed: [], ranAt: `${A} 21:00:45` } };
+  for (const at of ['09:00', '11:30', '14:45', '15:30', '20:00']) {
+    goto(A1, at); show(st1, led, hold(TOT, 0));
+    const line = el('nextLine').textContent.trim();
+    const t = el('timing').textContent.trim();
+    console.log(`  ${A1} ${at}　${line}`);
+    if (!/今天/.test(line)) bad(`[同一天] ${at} 打开，执行日就是今天却没说「今天」：「${line}」`);
+    if (!t.includes('尾盘')) bad(`[同一天] ${at} 没给尾盘提示`);
+  }
+}
+
+/* ③ 买完立刻反向：T 买入信号，T+1 又出卖出信号 */
+console.log('\n【买完第二天就要卖】');
+{
+  const i0 = SERIES.findIndex((r) => r.d === A);
+  const led = { schema: 1, launchDate: SERIES[i0 - 40].d,
+    entries: [{ seq: 1, date: A1, signalDate: A, side: 'BUY', tierFrom: 0, tierTo: 1,
+      targetWeight: WEIGHTS[1], price: SERIES[i0 + 1].c, etfPrice: ETF_PX, late: false, recordedAt: `${A1} 21:00:45` }] };
+  const st2 = { schema: 1, launchDate: led.launchDate, asof: A1, lastRun: `${A1} 21:00:45`, tier: 1,
+    pending: { signalDate: A1, tierFrom: 1, tierTo: 0, side: 'SELL' },
+    index: { code: 'H00922', close: 12400, ma30: 12100, ratio: 1.0248, changePct: 5.1,
+      buyTrigger: 11737, sellTrigger: 12342, pctToBuy: -5.35, pctToSell: -0.47 },
+    bond: { code: 'H11001', close: 267 }, etf: { code: '515180', close: ETF_PX, asof: A1, stale: false },
+    checks: { passed: 10, total: 10, failed: [], ranAt: `${A1} 21:00:45` } };
+  goto(A1, '21:05'); show(st2, led, hold(TOT, 1));
+  const pp = verify('买完第二天就要卖', st2, led, cleanCalc(hold(TOT, 1)), A1);
+  console.log(`    交易记录　 ${el('ledger').querySelector('tbody').textContent.replace(/\s+/g, ' ').trim().slice(0, 70)}`);
+}
+
+/* ④ 小额：算出来不够一手 */
+console.log('\n【本金太小，不够一手】');
+{
+  const i0 = SERIES.findIndex((r) => r.d === A);
+  const led = { schema: 1, launchDate: SERIES[i0 - 40].d, entries: [] };
+  const st3 = { schema: 1, launchDate: led.launchDate, asof: A, lastRun: `${A} 21:00:45`, tier: 0,
+    pending: { signalDate: A, tierFrom: 0, tierTo: 1, side: 'BUY' },
+    index: { code: 'H00922', close: 11646.8, ma30: 12017.48, ratio: 0.9691, changePct: -0.17,
+      buyTrigger: 11656.95, sellTrigger: 12257.83, pctToBuy: 0.09, pctToSell: 5.25 },
+    bond: { code: 'H11001', close: 267 }, etf: { code: '515180', close: ETF_PX, asof: A, stale: false },
+    checks: { passed: 10, total: 10, failed: [], ranAt: `${A} 21:00:45` } };
+  for (const [lab, c] of [['总共 500 元', { cash: 500, hold: 0 }], ['总共 600 元', { cash: 600, hold: 0 }]]) {
+    goto(A1, '10:00'); show(st3, led, c);
+    const m = el('oMain').textContent.trim();
+    console.log(`  ${lab}　→　${m}`);
+    if (/约 0 股/.test(m)) bad(`[小额] 算出 0 股还照样显示：「${m}」—— 该直说这点钱买不了一手`);
+    if (/<[a-zA-Z/]/.test(m)) bad(`[小额] 计算器主行漏出 HTML 标签（该元素用 textContent 写）：「${m}」`);
+    if (!/不足一手/.test(m) && /125 元/.test(m)) bad(`[小额] 125 元买不了一手，却没提示：「${m}」`);
   }
 }
 
