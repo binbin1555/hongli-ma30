@@ -1025,20 +1025,60 @@ function setEditing(on) {
   $('pCancel').hidden = !on;
   $('pBtn').textContent = on ? '完成' : '设置';
   $('pBtn').classList.toggle('done', on);
+  $('pHint').style.color = '';
   $('pHint').textContent = on
     ? '填完点「完成」保存，账户盈亏和交易记录会立刻重算；点「取消」放弃修改。'
     : '账户盈亏和交易记录里的金额都由它推导。';
 }
+/**
+ * 本金输入的校验。
+ *
+ * 不能直接丢给 num()：它只保留数字和小数点，于是
+ *   「abc」「1.2.3」「１００万」→ 0，本金被**静默清空**；
+ *   「1e6」→ 16，「50万」→ 50，本金被**静默改成一个看着合理的小数**。
+ * 后一种最坏 —— 清空还看得出来，16 元看不出来，而账户盈亏和
+ * 交易记录里的每一个金额都是从本金推出来的。
+ *
+ * 所以这里只接受「纯数字 + 可选千分位逗号 + 可选小数」，其余一律拒绝并说明。
+ */
+function parsePrincipal(raw) {
+  const s = String(raw).replace(/\s/g, '');
+  if (!s) return { ok: true, value: 0, msg: '已清除本金。账户盈亏和交易记录里的金额会暂时空着。' };
+  if (!/^\d{1,3}(,\d{3})*(\.\d+)?$|^\d+(\.\d+)?$/.test(s)) {
+    return { ok: false,
+      msg: `「${raw}」看不出是多少钱。只填数字，可以带千分位逗号 —— `
+        + `别写「万」「元」，也别用全角数字。例如 1000000 或 1,000,000。` };
+  }
+  const v = Number(s.replace(/,/g, ''));
+  if (!isFinite(v) || v < 0) return { ok: false, msg: `「${raw}」不是一个有效金额。` };
+  if (v > 0 && v < 1000) {
+    return { ok: true, value: v, msg: `已保存，但本金只有 ${money(v)} 元 —— 确认没少写几位？` };
+  }
+  return { ok: true, value: v, msg: null };
+}
+
 $('pBtn').addEventListener('click', () => {
   if ($('inP').hidden) {
     const pv = num(LS.get('principal', 0));
     $('inP').value = pv ? money(pv) : '';
     setEditing(true); $('inP').focus(); $('inP').select();
   } else {
-    LS.set('principal', num($('inP').value));
-    LS.set('calc', null);          // 本金变了，计算器回到账本推算值
+    const r = parsePrincipal($('inP').value);
+    if (!r.ok) {
+      // 留在编辑态，把话说清楚，绝不静默保存一个错的数
+      $('pHint').textContent = r.msg;
+      $('pHint').style.color = 'var(--up)';
+      $('inP').focus(); $('inP').select();
+      return;
+    }
+    const before = num(LS.get('principal', 0));
+    LS.set('principal', r.value);
+    // 只有本金真的变了才重置计算器 —— 点开看看又原样点「完成」，
+    // 不该把你填的实盘数字清掉
+    if (r.value !== before) LS.set('calc', null);
     setEditing(false);
     render();
+    if (r.msg) { $('pHint').textContent = r.msg; $('pHint').style.color = 'var(--up)'; }
   }
 });
 $('pCancel').addEventListener('click', () => { setEditing(false); });

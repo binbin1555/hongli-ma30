@@ -37,7 +37,15 @@ class El {
   // render() 里 renderLedger 要 $('ledger').querySelector('tbody')，
   // 给每个元素挂一个惰性子节点，让整条 render 链在假 DOM 里也能跑通
   querySelector(sel) { return (this._kids ||= {})[sel] ||= new El(sel); }
-  addEventListener() {}
+  // 真的存下监听器：本金输入这类交互只有点得动才测得了
+  addEventListener(type, fn) { (this._ls ||= {})[type] = [...(this._ls?.[type] || []), fn]; }
+  click() {
+    if (typeof this.onclick === 'function') this.onclick({});
+    for (const f of (this._ls && this._ls.click) || []) f({});
+  }
+  focus() {}
+  select() {}
+  scrollIntoView() {}
   getBoundingClientRect() { return { left: 0, top: 0, width: 880, height: 300 }; }
 }
 const els = new Map();
@@ -69,6 +77,15 @@ globalThis.fetch = async (u) => {
 
 /* ---------------- 抠出页面模块并装上后门 ---------------- */
 const html = readFileSync(join(ROOT, 'index.html'), 'utf8');
+
+// 把 HTML 里写了 hidden 的元素在假 DOM 里也标成隐藏。
+// 不这么做的话 el('inP').hidden 是 undefined（假值），
+// 代码会以为输入框已经展开 —— 交互测试第一步就走错分支。
+for (const tag of html.match(/<[a-z]+[^>]*\sid="[^"]+"[^>]*>/g) || []) {
+  const id = tag.match(/\sid="([^"]+)"/)[1];
+  if (/\shidden(\s|>|=)/.test(tag)) el(id).hidden = true;
+}
+
 const m = html.match(/<script type="module">([\s\S]*?)<\/script>/);
 if (!m) { console.log('✗ index.html 里找不到 <script type="module">'); process.exit(1); }
 export const CORE_URL = pathToFileURL(join(ROOT, 'shared', 'strategy.js')).href;

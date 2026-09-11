@@ -1107,5 +1107,80 @@ console.log('\n【图表】');
   if (marks.length !== 2) bad(`[图表] 账本里 2 笔成交，图上却有 ${marks.length} 个标记`);
 }
 
+/* ==================================================================== */
+/*
+ * 本金输入 —— 它是所有金额的根。
+ * 原先直接丢给 num()（只留数字和小数点），于是「abc」「１００万」被静默
+ * 清空，「1e6」变 16 元、「50万」变 50 元 —— 后一种最坏，清空还看得出来，
+ * 16 元看不出来，而账户盈亏和交易记录的每个数都是从本金推出来的。
+ */
+console.log('\n\n═════════════ 本金输入 ═════════════\n');
+{
+  const PV = () => el('pView').textContent.trim();
+  const HINT = () => el('pHint').textContent.trim();
+  const setP = (v) => {
+    store.set('hlma30.principal', '1000000');
+    store.set('hlma30.calc', JSON.stringify({ cash: 750000, hold: 250000 }));
+    H.render();
+    el('pBtn').click();          // 进入编辑态
+    el('inP').value = v;
+    el('pBtn').click();          // 点完成
+    return { 本金: PV(), 提示: HINT(), 计算器: `${el('inCash').value} / ${el('inHold').value}`,
+      仍在编辑: el('inP').hidden !== true };
+  };
+
+  const cases = [
+    ['1000000', true, '正常'],
+    ['1,000,000', true, '带千分位'],
+    ['1234.56', true, '带小数'],
+    ['abc', false, '纯字母'],
+    ['1.2.3', false, '两个小数点'],
+    ['1e6', false, '科学计数法 —— 原先会变成 16 元'],
+    ['50万', false, '带「万」—— 原先会变成 50 元'],
+    ['１００万', false, '全角 —— 手机输入法很容易打出'],
+    ['1000000 元', false, '带单位'],
+    ['-5000', false, '负数'],
+  ];
+  for (const [v, shouldSave, why] of cases) {
+    const r = setP(v);
+    const saved = !r.仍在编辑;
+    console.log(`  输入 ${JSON.stringify(v).padEnd(13)} → ${saved ? `保存为 ${r.本金}` : '拒绝保存，停在编辑态'}　（${why}）`);
+    if (saved !== shouldSave) {
+      bad(`[本金] 输入「${v}」${shouldSave ? '应该保存却被拒' : '不该保存却存进去了：' + r.本金}`);
+    }
+    if (!saved && !/看不出是多少钱|不是一个有效金额/.test(r.提示)) {
+      bad(`[本金] 拒绝了「${v}」却没说清为什么：「${r.提示}」`);
+    }
+    if (!saved) console.log(`      提示：${r.提示}`);
+  }
+
+  // 清空 = 主动清除，允许，但要说明
+  {
+    const r = setP('');
+    console.log(`  输入 ${JSON.stringify('').padEnd(13)} → ${r.本金}　提示：${r.提示}`);
+    if (r.本金 !== '未设置') bad(`[本金] 清空后应显示「未设置」，实际「${r.本金}」`);
+    if (!/清除/.test(r.提示)) bad('[本金] 清空本金没有任何说明');
+  }
+
+  // 小得离谱要提醒，但不拦
+  {
+    const r = setP('500');
+    console.log(`  输入 ${JSON.stringify('500').padEnd(13)} → ${r.本金}　提示：${r.提示}`);
+    if (!/确认没少写几位/.test(r.提示)) bad('[本金] 本金只有 500 元却没提醒是不是少写了几位');
+  }
+
+  // 点开又原样点「完成」，不该把计算器里填的数字清掉
+  {
+    store.set('hlma30.principal', '1000000');
+    store.set('hlma30.calc', JSON.stringify({ cash: 750000, hold: 250000 }));
+    H.render();
+    el('pBtn').click();
+    el('pBtn').click();          // 一个字没改
+    const kept = store.get('hlma30.calc');
+    console.log(`  点开→原样完成　→ 计算器数字 ${kept ? '保留' : '被清空'}`);
+    if (!kept) bad('[本金] 点开本金又原样点「完成」，把计算器里填的实盘数字清掉了');
+  }
+}
+
 console.log(`\n${fails ? `✗ 全流程有 ${fails} 处问题` : '✓ T / T+1 / T+2 三条路径全程畅通，无错报'}\n`);
 process.exitCode = fails ? 1 : 0;
