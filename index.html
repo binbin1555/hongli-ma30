@@ -478,11 +478,16 @@ function behindState() {
 
   const target = pendingTo === null ? ledgerTier : pendingTo;
   const cu = calcCatchUp(man.cash, man.hold, target);
+  // 填完这两个数之后，账本又记了哪几笔？有的话，多半是你在券商做了却没回来更新
+  const since = man.at
+    ? (S.ledger.entries || []).filter((e) => e.date > man.at)
+    : [];
   return {
     actualTier: r.tier, ledgerTier, pendingTo, target,
     gap: target - r.tier,
     owed: ledgerTier - r.tier,              // 真正漏做的档数
     missed: missedEntries(S.ledger.entries, r.tier),
+    filledAt: man.at || null, since,
     order: cu.ok && cu.side !== 'NONE' ? cu : null,
   };
 }
@@ -509,6 +514,21 @@ function staleNote(st) {
       + `这不是「再等等」能解决的，请看下方「设置与数据健康」。`
     : `<br>若 ${md(st.asof)} 21:00 的运行还没跑完，稍等再刷新；`
       + `若已过 ${md(st.asof)} 22:00 仍是这样，请看下方「设置与数据健康」。`;
+}
+
+/**
+ * 「你填的数字可能已经过时了」。
+ *
+ * 系统判断你做没做，只看下面两个输入框里的数字。可很多人是在券商
+ * App 里操作、根本不回这个页面 —— 那两个数就永远停在上次填的时刻，
+ * 而账本一直在往前走。这时候板着脸说「你有 1 笔操作还没做」是冤枉人。
+ */
+function staleCalcNote(behind) {
+  if (!behind || !behind.since || !behind.since.length) return '';
+  const n = behind.since.length;
+  return `<br><b>注意：你填的数字是 ${md(behind.filledAt)}填的，那之后账本又记了 ${n} 笔。</b>`
+    + `如果你已经在券商 App 里做过了，把下面两栏改成现在的真实持仓就行，这条提示会自动消失；`
+    + `确实没做的话，再照上面的金额补。`;
 }
 
 function otherSide(kind, tier, i) {
@@ -541,12 +561,17 @@ function renderNext(behind) {
     // 笔数和金额说的不是一回事：账本可能来回走过 0→1→2→1 三笔，
     // 而你只需一次调仓就能落到最终档位。写「N 笔」再给一个金额会让人以为
     // 要下 N 单，所以金额这里必须点明是「一次性补到位」。
-    const head = (nMissed
-      ? `你有 <b>${nMissed}</b> 笔操作还没做`
-      : `你填的实盘仓位和账本对不上`)
+    // 填完数字之后账本又动过时，系统分不清「真没做」和「做了没更新」——
+    // 这时候断言「你还没做」是冤枉人，主行要把两种可能都留出来。
+    const maybeStale = behind.since && behind.since.length > 0;
+    const head = (maybeStale
+      ? `实盘和账本差 <b>${Math.abs(behind.gap)}</b> 档`
+      : nMissed
+        ? `你有 <b>${nMissed}</b> 笔操作还没做`
+        : `你填的实盘仓位和账本对不上`)
       + (behind.pendingTo !== null && behind.pendingTo !== behind.ledgerTier ? '，另有 1 笔待执行的操作' : '');
     $('nextLine').innerHTML = head
-      + (amt ? `，需一次性<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'} ${amt}</b>补到位` : '');
+      + (amt ? `，${maybeStale ? '若确实没做，需' : '需一次性'}<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'} ${amt}</b>${maybeStale ? '' : '补到位'}` : '');
     const days = nMissed
       ? behind.missed.map((e) => `${e.date} ${e.side === 'BUY' ? '买' : '卖'}${posPct(e.tierFrom)}→${posPct(e.tierTo)}`).join('　')
       : '';
@@ -559,6 +584,7 @@ function renderNext(behind) {
       + (sh ? `　·　约 ${money(sh)} 股` : '')
       + (days ? `<br>漏掉的记录：${days}（${nMissed} 笔合起来只需这一次调仓）` : '')
       + (nMissed ? '' : '<br>账本里没有对得上的漏做记录 —— 可能是持仓涨跌跨过了档位边界，也可能是计算器里的数字填错了。')
+      + staleCalcNote(behind)
       + `<br>补完之后才会回到正常的信号节奏。详见下方「每份该是多少钱」。`;
   } else if (mv.kind === 'pending') {
     // 方向跟着仓位箭头走：50% → 25% 就是卖，这是定义，任何时候都自洽。
@@ -904,7 +930,11 @@ function renderTiming(behind) {
         + `上面的金额已经把仓位 ${posPct(p0.tierFrom)} → ${posPct(p0.tierTo)} 那笔待执行的操作一起算进去了，`
         + `请在 <b class="nb">${ex0.day ? ex0.L.label : NO_EXEC_DATE}</b>收盘前一次做完。${CLOSE_TIP}。`;
     } else {
-      tb.innerHTML = head + `先把上面这笔补掉，再等下一次信号。`;
+      tb.innerHTML = head
+        + (behind.since && behind.since.length
+          ? `你填的数字是 ${md(behind.filledAt)}填的，那之后账本又记了 ${behind.since.length} 笔 —— `
+            + `若已在券商做过，改一下下面两栏即可。`
+          : '先把上面这笔补掉，再等下一次信号。');
     }
     return;
   }
@@ -1009,7 +1039,10 @@ function renderMismatch(r, behind) {
 }
 let calcTimer = null;
 function onCalcInput() {
-  LS.set('calc', { cash: num($('inCash').value), hold: num($('inHold').value) });
+  // 记下填写日期：日后账本又记了几笔时，才能分清你是「真没做」
+  // 还是「做了但没回来更新这两个数」——
+  // 在券商 App 里操作、不碰这个页面，是最常见的用法。
+  LS.set('calc', { cash: num($('inCash').value), hold: num($('inHold').value), at: bjToday() });
   // 防抖 350ms：逐字输入时中间值（打到「5」时持仓几乎为 0）会让「你欠着操作」
   // 的红色告警闪来闪去。等你停手再判定。
   clearTimeout(calcTimer);

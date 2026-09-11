@@ -1288,5 +1288,77 @@ console.log('\n\n═════════════ 本金输入 ═══�
   }
 }
 
+/* ==================================================================== */
+/*
+ * 在券商 App 里做了，但没回前端页面更新数字 —— 最常见的用法之一。
+ * 系统只能看那两个输入框，所以分不清「真没做」和「做了没更新」。
+ * 分不清就不能断言，只能把两种可能都摆出来。
+ */
+console.log('\n\n═════════════ 在券商做了、没回页面更新 ═════════════');
+{
+  const led2 = { schema: 1, launchDate: SERIES[iT - 40].d, entries: [{
+    seq: 1, date: T1, signalDate: T, side: 'BUY', tierFrom: 0, tierTo: 1,
+    targetWeight: WEIGHTS[1], price: SERIES[iT + 1].c, etfPrice: ETF_PX, late: false,
+    recordedAt: `${T1} 21:00:45` }] };
+  const i1 = SERIES.findIndex((r) => r.d === T1);
+  const cl = SERIES[i1].c, m30 = ma(SERIES.slice(0, i1 + 1).map((r) => r.c), MA_LEN);
+  const tg = triggers(cl, m30);
+  const st2 = {
+    schema: 1, launchDate: led2.launchDate, asof: T1, lastRun: `${T1} 21:00:45`, tier: 1, pending: null,
+    index: { code: 'H00922', close: +cl.toFixed(2), ma30: +m30.toFixed(2), ratio: +tg.ratio.toFixed(4),
+      changePct: 1.29, buyTrigger: +tg.buyAt.toFixed(2), sellTrigger: +tg.sellAt.toFixed(2),
+      pctToBuy: +tg.pctToBuy.toFixed(2), pctToSell: +tg.pctToSell.toFixed(2) },
+    bond: { code: 'H11001', close: SERIES[i1].b },
+    etf: { code: '515180', close: ETF_PX, asof: T1, stale: false },
+    checks: { passed: 10, total: 10, failed: [], ranAt: `${T1} 21:00:45` } };
+
+  const peek = (label, calc) => {
+    store.set('hlma30.principal', String(PRINCIPAL));
+    if (calc) {
+      store.set('hlma30.calc', JSON.stringify(calc));
+      el('inCash').value = String(calc.cash); el('inHold').value = String(calc.hold);
+    } else { store.delete('hlma30.calc'); el('inCash').value = ''; el('inHold').value = ''; }
+    H.S = { ...H.S, state: JSON.parse(JSON.stringify(st2)), ledger: JSON.parse(JSON.stringify(led2)) };
+    goto(T2, '10:00');
+    H.render();
+    const line = el('nextLine').textContent.trim();
+    const sub = el('nextSub').textContent.trim();
+    const tm = el('timing').textContent.trim();
+    console.log(`\n  ── ${label}`);
+    console.log(`     卡片 ${line}`);
+    return { line, sub, tm };
+  };
+
+  // A. 从没填过 → 输入框跟着账本走，一切正常
+  {
+    const r = peek('从来没在计算器里填过数字', null);
+    if (/还没做|对不上|差 \d+ 档|补齐/.test(r.line)) {
+      bad(`[没更新] 从没填过数字时系统无从判断，不该提示欠账：「${r.line}」`);
+    }
+  }
+
+  // B. 填过、数字停在买之前 → 不能断言「你还没做」
+  {
+    const r = peek('T 日填过、之后没再动（其实已在券商买了）', { cash: PRINCIPAL, hold: 0, at: T });
+    console.log(`     提示 ${r.sub.split(' ⏎ ').find((x) => /注意/.test(x)) || '（没有过时提醒）'}`);
+    if (/你有 \d+ 笔操作还没做/.test(r.line)) {
+      bad(`[没更新] 填完之后账本又动过，系统分不清真没做还是没更新，不该断言「还没做」：「${r.line}」`);
+    }
+    if (!/若确实没做/.test(r.line)) bad(`[没更新] 主行没给「可能已经做了」留余地：「${r.line}」`);
+    if (!/那之后账本又记了/.test(r.sub)) bad('[没更新] 副行没说清数字是哪天填的、之后账本动过几笔');
+    if (!/改成现在的真实持仓|改一下下面两栏/.test(`${r.sub}${r.tm}`)) {
+      bad('[没更新] 没告诉他「已经做过的话改一下数字就行」');
+    }
+  }
+
+  // C. 数字已更新 → 恢复正常
+  {
+    const buy = orderAmount(PRINCIPAL, 0, WEIGHTS[1]).amount;
+    const h = Math.floor(buy / ETF_PX / 100) * 100 * ETF_PX;
+    const r = peek('已经回来更新了数字', { cash: Math.round(PRINCIPAL - h * (1 + COMMISSION)), hold: Math.round(h), at: T1 });
+    if (/还没做|差 \d+ 档|补齐/.test(r.line)) bad(`[没更新] 数字更新后仍提示欠账：「${r.line}」`);
+  }
+}
+
 console.log(`\n${fails ? `✗ 全流程有 ${fails} 处问题` : '✓ T / T+1 / T+2 三条路径全程畅通，无错报'}\n`);
 process.exitCode = fails ? 1 : 0;
