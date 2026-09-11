@@ -91,7 +91,7 @@ if (!m) { console.log('✗ index.html 里找不到 <script type="module">'); pro
 export const CORE_URL = pathToFileURL(join(ROOT, 'shared', 'strategy.js')).href;
 const src = m[1].replace('`./shared/strategy.js?v=', `\`${CORE_URL}?v=`)
   + '\nglobalThis.__H = { get S() { return S; }, set S(v) { S = v; },'
-  + ' renderInputDependent, render, drawChart, execInfo, behindState, nextMove, calc, LS };\n';
+  + ' renderInputDependent, render, drawChart, load, execInfo, behindState, nextMove, calc, LS };\n';
 const tmp = join(tmpdir(), `hlma30-harness-${process.pid}.mjs`);
 writeFileSync(tmp, src, 'utf8');
 await import(pathToFileURL(tmp).href);
