@@ -550,7 +550,7 @@ function renderNext(behind) {
         + `<br>若 ${st.asof} 21:00 的运行还没跑完，稍等再刷新；若已过 ${st.asof} 22:00 仍是这样，请看下方「系统自检」。`;
     } else {
       $('nextLine').innerHTML = `距离下一次买入，还需中证红利<b style="color:var(--up)">跌 ${mv.need.toFixed(2)}%</b>`;
-      $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　买入第 <b>${tier + 1}</b> 份（仓位 ${WEIGHTS[tier + 1] * 100}%）`
+      $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　买入第 <b>${tier + 1}</b> 份（仓位 ${posPct(tier + 1)}）`
         + otherSide('buy', tier, i)
         + `<br>触发当日 21:00 挂单，再下一个交易日<b>收盘前执行</b> —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
         + `<br>百分比按 ${st.asof}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
@@ -564,7 +564,7 @@ function renderNext(behind) {
         + `<br>若 ${st.asof} 21:00 的运行还没跑完，稍等再刷新；若已过 ${st.asof} 22:00 仍是这样，请看下方「系统自检」。`;
     } else {
       $('nextLine').innerHTML = `距离下一次卖出，还需中证红利<b style="color:var(--dn)">涨 ${mv.need.toFixed(2)}%</b>`;
-      $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　卖出第 <b>${tier}</b> 份（仓位降到 ${WEIGHTS[tier - 1] * 100}%）`
+      $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　卖出第 <b>${tier}</b> 份（仓位降到 ${posPct(tier - 1)}）`
         + otherSide('sell', tier, i)
         + `<br>触发当日 21:00 挂单，再下一个交易日<b>收盘前执行</b> —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
         + `<br>百分比按 ${st.asof}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;

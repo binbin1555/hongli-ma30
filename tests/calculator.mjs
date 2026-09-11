@@ -9,7 +9,7 @@
  *
  * 用法：npm run calc（npm test 里也会跑）
  */
-import { H, el, put, at, pend, D, CAL, TODAY, CORE } from './harness.mjs';
+import { H, el, put, at, pend, D, CAL, TODAY, CORE, fractionsIn } from './harness.mjs';
 
 const { WEIGHTS, COMMISSION } = CORE;
 
@@ -85,6 +85,7 @@ for (const c of CASES) {
   const sub = el('oSub').textContent.trim();
   const timing = el('timing').textContent.trim();
   const card = el('nextLine').textContent.trim();
+  const cardSub = el('nextSub').textContent.trim();
   const behind = H.behindState();
 
   console.log(`【${c.name}】`);
@@ -116,6 +117,11 @@ for (const c of CASES) {
       bad(`实盘和账本对得上（都在 ${behind.ledgerTier}/5 档），不该判成欠账`);
     }
   }
+
+  // ---- 仓位不许以分数出现 ----
+  // 顶部卡片的副行也要查 —— 漏掉它的话，注入回一处「N/5 档」这个测试抓不到
+  const fr = fractionsIn(`${card}｜${cardSub}｜${main}｜${sub}｜${timing}`);
+  if (fr.length) bad(`文案里出现了分数「${fr.join('、')}」—— 仓位一律用百分比`);
 
   // ---- 措辞对不对：没到执行日就不该说「欠着」----
   // 注意别误伤 CLOSE_TIP 里的「买太早会和账本对不上」，那是提示不是指责
@@ -164,8 +170,17 @@ console.log('\n================ 仓位卡片 ================\n');
     if (dots.length !== 4) bad(`圆点画了 ${dots.length} 个，应为 4 个（空仓到满仓一共买 4 次）`);
     if (lit !== t) bad(`第 ${t} 档亮了 ${lit} 个点，应为 ${t} 个`);
     if (t === 4 && lit !== dots.length) bad('满仓时还有暗点 —— 会被读成「还能再买一次」');
-    if (/\d\s*\/\s*\d/.test(txt)) bad(`卡片又用回了分数：「${txt}」`);
+    if (fractionsIn(txt).length) bad(`卡片又用回了分数：「${txt}」`);
   }
+
+  // 交易记录那一列也要是百分比
+  put({ tier: 3, chain: [[40, 0, 1], [30, 1, 2], [20, 2, 3]], index: at(6000, 6000) });
+  H.render();
+  const tbody = el('ledger').querySelector('tbody').innerHTML.replace(/<[^>]*>/g, ' ');
+  console.log(`  交易记录仓位列：${(tbody.match(/\d+% → \d+%/g) || []).join('　') || '（空）'}`);
+  const frL = fractionsIn(tbody);
+  if (frL.length) bad(`交易记录里出现了分数「${frL.join('、')}」`);
+  if (!/\d+% → \d+%/.test(tbody)) bad('交易记录的仓位列没有显示成百分比');
 }
 
 console.log(`${fails ? `✗ ${fails} 处有问题` : '✓ 时间线全部正确'}\n`);

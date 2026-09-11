@@ -145,6 +145,17 @@ export function put({ tier, pending = null, index, chain = null, calc = null, et
   }
 }
 
+/**
+ * 仓位绝不能再以分数出现。
+ *
+ * 「4/5 档」会被读成「还差一档」，而那一档根本不存在 —— 使用者据此
+ * 问出了「0 到 5 档分别对应多少钱」。现在一律用百分比。
+ *
+ * 只查操作相关的文案：「校验 7/8」那种通过计数是合法分数，不在此列。
+ * 日期写成 2026-09-14 不含斜杠，金额有千分位逗号，都不会误伤。
+ */
+export const fractionsIn = (text) => String(text).match(/\d+\s*\/\s*\d+/g) || [];
+
 /** 从日历里挑出让执行日落在「今天之前 / 正是今天 / 今天之后」的信号日 */
 const pastDays = CAL.filter((d) => d < TODAY);
 export const SIG = {

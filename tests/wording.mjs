@@ -64,7 +64,7 @@ function relativeOffenders(text) {
 /* ---------------- 共享测试台 ---------------- */
 // DOM 假件、抠模块、造场景的工具都在 harness.mjs 里，和 calculator.mjs 共用。
 // 别在这里再写一份 —— 两份迟早分家（calc 曾经因此一直拿 0 在算）。
-import { H, el, store, ROOT, CAL, TODAY, CORE, put, at, pend, SIG } from './harness.mjs';
+import { H, el, store, ROOT, CAL, TODAY, CORE, put, at, pend, SIG, fractionsIn } from './harness.mjs';
 
 const S_pendingNow = () => !!(H && H.S && H.S.state && H.S.state.pending);
 
@@ -136,6 +136,9 @@ for (const [name, over] of SCEN) {
   if (behind && !behind.missed.length && /\d+ 笔操作还没做/.test(line)) {
     bad(`${name}：账本里没有漏做记录，却说了「N 笔操作还没做」`);
   }
+  // 仓位不许再以分数出现
+  const fr = fractionsIn(all);
+  if (fr.length) bad(`${name}：文案里出现了分数「${fr.join('、')}」—— 仓位一律用百分比`);
   // 每一处相对时间词都必须挨着具体日期
   for (const o of relativeOffenders(all)) bad(`${name}：相对时间词旁边没有日期 —— ${o}`);
   // 执行时点必须说「收盘前」，不能写成光秃秃的「收盘」
