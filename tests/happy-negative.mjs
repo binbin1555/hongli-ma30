@@ -14,7 +14,12 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const F = { page: join(ROOT, 'index.html'), core: join(ROOT, 'shared', 'strategy.js') };
-const clean = { page: readFileSync(F.page, 'utf8'), core: readFileSync(F.core, 'utf8') };
+// 行尾一律拉平成 LF 再比对。Windows 上 git 每 checkout 一次就把工作区写成
+// CRLF，而下面那些锚点里带着 \n —— 不拉平的话 git pull 之后整批锚点全部
+// 失配，报「找不到要改的那段」，看着像测试自己坏了。
+// 写回去也用 LF：git 提交时本来就按 LF 存，内容不受影响。
+const flat = (p) => readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+const clean = { page: flat(F.page), core: flat(F.core) };
 const restore = () => { writeFileSync(F.page, clean.page, 'utf8'); writeFileSync(F.core, clean.core, 'utf8'); };
 // 这个脚本会真的改写源码。万一中途被 Ctrl-C 或异常打断，
 // 绝不能把改坏的版本留在硬盘上 —— 所以每条退路都挂上还原。
