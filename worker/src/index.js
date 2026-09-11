@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = 'fa43bff3d2';
+const BUILD = 'c8fdd2904c';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -129,9 +129,23 @@ function gh(env) {
       }, 3, 'git create commit');
       const newSha = (await nRes.json()).sha;
 
-      await retryFetch(`${base}/git/refs/heads/${branch}`, {
-        method: 'PATCH', headers, body: JSON.stringify({ sha: newSha, force: false }),
-      }, 3, 'git update ref');
+      // force:false 让 GitHub 只接受快进更新。两次运行撞在一起时，
+      // 后一次的提交不是前一次的后代，这里会被拒 —— 账本因此不会被写两遍。
+      //
+      // 但这属于「确定性冲突」，重试多少次都一样，还白白吃掉 30 秒的运行时限。
+      // 单独认出来，给一句说得清的话：数据是安全的，不是坏了。
+      const refRes2 = await fetch(`${base}/git/refs/heads/${branch}`, {
+        method: 'PATCH',
+        headers: { 'User-Agent': UA, ...headers },
+        body: JSON.stringify({ sha: newSha, force: false }),
+      });
+      if (!refRes2.ok) {
+        if (refRes2.status === 422 || refRes2.status === 409) {
+          throw new Error('提交时发现仓库已被另一次运行更新（同一时刻跑了两次）。'
+            + '本次没有写入，账本没有重复记账，不必处理；若反复出现，检查是不是配了两个定时任务。');
+        }
+        throw new Error(`git update ref 请求失败：HTTP ${refRes2.status}`);
+      }
 
       return newSha;
     },
@@ -558,9 +572,9 @@ async function runDaily(env, { force = false } = {}) {
   const fatal = checks.filter((c) => !c.ok && c.fatal);
   if (fatal.length) {
     await bark(env, {
-      title: '⚠️ 红利MA30 · 数据校验未通过',
-      body: `${today} 有 ${fatal.length} 项校验失败，本次未写入：\n`
-        + fatal.map((c) => `· ${c.name}：${c.detail}`).join('\n'),
+      title: '⚠️ 红利MA30 · 数据检查没通过',
+      body: `${today} 有 ${fatal.length} 项检查没通过，本次没有写入账本：\n`
+        + fatal.map((c) => `· ${c.name} —— ${c.detail}`).join('\n'),
       level: 'timeSensitive',
     });
     return { ok: false, today, reason: '校验失败', checks };
@@ -682,7 +696,12 @@ export function execWording(today, execDay) {
 export async function pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late }) {
   const i = newState.index;
   const chg = i.changePct != null ? `${i.changePct > 0 ? '+' : ''}${i.changePct}%` : '';
-  const warn = checks.some((c) => !c.ok) ? `\n⚠️ ${checks.filter((c) => !c.ok).map((c) => c.name).join('、')}` : '';
+  // 检查名现在是肯定句（「ETF 报价和指数是同一天的」），光列名字会被读成
+  // 在陈述事实。面板上有 ✕ 图标撑着，推送里没有 —— 必须把「没通过」说出来。
+  const failedChecks = checks.filter((c) => !c.ok);
+  const warn = failedChecks.length
+    ? `\n⚠️ 有 ${failedChecks.length} 项检查没通过：${failedChecks.map((c) => c.name).join('、')}`
+    : '';
   const doneLine = executed
     ? `\n已记账：${executed.date}（${dayLabel(executed.date, today).wd}）`
       + `${executed.side === 'BUY' ? '买入' : '卖出'}，仓位 ${posPct(executed.tierFrom)}→${posPct(executed.tierTo)}`

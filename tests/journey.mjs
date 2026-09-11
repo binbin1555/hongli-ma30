@@ -27,7 +27,7 @@ const goto = (day, hhmm) => {
   FAKE = Date.parse(`${day}T00:00:00Z`) + (h - 8) * 3600000 + m * 60000;
 };
 
-const { H, el, store, ROOT, CORE, fractionsIn } = await import('./harness.mjs');
+const { H, el, store, ROOT, CORE, ROWS, fractionsIn } = await import('./harness.mjs');
 const { ma, signal, nextTier, triggers, WEIGHTS, MA_LEN, orderAmount, COMMISSION, posPct } = CORE;
 
 let fails = 0;
@@ -1055,6 +1055,56 @@ console.log('\n【跨年】');
       }
     }
   }
+}
+
+/* ==================================================================== */
+console.log('\n\n═════════════ 推送里的检查告警 · 图表 ═════════════');
+
+/* ① 检查名是肯定句，列出来时必须说清是「没通过」 */
+console.log('\n【检查没通过时的推送】');
+{
+  const idx0 = { close: 11646.8, ma30: 12017.48, changePct: -0.17,
+    buyTrigger: 11656.95, sellTrigger: 12257.83, pctToBuy: 0.09, pctToSell: 5.25 };
+  const got = await push({
+    today: A1, newState: { tier: 2, index: idx0 }, pending: null, execDay: '2026-06-01',
+    executed: null, plan: null, etf: { close: ETF_PX },
+    checks: [{ ok: true, name: '这一天确实是交易日' },
+      { ok: false, name: 'ETF 报价和指数是同一天的' },
+      { ok: false, name: '没有混进重复抄来的假数据' }],
+    late: false,
+  });
+  const body = got[0].body;
+  if (!/没通过/.test(body)) {
+    bad('[检查告警] 检查名是肯定句，光列名字会被读成「这些是事实」—— 必须写明「没通过」');
+  }
+  if (!/2 项/.test(body)) bad('[检查告警] 没说清有几项没通过');
+}
+
+/* ② 图表：各时间范围与边界都不该崩、不该漏 NaN */
+console.log('\n【图表】');
+{
+  const i0 = ROWS.length - 1;
+  H.S = { ...H.S,
+    ledger: { schema: 1, launchDate: ROWS[i0 - 60].d, entries: [
+      { seq: 1, date: ROWS[i0 - 40].d, side: 'BUY', tierFrom: 0, tierTo: 1, targetWeight: 0.25, price: ROWS[i0 - 40].c },
+      { seq: 2, date: ROWS[i0 - 20].d, side: 'SELL', tierFrom: 1, tierTo: 0, targetWeight: 0, price: ROWS[i0 - 20].c }] },
+    state: { ...H.S.state, launchDate: ROWS[i0 - 60].d, tier: 0 } };
+  const marks = [];
+  for (const [nm, from] of [['近一月', i0 - 20], ['近三月', i0 - 62], ['近半年', i0 - 125],
+    ['近一年', i0 - 242], ['近两年', Math.max(0, i0 - 485)], ['近三年', 0],
+    ['只剩 2 天', i0 - 1], ['只剩 1 天', i0], ['越界', i0 + 50]]) {
+    try {
+      H.drawChart(Math.max(0, from));
+      const g = el('chart').innerHTML;
+      if (/NaN|undefined|Infinity/.test(g)) bad(`[图表] ${nm} 画出了 NaN/undefined`);
+      if (nm === '近一年') marks.push(...(g.match(/>[BS]</g) || []));
+      console.log(`  ${nm.padEnd(9, '　')} ${g ? `${g.length} 字符` : '空（数据不足，正常）'}`);
+    } catch (e) {
+      bad(`[图表] ${nm} 抛错：${e.message}`);
+    }
+  }
+  console.log(`  近一年里的买卖标记：${marks.join(' ') || '（无）'}`);
+  if (marks.length !== 2) bad(`[图表] 账本里 2 笔成交，图上却有 ${marks.length} 个标记`);
 }
 
 console.log(`\n${fails ? `✗ 全流程有 ${fails} 处问题` : '✓ T / T+1 / T+2 三条路径全程畅通，无错报'}\n`);
