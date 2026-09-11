@@ -478,9 +478,11 @@ function behindState() {
 
   const target = pendingTo === null ? ledgerTier : pendingTo;
   const cu = calcCatchUp(man.cash, man.hold, target);
-  // 填完这两个数之后，账本又记了哪几笔？有的话，多半是你在券商做了却没回来更新
+  // 填完这两个数之后，账本又记了哪几笔？有的话，多半是你在券商做了却没回来更新。
+  // 比的是**记账时刻**（当天 21:00）对上**填写时刻**，不是比日期 ——
+  // 上午填、当晚记账是同一天，只比日期会漏掉这个最常见的情形。
   const since = man.at
-    ? (S.ledger.entries || []).filter((e) => e.date > man.at)
+    ? (S.ledger.entries || []).filter((e) => (e.recordedAt || `${e.date} 21:00:00`) > man.at)
     : [];
   return {
     actualTier: r.tier, ledgerTier, pendingTo, target,
@@ -526,8 +528,9 @@ function staleNote(st) {
 function staleCalcNote(behind) {
   if (!behind || !behind.since || !behind.since.length) return '';
   const n = behind.since.length;
-  return `<br><b>注意：你填的数字是 ${md(behind.filledAt)}填的，那之后账本又记了 ${n} 笔。</b>`
-    + `如果你已经在券商 App 里做过了，把下面两栏改成现在的真实持仓就行，这条提示会自动消失；`
+  return `<br><b>注意：你填的数字是 ${md(behind.filledAt.slice(0, 10))}填的，那之后账本又记了 ${n} 笔。</b>`
+    + `如果你已经在券商 App 里做过了，把下面两栏改成现在的真实持仓 —— `
+    + `或者直接点「恢复账本数字」，这条提示就会消失；`
     + `确实没做的话，再照上面的金额补。`;
 }
 
@@ -932,8 +935,8 @@ function renderTiming(behind) {
     } else {
       tb.innerHTML = head
         + (behind.since && behind.since.length
-          ? `你填的数字是 ${md(behind.filledAt)}填的，那之后账本又记了 ${behind.since.length} 笔 —— `
-            + `若已在券商做过，改一下下面两栏即可。`
+          ? `你填的数字是 ${md(behind.filledAt.slice(0, 10))}填的，那之后账本又记了 ${behind.since.length} 笔 —— `
+            + `若已在券商做过，改一下下面两栏、或点「恢复账本数字」即可。`
           : '先把上面这笔补掉，再等下一次信号。');
     }
     return;
@@ -1042,7 +1045,10 @@ function onCalcInput() {
   // 记下填写日期：日后账本又记了几笔时，才能分清你是「真没做」
   // 还是「做了但没回来更新这两个数」——
   // 在券商 App 里操作、不碰这个页面，是最常见的用法。
-  LS.set('calc', { cash: num($('inCash').value), hold: num($('inHold').value), at: bjToday() });
+  // 存到「分」而不是只存日期：最常见的用法就是**当天**上午填好数字、
+  // 照着买、当晚 21:00 系统记账 —— 只比日期的话这两件事同一天，
+  // 分不出先后，也就认不出「你填的数字是买之前的」。
+  LS.set('calc', { cash: num($('inCash').value), hold: num($('inHold').value), at: beijingStamp1() });
   // 防抖 350ms：逐字输入时中间值（打到「5」时持仓几乎为 0）会让「你欠着操作」
   // 的红色告警闪来闪去。等你停手再判定。
   clearTimeout(calcTimer);
