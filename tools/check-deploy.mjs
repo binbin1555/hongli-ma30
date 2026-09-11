@@ -59,11 +59,11 @@ if (res && !res.ok) {
   console.log(`  线上 /health    ${got || '（这一版还没有 build 字段）'}`);
   console.log(`  线上北京时间    ${h.now}`);
   // 仓位一律用百分比，别写成「N/5 档」——「4/5」会被读成还差一档，其实已经满仓
-  console.log(`  数据截至        ${h.stateAsof}　仓位 ${posPct(h.tier)}　挂单 `
+  console.log(`  数据截至        ${h.stateAsof}　仓位 ${posPct(h.tier)}　待执行的操作 `
     + (h.pending ? `${posPct(h.pending.tierFrom)}→${posPct(h.pending.tierTo)}（信号日 ${h.pending.signalDate}）` : '无'));
   if (h.checks) {
     const f = (h.checks.failed || []).map((x) => x.name).join('、');
-    console.log(`  上次运行        ${h.checks.ranAt}　校验 ${h.checks.passed}/${h.checks.total}${f ? `　未过：${f}` : ''}`);
+    console.log(`  上次运行        ${h.checks.ranAt}　检查 ${h.checks.passed}/${h.checks.total} 通过${f ? `　没通过：${f}` : ''}`);
   }
   if (h.push && !h.push.ok) console.log(`  !!! 上次推送失败：${h.push.error || '原因未记录'}`);
 
