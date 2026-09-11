@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = 'c8fdd2904c';
+const BUILD = '99b7f1d080';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -779,7 +779,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
  * 只读不写：不碰账本、不改 state、不做任何校验写入。
  * 只有「今天正是某笔挂单的执行日」时才推送，其余情况一律静默，避免变成骚扰。
  */
-async function remind(env) {
+export async function remind(env) {
   const today = beijingDate();
   const G = gh(env);
 
