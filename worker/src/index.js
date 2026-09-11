@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '13e8f044c2';
+const BUILD = '26dc12c6e6';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -397,6 +397,9 @@ const money = (n) => Math.round(n).toLocaleString('en-US');
 // ---------------------------------------------------------------- 主流程
 
 async function runDaily(env, { force = false } = {}) {
+  // 整轮耗时。2026-09-11 那次被触发器的 30 秒超时掐断，事后翻遍 state 和
+  // audit 都找不到任何耗时记录，只能靠猜。记下来，下次一眼看得出卡在哪。
+  const t0 = Date.now();
   const today = beijingDate();
   const log = [];
   const G = gh(env);
@@ -656,13 +659,13 @@ async function runDaily(env, { force = false } = {}) {
   // 「推送没送达」。所以把回填本身的错误也带进 HTTP 返回，别让它无声无息。
   let backfillErr = null;
   if (lastPush && !lastPush.ok) {
-    newState.push = lastPush;
+    newState.push = { ...lastPush, elapsedMs: Date.now() - t0 };
     await G.commit(
       [{ path: 'data/state.json', content: JSON.stringify(newState, null, 2) }],
       `chore(daily): ${today} 推送失败，记录状态`
     ).catch((e) => { backfillErr = String(e && e.message || e); });
   } else if (lastPush) {
-    newState.push = { ok: true, at: lastPush.at };
+    newState.push = { ok: true, at: lastPush.at, elapsedMs: Date.now() - t0 };
     await G.commit(
       [{ path: 'data/state.json', content: JSON.stringify(newState, null, 2) }],
       `chore(daily): ${today} 推送已送达`
@@ -675,6 +678,7 @@ async function runDaily(env, { force = false } = {}) {
     ok: true, today, commit: sha.slice(0, 7), tier, pending, executed, checks,
     push: lastPush ? { ok: lastPush.ok, reason: lastPush.reason } : null,
     backfillErr,
+    elapsedMs: Date.now() - t0,
     planned: plan ? { side: plan.side, targetWeight: plan.targetWeight, hasShares: plan.shares != null } : null,
   };
 }
