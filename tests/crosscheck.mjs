@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { coreHash, buildHash } from '../stamp.mjs';
-import { dayLabel } from '../shared/strategy.js';
+import { dayLabel, posPct } from '../shared/strategy.js';
 import { fileURLToPath } from 'node:url';
 
 // 按脚本自身位置解析，保证从仓库根目录或 tests/ 目录跑都一样
@@ -86,7 +86,7 @@ for (const [cash, hold, buy, exp, name] of fixed) {
   const ok = r.ok && r.tier === exp.tier && r.to === exp.to && r.side === exp.side
     && Math.abs(r.amount - exp.amt) < 0.01;
   allOk = allOk && ok;
-  console.log(`  ${ok ? 'OK ' : '!!!'} ${name}  可用${cash} 持有${hold} → ${r.tier}/5→${r.to}/5 ${r.side} ${r.amount.toFixed(2)}  期望 ${exp.side} ${exp.amt.toFixed(2)}`);
+  console.log(`  ${ok ? 'OK ' : '!!!'} ${name}  可用${cash} 持有${hold} → ${posPct(r.tier)}→${posPct(r.to)} ${r.side} ${r.amount.toFixed(2)}  期望 ${exp.side} ${exp.amt.toFixed(2)}`);
 }
 
 console.log('\n=== 计算器：边界与非法输入 ===');
