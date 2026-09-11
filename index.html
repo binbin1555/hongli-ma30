@@ -194,7 +194,7 @@ tr:last-child td{border-bottom:none}
         <div><span>累计</span><b id="pnlCum">–</b></div>
         <div><span>年化</span><b id="pnlAnn">–</b></div>
         <div><span>总资产</span><b id="pnlTot">–</b></div>
-        <div><span>已运行</span><b id="pnlDays">–</b></div>
+        <div><span>已运行（自然日）</span><b id="pnlDays">–</b></div>
       </div>
     </div>
     <div class="card">
@@ -251,7 +251,8 @@ tr:last-child td{border-bottom:none}
     <p id="timing" class="timingbox"></p>
     <p id="mismatch" hidden class="warnbox"></p>
     <p class="note"><b>可用资金</b>＝还没买红利 ETF 的钱（现金、债基）。<b>已持有红利</b>＝已经买了的红利 ETF 现在值多少钱。
-      两者相加就是你的总资产。<br>
+      两者相加＝下面说的「两栏合计」。它和上方「账户盈亏」里的总资产是两个数：
+      那个按本金和账本推算，这个按你填的真实持仓。<br>
       这个板块<b>只是个计算器</b>——你在这里填什么都不会影响上面的操作提醒，也不会影响交易记录。
       它按你填的数字反推你现在在第几档，再算下一步该动多少钱。默认填入账本推算值，改了可以点「恢复账本数字」还原。<br>
       算法是目标市值法（说明文档 3.5）：买 X =（w×S − V）÷（1 + w×c），佣金 c = 万分之 0.45。股数按 <span id="etfLabel">ETF</span> 收盘价向下取整到 100 股。</p>
@@ -261,7 +262,7 @@ tr:last-child td{border-bottom:none}
     <p class="k">交易记录（不可更改）</p>
     <div id="ledgerWarn" class="errbox" style="display:none"></div>
     <div class="tbox"><table id="ledger"><thead><tr>
-      <th>#</th><th>执行日</th><th>方向</th><th>仓位</th><th>指数收盘</th><th>当时理论金额</th>
+      <th>#</th><th>执行日</th><th>方向</th><th>仓位</th><th>指数收盘</th><th>理论金额（事后推算）</th>
     </tr></thead><tbody></tbody></table></div>
     <p class="note">账本只记录日期、指数收盘价和仓位变化，这三样一经写入就锁死在 Git 提交历史里，
       与计算器里填什么无关。<br>
@@ -331,9 +332,11 @@ function execInfo(signalDate) {
   // 一律说「收盘前」，不说「收盘」——「收盘执行」会被读成「收盘之后再执行」，
   // 那是做不到的动作。至于「收盘前」太松（上午十点也算）的问题，
   // 由紧跟其后的 CLOSE_TIP 把窗口收到尾盘，两句必须一起出现。
+  // 算不出日期时，别把那一长串括号插进「……收盘前买入第 2 份」中间 ——
+  // 句子会被劈成两半。主行只说「执行日待定」，原因放副行。
   if (!day) {
     return { day: null, when: 'unknown', L: null,
-      lead: `${NO_EXEC_DATE}收盘前`, leadHtml: `${NO_EXEC_DATE}收盘前`, kick: `${NO_EXEC_DATE}收盘前执行` };
+      lead: '执行日待定，', leadHtml: '执行日待定，', kick: `执行日待定 · ${NO_EXEC_DATE}` };
   }
   const L = dayLabel(day, today);
   const nb = `<span class="nb">${L.label}</span>`;
@@ -406,7 +409,9 @@ function accountMoney() {
   const d = replay(rows, S.ledger.entries, principal, S.state.launchDate);
   const days = Math.max(0, (Date.parse(S.state.asof) - Date.parse(S.state.launchDate)) / 86400000);
   const ratio = d.total / principal;
-  const annual = days >= 1 ? (Math.pow(ratio, 365.25 / days) - 1) * 100 : null;
+  // 不满 90 天不年化：把几天的收益按 365 天外推毫无统计意义 ——
+  // 实测运行 2 天、累计 +0.5%，外推出来是「年化 +148%」，看一眼就会对策略产生错觉。
+  const annual = days >= 90 ? (Math.pow(ratio, 365.25 / days) - 1) * 100 : null;
   return { principal, ...d, days, annual, cumPct: (ratio - 1) * 100 };
 }
 
@@ -455,11 +460,11 @@ function behindState() {
 function otherSide(kind, tier, i) {
   if (kind === 'buy' && tier > 0) {
     const need = Math.max(0, (i.sellTrigger - i.close) / i.close * 100);
-    return `<br>反向也可能先到：涨 ${need.toFixed(2)}% 到 <b>${int(i.sellTrigger)}</b> 则改为卖出第 ${tier} 份。`;
+    return `<br>反向也可能先到：涨 ${need.toFixed(2)}% 到 <b>${int(i.sellTrigger)}</b> 则改为卖出第 ${tier} 份（仓位 ${posPct(tier)} → ${posPct(tier - 1)}）。`;
   }
   if (kind === 'sell' && tier < 4) {
     const need = Math.max(0, (i.close - i.buyTrigger) / i.close * 100);
-    return `<br>反向也可能先到：跌 ${need.toFixed(2)}% 到 <b>${int(i.buyTrigger)}</b> 则改为买入第 ${tier + 1} 份。`;
+    return `<br>反向也可能先到：跌 ${need.toFixed(2)}% 到 <b>${int(i.buyTrigger)}</b> 则改为买入第 ${tier + 1} 份（仓位 ${posPct(tier)} → ${posPct(tier + 1)}）。`;
   }
   return '';
 }
@@ -545,36 +550,40 @@ function renderNext(behind) {
     card.classList.add('buy');
     if (mv.need <= 0) {
       $('nextLine').innerHTML = `${dl(st.asof)}收盘已跌破买入线，<b style="color:var(--up)">但还没生成挂单</b>`;
-      $('nextSub').innerHTML = `${st.asof}（${wd(st.asof)}）收盘 <b>${int(i.close)}</b> 已在买入线 <b>${int(i.buyTrigger)}</b> 之下`
+      $('nextSub').innerHTML = `${md(st.asof)}（${wd(st.asof)}）收盘 <b>${int(i.close)}</b> 已在买入线 <b>${int(i.buyTrigger)}</b> 之下`
         + `　·　按规则应挂单买入第 ${tier + 1} 份`
-        + `<br>若 ${st.asof} 21:00 的运行还没跑完，稍等再刷新；若已过 ${st.asof} 22:00 仍是这样，请看下方「系统自检」。`;
+        + `<br>若 ${md(st.asof)} 21:00 的运行还没跑完，稍等再刷新；`
+        + `若已过 ${md(st.asof)} 22:00 仍是这样，请看下方「设置与数据健康」。`;
     } else {
       $('nextLine').innerHTML = `距离下一次买入，还需中证红利<b style="color:var(--up)">跌 ${mv.need.toFixed(2)}%</b>`;
-      $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　买入第 <b>${tier + 1}</b> 份（仓位 ${posPct(tier + 1)}）`
+      $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　买入第 <b>${tier + 1}</b> 份（仓位 ${posPct(tier)} → ${posPct(tier + 1)}）`
         + otherSide('buy', tier, i)
-        + `<br>触发当日 21:00 挂单，再下一个交易日<b>收盘前执行</b> —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
-        + `<br>百分比按 ${st.asof}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
+        + `<br>触发当日 21:00 系统记下这笔待办（<b>不用你去券商挂条件单</b>），再下一个交易日<b>收盘前执行</b>`
+        + ` —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
+        + `<br>百分比按 ${md(st.asof)}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
     }
   } else if (mv.kind === 'sell') {
     card.classList.add('sell');
     if (mv.need <= 0) {
       $('nextLine').innerHTML = `${dl(st.asof)}收盘已涨破卖出线，<b style="color:var(--dn)">但还没生成挂单</b>`;
-      $('nextSub').innerHTML = `${st.asof}（${wd(st.asof)}）收盘 <b>${int(i.close)}</b> 已在卖出线 <b>${int(i.sellTrigger)}</b> 之上`
+      $('nextSub').innerHTML = `${md(st.asof)}（${wd(st.asof)}）收盘 <b>${int(i.close)}</b> 已在卖出线 <b>${int(i.sellTrigger)}</b> 之上`
         + `　·　按规则应挂单卖出第 ${tier} 份`
-        + `<br>若 ${st.asof} 21:00 的运行还没跑完，稍等再刷新；若已过 ${st.asof} 22:00 仍是这样，请看下方「系统自检」。`;
+        + `<br>若 ${md(st.asof)} 21:00 的运行还没跑完，稍等再刷新；`
+        + `若已过 ${md(st.asof)} 22:00 仍是这样，请看下方「设置与数据健康」。`;
     } else {
       $('nextLine').innerHTML = `距离下一次卖出，还需中证红利<b style="color:var(--dn)">涨 ${mv.need.toFixed(2)}%</b>`;
-      $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　卖出第 <b>${tier}</b> 份（仓位降到 ${posPct(tier - 1)}）`
+      $('nextSub').innerHTML = `涨到 <b>${int(mv.target)}</b> 触发　·　卖出第 <b>${tier}</b> 份（仓位 ${posPct(tier)} → ${posPct(tier - 1)}）`
         + otherSide('sell', tier, i)
-        + `<br>触发当日 21:00 挂单，再下一个交易日<b>收盘前执行</b> —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
-        + `<br>百分比按 ${st.asof}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
+        + `<br>触发当日 21:00 系统记下这笔待办（<b>不用你去券商挂条件单</b>），再下一个交易日<b>收盘前执行</b>`
+        + ` —— 具体日期要到触发后才定得下来，届时这张卡片会直接写出来。`
+        + `<br>百分比按 ${md(st.asof)}（${wd(st.asof)}）收盘 ${int(i.close)} 计，盘中实时价请自行对照上面的触发点位。`;
     }
   } else {
     // 档位在 0–4 之间时这一支到不了（0 档能买、4 档能卖），
     // 真到了这里说明状态不对劲，别只写一句「暂无」让人干瞪眼。
     $('nextLine').innerHTML = '<b>算不出下一步操作</b>';
     $('nextSub').innerHTML = `当前仓位 ${posPct(tier)} 既不能加仓也不能减仓，这不正常。`
-      + `<br>请查看下方「系统自检」，或重开页面；若持续如此，说明状态文件需要人工核对。`;
+      + `<br>请查看下方「设置与数据健康」，或重开页面；若持续如此，说明状态文件需要人工核对。`;
   }
 
 }
@@ -604,7 +613,8 @@ function renderBanner(behind) {
     const bex = execInfo(st.pending.signalDate);
     $('bKick').textContent = `触发 · ${bex.kick}　仓位 ${posPct(st.pending.tierFrom)} → ${posPct(st.pending.tierTo)}`;
     const bShare = buy ? st.pending.tierTo : st.pending.tierFrom;
-    $('bText').textContent = `${buy ? '买入' : '卖出'}第 ${bShare} 份　目标仓位 ${posPct(st.pending.tierTo)}`;
+    // 顶行已经写了「仓位 25% → 50%」，大字再写一遍目标仓位是同一句话说两遍
+    $('bText').textContent = `${buy ? '买入' : '卖出'}第 ${bShare} 份`;
 
     // 这里的金额是按本金重放出来的理论值，推送里也是同一个数。
     // 如果你在计算器里填过真实数字且差得明显，必须以真实数字为准 ——
@@ -623,7 +633,8 @@ function renderBanner(behind) {
     $('bSub').innerHTML = (estTxt ? estTxt + '，下单以下方计算器为准。<br>' : '')
       + realNote.replace(/^<br>/, '')
       + (realNote ? '<br>' : '')
-      + '此横幅仅供你确认已下单。<b>无论是否点击，系统都已按规则把这笔操作写入不可更改的记录。</b>';
+      + '点「已完成」只是把这条横幅收起来。<b>无论点不点，系统都已按规则把这笔操作写进不可更改的记录；'
+      + '而系统判断你实盘做没做，只看下方计算器里你填的数字。</b>';
     $('bDone').onclick = () => { LS.set(ackKey, true); bn.classList.remove('on'); };
   } else {
     bn.classList.remove('on');
@@ -658,8 +669,11 @@ function render() {
   $('idxSub').textContent = `${st.asof} 收盘` + (i.changePct != null ? `　${pct(i.changePct)}` : '');
   $('maVal').textContent = int(i.ma30);
   const gap = (i.close / i.ma30 - 1) * 100;
-  $('maSub').innerHTML = `指数比均线<span style="color:${gap >= 0 ? 'var(--up)' : 'var(--dn)'}">`
-    + `${gap >= 0 ? '高' : '低'} ${Math.abs(gap).toFixed(2)}%</span>`;
+  // 四舍五入后是 0.00% 时不能写「高 0.00%」，那是句自相矛盾的话
+  $('maSub').innerHTML = Math.abs(gap) < 0.005
+    ? '指数与均线基本持平'
+    : `指数比均线<span style="color:${gap >= 0 ? 'var(--up)' : 'var(--dn)'}">`
+      + `${gap >= 0 ? '高' : '低'} ${Math.abs(gap).toFixed(2)}%</span>`;
 
   // ---- 账户盈亏（只由本金和账本推导，与计算器输入无关）----
   if (!M) {
@@ -674,7 +688,8 @@ function render() {
     $('pnl').style.color = col;
     $('pnlCum').textContent = pct(M.cumPct); $('pnlCum').style.color = col;
     if (M.annual == null) {
-      $('pnlAnn').textContent = '满 1 天后显示'; $('pnlAnn').style.color = 'var(--dm)';
+      $('pnlAnn').textContent = `满 90 天后显示（还差 ${Math.max(1, Math.ceil(90 - M.days))} 天）`;
+      $('pnlAnn').style.color = 'var(--dm)';
     } else {
       $('pnlAnn').textContent = pct(M.annual); $('pnlAnn').style.color = col;
     }
@@ -709,7 +724,9 @@ function calc() {
   const cash = num($('inCash').value), hold = num($('inHold').value);
   const chip = $('basisChip'), reset = $('resetBasis');
   const edited = !!LS.get('calc', null);
-  chip.textContent = edited ? '按你填的数字' : '按账本自动填入';
+  // 本金没设时账本推算不出金额，两个框是空的 —— 这时候说「已自动填入」是假话
+  const autoOK = !!accountMoney();
+  chip.textContent = edited ? '按你填的数字' : (autoOK ? '按账本自动填入' : '请先设本金，或直接手填');
   reset.hidden = !edited;
 
   // 有挂单时，目标就是挂单那一档 —— 从你实际位置直接调过去。
@@ -759,22 +776,30 @@ function calc() {
   if (!r.ok && r.reason === 'NO_INPUT') {
     setOut('先填可用资金', '两栏加起来要大于 0');
     $('mismatch').hidden = true;
+    // 这里也要刷新时点行再返回：否则你把两个框清空之后，
+    // 上一次的「⚠ 你还欠着 2 笔操作」会原样留在屏幕上，
+    // 而此刻系统根本没有任何依据说这句话。
+    renderTiming(behind);
     return;
   }
   const wTxt = `红利占 ${(r.weight * 100).toFixed(1)}%`;
   if (!r.ok && r.reason === 'FULL') {
-    setOut('已满仓，无需买入', `按你填的数字：总资产 ${money(r.total)}，${wTxt}，已经是<b>满仓 100%</b>`);
+    setOut('已满仓，无需买入', `按你填的数字：两栏合计 ${money(r.total)}，${wTxt}，已经是<b>满仓 100%</b>`);
   } else if (!r.ok && r.reason === 'EMPTY') {
-    setOut('已空仓，无可卖出', `按你填的数字：总资产 ${money(r.total)}，${wTxt}，已经是<b>空仓 0%</b>`);
+    setOut('已空仓，无可卖出', `按你填的数字：两栏合计 ${money(r.total)}，${wTxt}，已经是<b>空仓 0%</b>`);
   } else {
     const px = S.state.etf && S.state.etf.close;
     const sh = px ? shares(r.amount, px) : null;
     const isBuy = r.side === 'BUY';
+    // 没挂单时这只是「下次触发会是多少」的预估。用红绿大字写出来，
+    // 扫一眼就像今天该下单 —— 所以加前缀、并改成灰色。
+    const live = !!S.state.pending;
     setOut(
-      `${isBuy ? '买入' : '卖出'}第 ${isBuy ? r.to : r.tier} 份　${money(r.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : ''),
-      `按你填的数字：总资产 ${money(r.total)}，${wTxt}，相当于仓位 <b>${posPct(r.tier)}</b> → 目标 <b>${posPct(r.to)}</b>`
+      (live ? '' : '预估 · ')
+        + `${isBuy ? '买入' : '卖出'}第 ${isBuy ? r.to : r.tier} 份　${money(r.amount)} 元` + (sh ? `　约 ${money(sh)} 股` : ''),
+      `按你填的数字：两栏合计 ${money(r.total)}，${wTxt}，相当于仓位 <b>${posPct(r.tier)}</b> → 目标 <b>${posPct(r.to)}</b>`
         + (px ? '' : '　·　暂无 ETF 报价，只给金额'),
-      isBuy ? 'var(--up)' : 'var(--dn)');
+      live ? (isBuy ? 'var(--up)' : 'var(--dn)') : 'var(--dm)');
   }
 
   renderTiming(behind);
@@ -808,10 +833,13 @@ function renderTiming(behind) {
     const p = S.state.pending;
     const ex = execInfo(p.signalDate);
     tb.className = 'timingbox live';
-    tb.innerHTML = `✓ <b>这就是本次要执行的金额</b>　信号出在 ${p.signalDate}，`
-      + (ex.when === 'past'
-        ? `原定 <span class="nb">${ex.L.label}</span>收盘前执行，时点已过`
-        : `需在 <b class="nb">${ex.day ? ex.L.label : NO_EXEC_DATE}</b>收盘前完成`)
+    // 执行日已过还打绿色对勾 + 「本次要执行」，等于说「一切正常」，和「已过期」直接打架
+    const late = ex.when === 'past';
+    tb.innerHTML = (late
+      ? `⚠ <b>这笔已经过了执行日</b>　信号出在 ${p.signalDate}，原定 <span class="nb">${ex.L.label}</span>收盘前执行。`
+        + `下面的金额仍然有效，请尽快补做`
+      : `✓ <b>这就是本次要执行的金额</b>　信号出在 ${p.signalDate}，`
+        + `需在 <b class="nb">${ex.day ? ex.L.label : '执行日待定'}</b>收盘前完成`)
       + `（仓位 ${posPct(p.tierFrom)} → ${posPct(p.tierTo)}）。${CLOSE_TIP}。`;
   } else {
     tb.className = 'timingbox';
@@ -828,8 +856,10 @@ function renderMismatch(r, behind) {
   // 落后态下主结果已经把补齐金额、一档金额、档位对比全说完了，
   // 这个框再说一遍只会重复，而且「上面那个数字」的指代已经变了。
   if (behind) { box.hidden = true; return; }
-  // 有已触发的挂单时，补齐目标取挂单执行后的档位 —— 补到那儿今晚就正好对上
-  const ledgerTier = S.state.pending ? S.state.pending.tierTo : S.state.tier;
+  // 判据是**账本已经记下的档位**，不是挂单要去的档位。
+  // 挂单还没到执行日就算「落后」的话，每一个正常触发日这里都会冤枉你一次；
+  // behindState 上一轮已经改成这个判据，这个框当时漏了，两处必须一致。
+  const ledgerTier = S.state.tier;
   // 注意用 r.tier 而不是 r.ok：实盘空仓而账本要卖出时 calcStep 会返回
   // EMPTY（ok=false），但那恰恰是最需要补齐提示的时候。
   if (r.tier !== undefined && r.tier !== ledgerTier) {
@@ -844,17 +874,20 @@ function renderMismatch(r, behind) {
         + `<b style="color:${col}">${cu.side === 'BUY' ? '买入' : '卖出'} ${money(cu.amount)} 元`
         + (csh ? `　约 ${money(csh)} 股` : '') + `</b></div>`;
     }
+    // 差一档时「走一档」和「补齐」必然是同一个数字，并排列出来还写「两个都可以」，
+    // 读起来像两笔不同的操作。只有真差不止一档时才值得给两个选项。
+    const twoWays = Math.abs(behind) > 1 && r.ok && cu.ok;
     box.hidden = false;
     box.innerHTML = `<b>实盘${behind > 0 ? '落后' : '超前'}账本 ${Math.abs(behind)} 档。</b>`
-      + `按你填的数字你的仓位是 <b>${posPct(r.tier)}</b>，`
-      + (S.state.pending
-          ? `账本今晚执行完会是 <b>${posPct(ledgerTier)}</b>。`
-          : `账本记录的是 <b>${posPct(ledgerTier)}</b>。`)
-      + `<div class="cu"><span>只走一档（上面那个数字）</span><b>`
-      + (r.ok ? `${money(r.amount)} 元` : (r.reason === 'FULL' ? '已满仓' : '已空仓，走不了')) + `</b></div>`
-      + line
-      + `<div class="cunote">两个都可以：走一档更贴合策略「一天最多动一档」的节奏，补齐则立刻和账本对上。`
-      + `账本记的是理论价，补齐时的成交价会和它有出入，这部分差异系统不追踪。</div>`;
+      + `按你填的数字你的仓位是 <b>${posPct(r.tier)}</b>，账本记录的是 <b>${posPct(ledgerTier)}</b>。`
+      + (twoWays
+        ? `<div class="cu"><span>只走一档（上面那个数字）</span><b>`
+          + (r.ok ? `${money(r.amount)} 元` : (r.reason === 'FULL' ? '已满仓' : '已空仓，走不了')) + `</b></div>`
+          + line
+          + `<div class="cunote">两个都可以：走一档更贴合策略「一天最多动一档」的节奏，补齐则立刻和账本对上。`
+          + `账本记的是理论价，补齐时的成交价会和它有出入，这部分差异系统不追踪。</div>`
+        : line
+          + `<div class="cunote">账本记的是理论价，补齐时的成交价会和它有出入，这部分差异系统不追踪。</div>`);
   } else box.hidden = true;
 }
 let calcTimer = null;

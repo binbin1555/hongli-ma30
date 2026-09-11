@@ -221,8 +221,17 @@ console.log('\n================ 源码里的写死相对词 ================\n')
       const hit = ln.match(RELATIVE);
       if (!hit) return;
       scanned++;
-      const excused = ln.includes('${') || ln.includes('具体日期') || HAS_DATE.test(ln)
-        || ln.includes('NO_EXEC_DATE') || ln.includes('RELATIVE');
+      // 模板字符串常常跨行拼接，日期或「给不出具体日期」的说明可能落在续行里。
+      // 只顺着 `+` 开头的续行往下看 —— 无脑看后两行会把隔壁那条独立语句
+      // 也算进来，注入一处写死的「明日」就抓不到了（验证过）。
+      let ctx = ln;
+      for (let j = k + 1; j < lines.length; j++) {
+        const nx = stripComment(lines[j]).trim();
+        if (!nx.startsWith('+')) break;
+        ctx += ' ' + nx;
+      }
+      const excused = ctx.includes('${') || ctx.includes('具体日期') || HAS_DATE.test(ctx)
+        || ctx.includes('NO_EXEC_DATE') || ctx.includes('RELATIVE');
       if (!excused) bad(`${f}:${k + 1} 写死了相对时间词「${hit.join('/')}」 —— ${ln.trim().slice(0, 72)}`);
     });
     lines.forEach((raw, k) => {

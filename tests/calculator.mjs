@@ -9,7 +9,9 @@
  *
  * 用法：npm run calc（npm test 里也会跑）
  */
-import { H, el, put, at, pend, D, CAL, TODAY, CORE, fractionsIn } from './harness.mjs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { H, el, put, at, pend, D, CAL, TODAY, CORE, ROOT, fractionsIn } from './harness.mjs';
 
 const { WEIGHTS, COMMISSION } = CORE;
 
@@ -181,6 +183,76 @@ console.log('\n================ 仓位卡片 ================\n');
   const frL = fractionsIn(tbody);
   if (frL.length) bad(`交易记录里出现了分数「${frL.join('、')}」`);
   if (!/\d+% → \d+%/.test(tbody)) bad('交易记录的仓位列没有显示成百分比');
+}
+
+/* ---------------- 这几条是读文案读出来的，不是算出来的 ---------------- */
+console.log('\n================ 表述陷阱 ================\n');
+{
+  // 这一组要看账户卡片和时点行，本金必须设上，否则计算器走「先填可用资金」分支
+  globalThis.localStorage.setItem('hlma30.principal', '1000000');
+  const html = readFileSync(join(ROOT, 'index.html'), 'utf8');
+
+  // 1. 文案让人「去看下方某板块」时，那个板块必须真的存在。
+  //    曾经三处写「请看下方『系统自检』」，而页面上那一块叫「设置与数据健康」。
+  const titles = new Set([...html.matchAll(/<p class="k"[^>]*>([^<]+)<\/p>/g)].map((m) => m[1].trim()));
+  const refs = new Set([...html.matchAll(/[下上]方「([^」]+)」/g)].map((m) => m[1]));
+  console.log(`  页面板块 ${titles.size} 个；文案引用 ${[...refs].join('、') || '（无）'}`);
+  for (const r of refs) {
+    if (!titles.has(r)) bad(`文案让人去看「${r}」，但页面上没有这个板块（现有：${[...titles].join('、')}）`);
+  }
+
+  // 2. 实盘档位和账本一致时，落差框必须收起来 —— 哪怕挂着单。
+  //    挂单没到执行日就说「实盘落后账本」，每个正常触发日都会冤枉人一次。
+  const sigFuture = CAL.filter((d) => d >= TODAY)[0];
+  for (const [name, cfg] of [
+    ['有挂单·实盘与账本一致', { tier: 1, chain: [[40, 0, 1]], pending: pend(sigFuture, 1, 2), index: at(6000, 5760) }],
+    ['无挂单·实盘与账本一致', { tier: 1, chain: [[40, 0, 1]], index: at(6000, 6000) }],
+  ]) {
+    put({ ...cfg, etf: null });
+    H.render();
+    const box = el('mismatch');
+    console.log(`  ${name}：落差框 ${box.hidden === true ? '已收起' : '显示中'}`);
+    if (box.hidden !== true) bad(`${name}：实盘和账本本来就一致，落差框不该出现（${box.textContent.slice(0, 40)}…）`);
+    if (/落后账本|超前账本/.test(box.hidden === true ? '' : box.textContent)) {
+      bad(`${name}：说了「落后/超前账本」，但实盘和账本是一致的`);
+    }
+  }
+
+  // 3. 执行日已过时不许打绿色对勾 —— 「✓ 本次要执行」和「已过期」是两个意思。
+  const past = CAL.filter((d) => d < TODAY).slice(-4)[0];
+  put({ tier: 1, chain: [[40, 0, 1]], pending: pend(past, 1, 2), index: at(6000, 5760), etf: null });
+  H.render();
+  const t = el('timing').textContent;
+  console.log(`  执行日已过：${t.slice(0, 30)}…`);
+  if (t.includes('✓')) bad(`执行日已过却打了绿色对勾：「${t.slice(0, 40)}…」`);
+
+  // 3b. 清空输入框后，时点行必须跟着刷新 —— 不能把上一次的「你还欠着 N 笔」留在屏上
+  put({ tier: 1, chain: [[40, 0, 1]], index: at(6000, 6000), calc: { cash: 300000, hold: 700000 }, etf: null });
+  H.render();
+  const before = el('timing').textContent;
+  el('inCash').value = ''; el('inHold').value = '';
+  globalThis.localStorage.setItem('hlma30.calc', JSON.stringify({ cash: 0, hold: 0 }));
+  H.renderInputDependent();
+  const after = el('timing').textContent;
+  console.log(`  清空输入框：时点行 ${before === after ? '没变（陈旧）' : '已刷新'}`);
+  if (/你还欠着|实盘仓位和账本对不上/.test(after)) {
+    bad(`两个框都空了，时点行还在说「${after.slice(0, 24)}…」—— 此刻没有任何依据这么说`);
+  }
+
+  // 4. 指数与均线相等时不许写「高 0.00%」
+  put({ tier: 1, chain: [[40, 0, 1]], index: at(6000, 6000), etf: null });
+  H.render();
+  const ma = el('maSub').textContent;
+  console.log(`  指数=均线：${ma}`);
+  if (/[高低] 0\.00%/.test(ma)) bad(`指数与均线相等，却写成「${ma}」`);
+
+  // 5. 不满 90 天不许外推年化 —— 跑 2 天 +0.5% 会外推成「年化 +148%」
+  const ann = el('pnlAnn').textContent;
+  console.log(`  已运行 ${el('pnlDays').textContent}：年化显示「${ann}」`);
+  const days = parseInt(el('pnlDays').textContent, 10);
+  if (days < 90 && /%/.test(ann) && !ann.includes('后显示')) {
+    bad(`只运行了 ${days} 天就外推年化「${ann}」，数字没有意义`);
+  }
 }
 
 console.log(`${fails ? `✗ ${fails} 处有问题` : '✓ 时间线全部正确'}\n`);
