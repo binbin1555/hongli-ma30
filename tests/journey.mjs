@@ -494,6 +494,25 @@ function verify(tag, state, ledger, calc, todayStr) {
     if (/<[a-zA-Z/]/.test(t)) say(`${nm}里漏出了 HTML 标签（该元素用 textContent 写）：「${t.slice(0, 48)}」`);
   }
 
+  // 7c. 一手 100 股，金额和股数差得大时必须把实际花费括出来 ——
+  //     小本金下「买入 250 元　约 100 股」实际只花 146 元，差 41%
+  {
+    const px0 = state.etf && state.etf.close;
+    const mm = p.算主.match(/([\d,]+) 元　约 ([\d,]+) 股/);
+    if (px0 && mm) {
+      const amt = Number(mm[1].replace(/,/g, '')), shs = Number(mm[2].replace(/,/g, ''));
+      const off = Math.abs(shs * px0 - amt) / amt;
+      if (off > 0.02 && !/实际约/.test(p.算主)) {
+        say(`金额 ${amt} 元与 ${shs} 股（实值 ${Math.round(shs * px0)} 元）差 ${(off * 100).toFixed(0)}%，却没括出实际花费：「${p.算主}」`);
+      }
+    }
+  }
+
+  // 7d. 算不出执行日时，句子不能断成「需在 执行日待定收盘前完成」
+  if (/需在\s*执行日待定|执行日待定收盘前/.test(p.时点)) {
+    say(`算不出执行日时句子断了：「${p.时点.slice(0, 40)}…」`);
+  }
+
   // 8. 通用红线
   for (const h of slangIn(all)) say(`文案里出现黑话：${h}`);
   const fr = fractionsIn(all);
@@ -916,6 +935,125 @@ console.log('\n【本金太小，不够一手】');
     if (/约 0 股/.test(m)) bad(`[小额] 算出 0 股还照样显示：「${m}」—— 该直说这点钱买不了一手`);
     if (/<[a-zA-Z/]/.test(m)) bad(`[小额] 计算器主行漏出 HTML 标签（该元素用 textContent 写）：「${m}」`);
     if (!/不足一手/.test(m) && /125 元/.test(m)) bad(`[小额] 125 元买不了一手，却没提示：「${m}」`);
+  }
+}
+
+/* ==================================================================== */
+/*
+ * 还没碰过的三块：亏钱时的盈亏卡片、金额量级、跨年。
+ * 「红涨绿跌」是最早就提的要求，但前面每一轮都跑在赚钱的场景上。
+ */
+console.log('\n\n═════════════ 盈亏卡片 · 金额量级 · 跨年 ═════════════');
+
+/* ① 亏损状态：找一段真跌过的行情，满仓扛下来 */
+console.log('\n【亏钱的时候】');
+{
+  // 在真实行情里找「满仓期间跌得最多」的一段
+  let best = null;
+  for (let i = MA_LEN + 5; i < SERIES.length - 5; i++) {
+    for (const span of [20, 40, 60]) {
+      const j = i + span;
+      if (j >= SERIES.length) continue;
+      const dd = SERIES[j].c / SERIES[i].c - 1;
+      if (!best || dd < best.dd) best = { i, j, dd, from: SERIES[i].d, to: SERIES[j].d };
+    }
+  }
+  console.log(`  取真实行情最惨的一段：${best.from} → ${best.to}　指数 ${(best.dd * 100).toFixed(2)}%`);
+
+  const led = {
+    schema: 1, launchDate: SERIES[best.i].d,
+    entries: [{ seq: 1, date: SERIES[best.i].d, signalDate: SERIES[best.i - 1].d, side: 'BUY',
+      tierFrom: 0, tierTo: 4, targetWeight: 1, price: SERIES[best.i].c, etfPrice: ETF_PX,
+      late: false, recordedAt: `${SERIES[best.i].d} 21:00:45` }],
+  };
+  const cl = SERIES[best.j].c;
+  const m4 = ma(SERIES.slice(0, best.j + 1).map((r) => r.c), MA_LEN);
+  const tg = triggers(cl, m4);
+  const stL = {
+    schema: 1, launchDate: led.launchDate, asof: SERIES[best.j].d, lastRun: `${SERIES[best.j].d} 21:00:45`,
+    tier: 4, pending: null,
+    index: { code: 'H00922', close: +cl.toFixed(2), ma30: +m4.toFixed(2), ratio: +tg.ratio.toFixed(4),
+      changePct: -1.2, buyTrigger: +tg.buyAt.toFixed(2), sellTrigger: +tg.sellAt.toFixed(2),
+      pctToBuy: +tg.pctToBuy.toFixed(2), pctToSell: +tg.pctToSell.toFixed(2) },
+    bond: { code: 'H11001', close: SERIES[best.j].b },
+    etf: { code: '515180', close: ETF_PX, asof: SERIES[best.j].d, stale: false },
+    checks: { passed: 10, total: 10, failed: [], ranAt: `${SERIES[best.j].d} 21:00:45` },
+  };
+  store.set('hlma30.principal', String(PRINCIPAL));
+  goto(SERIES[best.j].d, '21:05');
+  show(stL, led, null);
+  const pnl = {
+    盈亏: el('pnl').textContent.trim(), 盈亏色: el('pnl').style.color,
+    累计: el('pnlCum').textContent.trim(), 累计色: el('pnlCum').style.color,
+    年化: el('pnlAnn').textContent.trim(), 总资产: el('pnlTot').textContent.trim(),
+    已运行: el('pnlDays').textContent.trim(),
+  };
+  for (const [k, v] of Object.entries(pnl)) console.log(`    ${k.padEnd(4, '　')} ${v}`);
+
+  // A 股约定：红涨绿跌。亏钱必须是绿色（--dn），不能是红色
+  const neg = pnl.盈亏.startsWith('−') || pnl.盈亏.startsWith('-');
+  if (!neg) bad(`[亏钱] 这段行情指数跌了 ${(best.dd * 100).toFixed(1)}%、满仓扛着，盈亏却是「${pnl.盈亏}」`);
+  if (neg && pnl.盈亏色 !== 'var(--dn)') bad(`[亏钱] 亏损应显示绿色（--dn），实际「${pnl.盈亏色}」`);
+  if (neg && pnl.累计色 !== 'var(--dn)') bad(`[亏钱] 累计亏损应显示绿色，实际「${pnl.累计色}」`);
+  if (/NaN|undefined/.test(Object.values(pnl).join(''))) bad('[亏钱] 盈亏卡片里出现 NaN/undefined');
+  if (!/^−|^-/.test(pnl.累计)) bad(`[亏钱] 累计收益应带负号，实际「${pnl.累计}」`);
+}
+
+/* ② 金额量级：一亿和一千块，格式都得读得出来 */
+console.log('\n【金额量级】');
+{
+  const i0 = SERIES.findIndex((r) => r.d === A);
+  for (const [lab, P] of [['本金 1 亿', 100000000], ['本金 1000 元', 1000], ['本金 1234.56 元', 1234.56]]) {
+    const r = raw(`量级·${lab}`, { tier: 0, pending: { signalDate: A, tierFrom: 0, tierTo: 1, side: 'BUY' },
+      asof: A, day: A1, principal: P, calc: { cash: P, hold: 0 } });
+    console.log(`    盈亏卡片总资产 ${el('pnlTot').textContent.trim()}`);
+    const all = `${r.算主}｜${r.算副}｜${el('pnlTot').textContent}`;
+    if (/NaN|undefined|Infinity|e\+/.test(all)) bad(`[${lab}] 金额格式坏了：「${all.slice(0, 70)}」`);
+    // 千分位必须是三位一组
+    for (const m of all.matchAll(/(\d{1,3}(?:,\d{3})+)/g)) {
+      if (!/^\d{1,3}(,\d{3})+$/.test(m[1])) bad(`[${lab}] 千分位不对：「${m[1]}」`);
+    }
+  }
+}
+
+/* ③ 跨年：12 月出信号，执行日落在次年 */
+console.log('\n【跨年】');
+{
+  const dec = SERIES.filter((r) => r.d >= '2026-12-20');
+  if (!dec.length) {
+    console.log('    行情数据没到 12 月下旬，改用手工状态验措辞');
+    const stY = {
+      schema: 1, launchDate: '2026-11-02', asof: '2026-12-31', lastRun: '2026-12-31 21:00:45',
+      tier: 0, pending: { signalDate: '2026-12-31', tierFrom: 0, tierTo: 1, side: 'BUY' },
+      index: { code: 'H00922', close: 11600, ma30: 12000, ratio: 0.9667, changePct: -0.5,
+        buyTrigger: 11640, sellTrigger: 12240, pctToBuy: 0.34, pctToSell: 5.52 },
+      bond: { code: 'H11001', close: 270 },
+      etf: { code: '515180', close: ETF_PX, asof: '2026-12-31', stale: false },
+      checks: { passed: 10, total: 10, failed: [], ranAt: '2026-12-31 21:00:45' },
+    };
+    const ledY = { schema: 1, launchDate: '2026-11-02', entries: [] };
+    for (const [lab, d, at] of [['除夕夜打开', '2026-12-31', '21:05'], ['元旦假期打开', '2027-01-02', '11:00']]) {
+      goto(d, at);
+      show(stY, ledY, hold(TOT, 0));
+      console.log(`  ── ${lab}（${d} ${at}）`);
+      console.log(`    卡片　 ${el('nextLine').textContent.trim()}`);
+      console.log(`    时点　 ${el('timing').textContent.trim().slice(0, 78)}`);
+      const line = el('nextLine').textContent;
+      // 2027 年日历还没进仓库时，必须老实说算不出来，不能瞎编一个日期
+      if (/1 月 1 日|1 月 2 日|1 月 3 日/.test(line)) {
+        bad(`[跨年·${lab}] 元旦假期不是交易日，却把执行日说成了「${line}」`);
+      }
+      if (!/执行日待定|1 月 4 日|1 月 5 日/.test(line)) {
+        bad(`[跨年·${lab}] 既没给出合法执行日，也没说「执行日待定」：「${line}」`);
+      }
+      const tm = el('timing').textContent;
+      if (/需在\s*执行日待定|执行日待定收盘前/.test(tm)) {
+        bad(`[跨年·${lab}] 算不出执行日时句子断了：「${tm.slice(0, 44)}…」`);
+      }
+      if (!/交易日历还没进系统|定不下来/.test(tm)) {
+        bad(`[跨年·${lab}] 没说清为什么定不下执行日：「${tm.slice(0, 44)}…」`);
+      }
+    }
   }
 }
 

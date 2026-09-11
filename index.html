@@ -859,8 +859,13 @@ function calc() {
     // 于是显示「买入 125 元」却不提这点钱连一手都买不到，照着下单会失败。
     // 注意：这串要进 oMain，而 setOut 对 oMain 用的是 textContent ——
     // 放标签进去会把 <b> 原样印在页面上。强调留给下面用 innerHTML 的副行。
+    // 一手 100 股，金额越小，取整后和目标差得越离谱：
+    // 本金 1000 时目标 250 元，能买的 100 股只值 146 元 —— 差 41%。
+    // 本金百万时这个差不到 0.02%，不用管；差得大就必须说出来。
+    const lotCost = sh ? sh * px : 0;
+    const lotOff = sh && r.amount > 0 ? Math.abs(lotCost - r.amount) / r.amount : 0;
     const lotTip = px && sh === 0 ? '　不足一手，买不了'
-      : (sh ? `　约 ${money(sh)} 股` : '');
+      : (sh ? `　约 ${money(sh)} 股` + (lotOff > 0.02 ? `（实际约 ${money(lotCost)} 元）` : '') : '');
     const isBuy = r.side === 'BUY';
     // 没挂单时这只是「下次触发会是多少」的预估。用红绿大字写出来，
     // 扫一眼就像今天该下单 —— 所以加前缀、并改成灰色。
@@ -942,8 +947,14 @@ function renderTiming(behind) {
     tb.innerHTML = (late
       ? `⚠ <b>这笔已经过了执行日</b>　信号出在 ${p.signalDate}，原定 <span class="nb">${ex.L.label}</span>收盘前执行。`
         + `下面的金额仍然有效，请尽快补做`
-      : `✓ <b>这就是本次要执行的金额</b>　信号出在 ${p.signalDate}，`
-        + `需在 <b class="nb">${ex.day ? ex.L.label : '执行日待定'}</b>收盘前完成`)
+      : ex.day
+        ? `✓ <b>这就是本次要执行的金额</b>　信号出在 ${p.signalDate}，`
+          + `需在 <b class="nb">${ex.L.label}</b>收盘前完成`
+        // 算不出执行日多半是跨年：次年的交易日历还没进系统。
+        // 「需在 执行日待定收盘前完成」是句断掉的话，得把原因说清楚。
+        : `✓ <b>这就是本次要执行的金额</b>　信号出在 ${p.signalDate}，`
+          + `但<b>执行日还定不下来</b> —— ${+p.signalDate.slice(0, 4) + 1} 年的交易日历还没进系统。`
+          + `按规则是下一个交易日收盘前，请对照交易所日历确认具体哪天`)
       + `（仓位 ${posPct(p.tierFrom)} → ${posPct(p.tierTo)}）。${CLOSE_TIP}。`;
   } else {
     tb.className = 'timingbox';
