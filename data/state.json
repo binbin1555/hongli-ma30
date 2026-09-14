@@ -1,38 +1,39 @@
 {
   "schema": 1,
   "launchDate": "2026-09-10",
-  "asof": "2026-09-11",
-  "lastRun": "2026-09-11 21:00:37",
+  "asof": "2026-09-14",
+  "lastRun": "2026-09-14 21:00:38",
   "tier": 0,
   "pending": null,
   "index": {
     "code": "H00922",
-    "close": 12094.98,
-    "ma30": 12097.21,
-    "ratio": 0.9998,
-    "changePct": -1.71,
-    "buyTrigger": 11734.29,
-    "sellTrigger": 12339.15,
-    "pctToBuy": -2.98,
-    "pctToSell": 2.02
+    "close": 12070.01,
+    "ma30": 12099.52,
+    "ratio": 0.9976,
+    "changePct": -0.21,
+    "buyTrigger": 11736.54,
+    "sellTrigger": 12341.51,
+    "pctToBuy": -2.76,
+    "pctToSell": 2.25
   },
   "bond": {
     "code": "H11001",
-    "close": 267.39
+    "close": 267.41
   },
   "etf": {
     "code": "515180",
-    "close": 1.435,
-    "asof": "2026-09-11",
+    "close": 1.432,
+    "asof": "2026-09-14",
     "stale": false
   },
   "checks": {
     "passed": 10,
     "total": 10,
     "failed": [],
-    "ranAt": "2026-09-11 21:00:37"
+    "ranAt": "2026-09-14 21:00:38"
   },
   "consecutiveTradingDays": 0,
   "lastExecuted": null,
-  "push": null
+  "push": null,
+  "prevPush": null
 }
