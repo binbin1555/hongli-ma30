@@ -104,7 +104,7 @@ function workerRun(dayIdx, prev, ledger, launchDate = LAUNCH) {
       buyTrigger: +tg.buyAt.toFixed(2), sellTrigger: +tg.sellAt.toFixed(2),
       pctToBuy: +tg.pctToBuy.toFixed(2), pctToSell: +tg.pctToSell.toFixed(2),
     },
-    bond: { code: 'H11001', close: SERIES[dayIdx].b },
+    bond: { code: '008204', close: SERIES[dayIdx].b },
     etf: { code: '515180', close: ETF_PX, asof: today, stale: false },
     checks: { passed: 10, total: 10, failed: [], ranAt: `${today} 21:00:45` },
   };
@@ -766,7 +766,7 @@ function raw(label, { tier, pending, chain = [], asof, day, at = '10:00', calc, 
       changePct: 0.2, buyTrigger: +tg.buyAt.toFixed(2), sellTrigger: +tg.sellAt.toFixed(2),
       pctToBuy: +tg.pctToBuy.toFixed(2), pctToSell: +tg.pctToSell.toFixed(2),
     },
-    bond: { code: 'H11001', close: SERIES[i0].b },
+    bond: { code: '008204', close: SERIES[i0].b },
     etf: etf ? { ...etf, asof: etf.asof ?? asof } : null,
     checks: checks ?? { passed: 10, total: 10, failed: [], ranAt: `${asof} 21:00:45` },
   };
@@ -965,7 +965,7 @@ console.log('\n【点「已完成」之后】');
       index: { code: 'H00922', close: +cl.toFixed(2), ma30: +m3.toFixed(2), ratio: +tg.ratio.toFixed(4),
         changePct: 0.1, buyTrigger: +tg.buyAt.toFixed(2), sellTrigger: +tg.sellAt.toFixed(2),
         pctToBuy: +tg.pctToBuy.toFixed(2), pctToSell: +tg.pctToSell.toFixed(2) },
-      bond: { code: 'H11001', close: 267 },
+      bond: { code: '008204', close: 267 },
       etf: { code: '515180', close: ETF_PX, asof, stale: false },
       checks: { passed: 10, total: 10, failed: [], ranAt: `${asof} 21:00:45` },
     };
@@ -1008,7 +1008,7 @@ console.log('\n【同一天从早到晚】');
   const st1 = { schema: 1, launchDate: led.launchDate, asof: A, lastRun: `${A} 21:00:45`, tier: 0, pending: pA,
     index: { code: 'H00922', close: 11646.8, ma30: 12017.48, ratio: 0.9691, changePct: -0.17,
       buyTrigger: 11656.95, sellTrigger: 12257.83, pctToBuy: 0.09, pctToSell: 5.25 },
-    bond: { code: 'H11001', close: 267 }, etf: { code: '515180', close: ETF_PX, asof: A, stale: false },
+    bond: { code: '008204', close: 267 }, etf: { code: '515180', close: ETF_PX, asof: A, stale: false },
     checks: { passed: 10, total: 10, failed: [], ranAt: `${A} 21:00:45` } };
   for (const at of ['09:00', '11:30', '14:45', '15:30', '20:00']) {
     goto(A1, at); show(st1, led, hold(TOT, 0));
@@ -1031,7 +1031,7 @@ console.log('\n【买完第二天就要卖】');
     pending: { signalDate: A1, tierFrom: 1, tierTo: 0, side: 'SELL' },
     index: { code: 'H00922', close: 12400, ma30: 12100, ratio: 1.0248, changePct: 5.1,
       buyTrigger: 11737, sellTrigger: 12342, pctToBuy: -5.35, pctToSell: -0.47 },
-    bond: { code: 'H11001', close: 267 }, etf: { code: '515180', close: ETF_PX, asof: A1, stale: false },
+    bond: { code: '008204', close: 267 }, etf: { code: '515180', close: ETF_PX, asof: A1, stale: false },
     checks: { passed: 10, total: 10, failed: [], ranAt: `${A1} 21:00:45` } };
   goto(A1, '21:05'); show(st2, led, hold(TOT, 1));
   const pp = verify('买完第二天就要卖', st2, led, cleanCalc(hold(TOT, 1)), A1);
@@ -1047,7 +1047,7 @@ console.log('\n【本金太小，不够一手】');
     pending: { signalDate: A, tierFrom: 0, tierTo: 1, side: 'BUY' },
     index: { code: 'H00922', close: 11646.8, ma30: 12017.48, ratio: 0.9691, changePct: -0.17,
       buyTrigger: 11656.95, sellTrigger: 12257.83, pctToBuy: 0.09, pctToSell: 5.25 },
-    bond: { code: 'H11001', close: 267 }, etf: { code: '515180', close: ETF_PX, asof: A, stale: false },
+    bond: { code: '008204', close: 267 }, etf: { code: '515180', close: ETF_PX, asof: A, stale: false },
     checks: { passed: 10, total: 10, failed: [], ranAt: `${A} 21:00:45` } };
   for (const [lab, c] of [['总共 500 元', { cash: 500, hold: 0 }], ['总共 600 元', { cash: 600, hold: 0 }]]) {
     goto(A1, '10:00'); show(st3, led, c);
@@ -1096,7 +1096,7 @@ console.log('\n【亏钱的时候】');
     index: { code: 'H00922', close: +cl.toFixed(2), ma30: +m4.toFixed(2), ratio: +tg.ratio.toFixed(4),
       changePct: -1.2, buyTrigger: +tg.buyAt.toFixed(2), sellTrigger: +tg.sellAt.toFixed(2),
       pctToBuy: +tg.pctToBuy.toFixed(2), pctToSell: +tg.pctToSell.toFixed(2) },
-    bond: { code: 'H11001', close: SERIES[best.j].b },
+    bond: { code: '008204', close: SERIES[best.j].b },
     etf: { code: '515180', close: ETF_PX, asof: SERIES[best.j].d, stale: false },
     checks: { passed: 10, total: 10, failed: [], ranAt: `${SERIES[best.j].d} 21:00:45` },
   };
@@ -1148,7 +1148,7 @@ console.log('\n【跨年】');
       tier: 0, pending: { signalDate: '2026-12-31', tierFrom: 0, tierTo: 1, side: 'BUY' },
       index: { code: 'H00922', close: 11600, ma30: 12000, ratio: 0.9667, changePct: -0.5,
         buyTrigger: 11640, sellTrigger: 12240, pctToBuy: 0.34, pctToSell: 5.52 },
-      bond: { code: 'H11001', close: 270 },
+      bond: { code: '008204', close: 270 },
       etf: { code: '515180', close: ETF_PX, asof: '2026-12-31', stale: false },
       checks: { passed: 10, total: 10, failed: [], ranAt: '2026-12-31 21:00:45' },
     };
@@ -1323,7 +1323,7 @@ console.log('\n\n═════════════ 在券商做了、没�
     index: { code: 'H00922', close: +cl.toFixed(2), ma30: +m30.toFixed(2), ratio: +tg.ratio.toFixed(4),
       changePct: 1.29, buyTrigger: +tg.buyAt.toFixed(2), sellTrigger: +tg.sellAt.toFixed(2),
       pctToBuy: +tg.pctToBuy.toFixed(2), pctToSell: +tg.pctToSell.toFixed(2) },
-    bond: { code: 'H11001', close: SERIES[i1].b },
+    bond: { code: '008204', close: SERIES[i1].b },
     etf: { code: '515180', close: ETF_PX, asof: T1, stale: false },
     checks: { passed: 10, total: 10, failed: [], ranAt: `${T1} 21:00:45` } };
 

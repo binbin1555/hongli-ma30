@@ -20,7 +20,7 @@ const ymd = (d) => d.replace(/-/g, '');
 const back = (n) => new Date(Date.now() + 8 * 3600e3 - n * 86400e3).toISOString().slice(0, 10);
 
 // 1) 中证指数
-for (const code of ['H00922', 'H11001']) {
+for (const code of ['H00922']) {
   try {
     const r = await fetch(`https://www.csindex.com.cn/csindex-home/perf/index-perf`
       + `?indexCode=${code}&startDate=${ymd(back(20))}&endDate=${ymd(today)}`,

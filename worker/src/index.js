@@ -20,11 +20,14 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = 'c0b3878af4';
+const BUILD = '7082e7511a';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
 const EM_RT = 'https://push2.eastmoney.com/api/qt/stock/get';
+// 闲钱停在哪：这只基金的累计净值就是「没买红利的钱」的收益基准。
+// 换基准必须连同 series.json 的 b 列整列重建，见 tools/migrate-cash-benchmark.mjs。
+const CASH_FUND = '008204';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 // ---------------------------------------------------------------- 基础工具
@@ -163,6 +166,38 @@ async function fetchCalendarMonth(month) {
   const out = {};
   for (const x of j.data || []) out[x.jyrq] = x.jybz === '1' ? 1 : 0;
   return out;
+}
+
+/**
+ * 场外基金的累计净值序列（东财 pingzhongdata）。返回升序 [{d,c}]，c 是累计净值。
+ *
+ * 闲钱腿用的是这个，不是中证全债 —— 基准要和你钱真正待的地方一致，
+ * 否则面板上那个收益数字只是「本该有的样子」，和你账户里的对不上。
+ *
+ * 两个坑：
+ *   1. 时间戳是北京时间的零点。用 UTC 解会整体错一天 —— 实测过：
+ *      序列里冒出周日，而真正的周五不见了。
+ *   2. 用累计净值而不是单位净值：这只基金每年 12 月分红一次，
+ *      单位净值在除息日会掉下来，拿它算收益会凭空亏一笔。
+ *      累计净值把分红加了回去（口径是分红取现金、不再投资，
+ *      比再投资略保守，差异在千分之几的量级）。
+ */
+async function fetchFundNAV(code) {
+  const r = await retryFetch(`https://fund.eastmoney.com/pingzhongdata/${code}.js`, {
+    headers: { Referer: 'https://fund.eastmoney.com/' },
+  }, 4, `基金 ${code} 净值`);
+  const txt = await r.text();
+  const m = txt.match(/Data_ACWorthTrend\s*=\s*(\[[\s\S]*?\]\s*\])\s*;/);
+  if (!m) throw new Error(`基金 ${code}：累计净值序列没解析出来，页面结构可能变了`);
+  const name = (txt.match(/fS_name\s*=\s*"([^"]*)"/) || [])[1] || code;
+  const rows = [];
+  for (const x of JSON.parse(m[1])) {
+    if (!Array.isArray(x) || x.length < 2 || !isFinite(x[1]) || x[1] <= 0) continue;
+    rows.push({ d: new Date(x[0] + 8 * 3600000).toISOString().slice(0, 10), c: +x[1] });
+  }
+  rows.sort((a, b) => (a.d < b.d ? -1 : 1));
+  if (!rows.length) throw new Error(`基金 ${code}：净值序列是空的`);
+  return { rows, name };
 }
 
 /** 中证指数日线。返回升序 [{d,c,pct}]，已剔除周末、元旦、以及接口重复抄来的假数据行 */
@@ -452,7 +487,9 @@ async function runDaily(env, { force = false } = {}) {
   const from = shiftDays(today, -150);
   const [idxRes, bondRes] = await Promise.all([
     fetchCSI('H00922', from, today),
-    fetchCSI('H11001', from, today).catch(() => ({ rows: [], removed: null })),
+    // 闲钱腿：交银稳利中短债债券A。取不到就让下面沿用 series 里已有的值，
+    // 下一轮再抓一次就补上了 —— 绝不能因为净值晚发就中断整轮运行。
+    fetchFundNAV(env.CASH_FUND || CASH_FUND).catch(() => ({ rows: [], name: null })),
   ]);
   const idx = idxRes.rows;
   const removed = idxRes.removed;
@@ -487,6 +524,13 @@ async function runDaily(env, { force = false } = {}) {
   // ---- 合并进 series ----
   const series = await G.readJSON('data/series.json');
   const bondByDate = new Map(bond.map((b) => [b.d, b.c]));
+  // 场外基金的净值通常 20:00 之后才陆续发布，而这一轮跑在 21:00 ——
+  // 偶尔会赶上还没出。那样今天的 b 是空的、当天不计息，下一轮重抓 150 天
+  // 窗口就会把它补回来（replay 每次都从整条 series 重算，补上即自愈）。
+  // 记一笔，免得事后看见「某天没涨」以为是基金不行。
+  if (!bondByDate.has(today)) {
+    log.push(`闲钱基准 ${env.CASH_FUND || CASH_FUND} 今天的净值还没发布，本次不计息，下一轮补上`);
+  }
   const known = new Map(series.rows.map((r) => [r.d, r]));
   const closes = idx.map((r) => r.c);
   for (let i = 0; i < idx.length; i++) {
@@ -606,7 +650,11 @@ async function runDaily(env, { force = false } = {}) {
       buyTrigger: +trig.buyAt.toFixed(2), sellTrigger: +trig.sellAt.toFixed(2),
       pctToBuy: +trig.pctToBuy.toFixed(2), pctToSell: +trig.pctToSell.toFixed(2),
     },
-    bond: { code: 'H11001', close: bondByDate.get(today) ?? state.bond?.close ?? null },
+    bond: {
+      code: env.CASH_FUND || CASH_FUND,
+      name: bondRes.name || state.bond?.name || null,
+      close: bondByDate.get(today) ?? state.bond?.close ?? null,
+    },
     etf: {
       code: env.ETF_CODE || '515180',
       close: etf ? etf.c : null,

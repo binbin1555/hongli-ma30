@@ -53,7 +53,7 @@ function workerDay(idx, prev, ledger) {
       changePct: +((close / closes[closes.length - 2] - 1) * 100).toFixed(2),
       buyTrigger: +tg.buyAt.toFixed(2), sellTrigger: +tg.sellAt.toFixed(2),
       pctToBuy: +tg.pctToBuy.toFixed(2), pctToSell: +tg.pctToSell.toFixed(2) },
-    bond: { code: 'H11001', close: ROWS[idx].b },
+    bond: { code: '008204', close: ROWS[idx].b },
     etf: { code: '515180', close: ETF, asof: today, stale: false },
     checks: { passed: 10, total: 10, failed: [], ranAt: `${today} 21:00:45` },
   } };
