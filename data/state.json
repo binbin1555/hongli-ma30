@@ -35,7 +35,11 @@
   },
   "consecutiveTradingDays": 0,
   "lastExecuted": null,
-  "push": null,
+  "push": {
+    "ok": true,
+    "at": "2026-09-22 21:00:41",
+    "elapsedMs": 10582
+  },
   "prevPush": {
     "ok": true,
     "at": "2026-09-21 21:00:51",
