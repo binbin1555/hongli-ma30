@@ -67,6 +67,12 @@ const MUTANTS = [
   ['推送请求不设超时', 'worker', "}, 3, 'Bark', +env.BARK_TIMEOUT_MS || 8000);", "}, 3, 'Bark');", 'push-timeout'],
   ['超时信号没接上请求', 'worker', '...(ac ? { signal: ac.signal } : {}),', '', 'push-timeout'],
 
+  // —— 补发：只在没送达时补、不和原推送撞车、要说明是补发 ——
+  ['送达了还补发', 'worker', '  if (prev && prev.ok === true) return null;\n', '', 'push-resend'],
+  ['刚跑完就急着补发', 'worker', "    if (!(mins >= 10)) return { ok: null, reason: '那一轮可能还在发推送，先不补发' };",
+    "    if (false) return { ok: null, reason: '那一轮可能还在发推送，先不补发' };", 'push-resend'],
+  ['补发不说明是补发', 'worker', "const resentLine = resent ? `\\n↻ 补发：${resent}` : '';", "const resentLine = '';", 'push-resend'],
+
   // —— 卡片与算法 ——
   ['买入金额漏算手续费', 'core', '(target - V) / (1 + w * c)', '(target - V)', 'happy'],
   ['日期不写月日', 'core', '${+d.slice(5, 7)} 月 ${+d.slice(8, 10)} 日', '某天', 'happy'],

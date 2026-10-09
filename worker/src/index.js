@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '8fb32ca215';
+const BUILD = '6c460cfef2';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -450,6 +450,85 @@ const money = (n) => Math.round(n).toLocaleString('en-US');
 
 // ---------------------------------------------------------------- 主流程
 
+/** 今天之后的下一个交易日。12 月底会落到次年，当年日历里已经没有下一天了 */
+async function execDayAfter(G, calDays, today) {
+  let d = nextTradingDay(calDays, today);
+  if (!d) {
+    const nextCal = await G.readJSON(`calendar/${+today.slice(0, 4) + 1}.json`);
+    if (nextCal) d = nextTradingDay(nextCal.tradingDays, today);
+  }
+  return d;
+}
+
+/**
+ * 补发推送：今天已经跑过、账本已经提交，但推送没有送达记录。
+ *
+ * 2026-09-18 那次，账本在 21:00:43 正常提交，发往 Bark 的请求却一直没回音，
+ * 直到 Worker 被掐掉。超时修好之后，这种情况会记成「推送失败」——
+ * 但光看得见还不够，那晚的信号你依然没收到。这里给它第二次机会。
+ *
+ * 只补推送，绝不重新记账。推送内容照原样重建：
+ *   checks / etf / executed 取自当天的 audit 文件（那一轮原样落库的），
+ *   估算金额用已提交的账本重放，执行日按日历重算 —— 和原本该发的一字不差，
+ *   只在末尾多一句「这是补发」。
+ *
+ * 返回 null 表示不需要补发（已送达）。
+ */
+async function resendPush(env, G, state, today) {
+  const prev = state.push;
+  if (prev && prev.ok === true) return null;
+
+  // push 还是 null、而且刚跑完没几分钟：多半是那一轮还在发推送、还没来得及回填。
+  // 这时补发就重复了。等满 10 分钟还没回填，才认定它丢了。
+  if (!prev) {
+    const toMs = (t) => Date.parse(String(t).replace(' ', 'T') + 'Z');
+    const mins = (toMs(beijingStamp()) - toMs(state.lastRun)) / 60000;
+    if (!(mins >= 10)) return { ok: null, reason: '那一轮可能还在发推送，先不补发' };
+  }
+
+  const audit = await G.readJSON(`audit/${today}.json`);
+  if (!audit || !Array.isArray(audit.checks)) {
+    return { ok: false, reason: `找不到 audit/${today}.json，没法照原样重建推送` };
+  }
+  const ledger = await G.readJSON('data/ledger.json', { entries: [] });
+  const cal = await G.readJSON(`calendar/${today.slice(0, 4)}.json`);
+  const execDay = cal ? await execDayAfter(G, cal.tradingDays, today) : null;
+
+  const pending = state.pending || null;
+  const etf = audit.etf || null;
+  let plan = null;
+  const principal = Number(env.PRINCIPAL || 0);
+  if (principal > 0 && pending) {
+    const series = await G.readJSON('data/series.json');
+    const st = replay(series.rows.filter((r) => r.d <= today), ledger.entries, principal, state.launchDate);
+    plan = plannedOrder(st.V, st.cash, pending.tierTo);
+    plan.shares = etf && etf.d === today ? shares(plan.amount, etf.c) : null;
+  }
+
+  const why = prev && prev.reason ? `（${prev.reason}）` : '';
+  lastPush = null;
+  await pushDaily(env, {
+    today, newState: state, pending, execDay, plan, etf,
+    executed: audit.executed || null,
+    checks: audit.checks,
+    late: !!(audit.executed && audit.executed.late),
+    resent: `${String(state.lastRun).slice(11, 16)} 那轮的推送没有送达${why}，${beijingStamp().slice(11, 16)} 补发`,
+  });
+  const result = lastPush || { ok: false, at: beijingStamp(), reason: '补发时 Bark 没有被调用' };
+
+  // 回填。失败也照样记 —— 面板和下一次推送靠它知道这晚的通知到底到没到。
+  let commitErr = null;
+  try {
+    await G.commit(
+      [{ path: 'data/state.json', content: JSON.stringify({ ...state, push: { ...result, resent: true } }, null, 2) }],
+      `chore(daily): ${today} 推送补发${result.ok ? '成功' : '失败'}`,
+    );
+  } catch (e) {
+    commitErr = String(e && e.message || e);
+  }
+  return { ok: result.ok, reason: result.reason || null, ...(commitErr ? { commitErr } : {}) };
+}
+
 async function runDaily(env, { force = false } = {}) {
   // 整轮耗时。2026-09-11 那次被触发器的 30 秒超时掐断，事后翻遍 state 和
   // audit 都找不到任何耗时记录，只能靠猜。记下来，下次一眼看得出卡在哪。
@@ -502,7 +581,10 @@ async function runDaily(env, { force = false } = {}) {
     return { ok: false, today, reason: 'state.json 不合法', problems: stBad };
   }
   if (state.asof === today && !force) {
-    return { ok: true, today, skipped: `${today} 已运行过（加 &force=1 可强制重跑）` };
+    // 账本已经记好了，绝不重跑；但推送要是没送达，照原样补发一条。
+    // 这样 22:30 那条备用任务同时兜住两种失败：没跑成，和跑成了但推送没发出去。
+    const resend = await resendPush(env, G, state, today);
+    return { ok: true, today, skipped: `${today} 已运行过（加 &force=1 可强制重跑）`, ...(resend ? { resend } : {}) };
   }
 
   // ---- 抓数据 ----
@@ -620,11 +702,7 @@ async function runDaily(env, { force = false } = {}) {
   // 挂单到底哪天执行 —— 周五出的信号要到下周一，节前能差十天。
   // 推送里绝不能笼统写"明日"，那是会让人在休市日空等的错话。
   // 无挂单时也要算：那条推送要说清「哪一天不用操作」，而不是笼统的「明日」。
-  let execDay = nextTradingDay(cal.tradingDays, today);
-  if (!execDay) {   // 12 月底的信号会落到次年，当年日历里已经没有下一天了
-    const nextCal = await G.readJSON(`calendar/${+year + 1}.json`);
-    if (nextCal) execDay = nextTradingDay(nextCal.tradingDays, today);
-  }
+  const execDay = await execDayAfter(G, cal.tradingDays, today);
 
   // ---- 10 项校验 ----
   const checks = runChecks(idx, removed, today, etf, tier, want, cal.tradingDays, ledger.entries);
@@ -778,7 +856,7 @@ export function execWording(today, execDay) {
   };
 }
 
-export async function pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late }) {
+export async function pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late, resent = null }) {
   const i = newState.index;
   const chg = i.changePct != null ? `${i.changePct > 0 ? '+' : ''}${i.changePct}%` : '';
   // 检查名现在是肯定句（「ETF 报价和指数是同一天的」），光列名字会被读成
@@ -790,6 +868,8 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
   // 上一次没留下推送成功的记录 —— 那多半意味着你漏收过一条通知。
   // 这件事没法由「上一次的推送」告诉你（它就是没发出去），只能由下一次补说。
   // 你不会注意到一条从没来过的通知，所以必须有人主动提起。
+  // 补发时说清楚为什么这条现在才到，免得以为是新出的信号
+  const resentLine = resent ? `\n↻ 补发：${resent}` : '';
   const missed = newState.prevPush && newState.prevPush.ok
     ? ''
     : '\n⚠️ 上一次运行没有留下推送成功的记录'
@@ -816,7 +896,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       body: `仓位 ${posPct(pending.tierFrom)} → ${posPct(pending.tierTo)}${est}`
         + `\n${w.long}`
         + `\n${CLOSE_TIP}`
-        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${doneLine}${warn}${missed}`,
+        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${doneLine}${warn}${missed}${resentLine}`,
       level: 'timeSensitive',
       group: '红利MA30·操作',
     });
@@ -851,7 +931,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       : `\n${NO_EXEC_DATE}无需操作`;
     await bark(env, {
       title,
-      body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${doneLine}${warn}${missed}`,
+      body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${doneLine}${warn}${missed}${resentLine}`,
       level: 'passive',
     });
   }
