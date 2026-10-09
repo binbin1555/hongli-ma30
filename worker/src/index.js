@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '6c460cfef2';
+const BUILD = '4b543af6a8';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -217,7 +217,10 @@ async function fetchFundNAV(code) {
 }
 
 /** 中证指数日线。返回升序 [{d,c,pct}]，已剔除周末、元旦、以及接口重复抄来的假数据行 */
-async function fetchCSI(code, startYmd, endYmd) {
+/**
+ * tradingCal（可选）：{ covers(d), has(d) } —— 这一天所在的月份有没有官方日历、在不在日历里。
+ */
+export async function fetchCSI(code, startYmd, endYmd, tradingCal = null) {
   const r = await retryFetch(
     `${CSI}?indexCode=${code}&startDate=${compact(startYmd)}&endDate=${compact(endYmd)}`,
     { headers: { Referer: 'https://www.csindex.com.cn/', Accept: 'application/json' } },
@@ -226,7 +229,7 @@ async function fetchCSI(code, startYmd, endYmd) {
   const j = await r.json();
   if (j.code !== '200') throw new Error(`中证 ${code} 返回异常 code=${j.code}`);
 
-  const removed = { dup: [], weekend: [], newyear: [], ghost: [] };
+  const removed = { dup: [], weekend: [], newyear: [], ghost: [], offCalendar: [], startFake: [] };
   const seen = new Set();
   let rows = [];
   for (const x of j.data || []) {
@@ -246,10 +249,34 @@ async function fetchCSI(code, startYmd, endYmd) {
     if (r0.d.slice(5) === '01-01') { removed.newyear.push(r0.d); return false; }
     return true;
   });
-  // 坑 2：节假日补的幽灵行 —— 收盘价与前一日完全相同
+  // 坑 2：窗口起点落在工作日的休市日时，中证会凭空造出起点那一天，
+  // 收盘价抄的是**节后第一个交易日**的。实测（2026-09-28，往前 150 天正好是 05-01）：
+  //   起点 04-29 → 04-29、04-30、05-06 …          正常，没有 05-01
+  //   起点 05-01 → 05-01(12363.89)、05-06(12363.89) …  多出一行假的 05-01
+  // 原来的经验规则是「和前一行收盘价相同就删后面那行」—— 恰好删反了：
+  // 删掉的是真实的 05-06，留下的是伪造的 05-01。第 3 项校验发现 05-01 不在日历里，
+  // 整轮拒绝写入。数据没被污染，但那天的信号判断整个丢了。
+  //
+  // 修法：有官方日历的月份，以日历为准，不在日历里的一律剔除 ——
+  // 第 3 项校验本来就拿这份日历当标准，清洗和校验必须用同一把尺子。
+  if (tradingCal) {
+    rows = rows.filter((r0) => {
+      if (tradingCal.covers(r0.d) && !tradingCal.has(r0.d)) { removed.offCalendar.push(r0.d); return false; }
+      return true;
+    });
+  }
+  // 日历覆盖不到的月份（比如跨年时缺上一年的日历）才退回经验规则，但方向要对：
+  // 假行总是窗口起点那一行，和它后面那行收盘价相同时，删的是起点这行。
+  if (rows.length >= 2 && rows[0].d === startYmd && rows[0].c === rows[1].c) {
+    removed.startFake.push(rows[0].d);
+    rows = rows.slice(1);
+  }
+  // 坑 3（退路）：其余「收盘价与前一日完全相同」的行。只用在日历覆盖不到的日子上 ——
+  // 有日历的日子以日历为准，这条经验规则在那里只可能误删真实数据。
   const clean = [];
   for (const r0 of rows) {
-    if (clean.length && clean[clean.length - 1].c === r0.c) { removed.ghost.push(r0.d); continue; }
+    const known = tradingCal && tradingCal.covers(r0.d);
+    if (!known && clean.length && clean[clean.length - 1].c === r0.c) { removed.ghost.push(r0.d); continue; }
     clean.push(r0);
   }
   return { rows: clean, removed, rawCount };
@@ -356,11 +383,12 @@ export function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar,
   for (let i = 1; i < rows.length; i++) {
     if (rows[i].c === rows[i - 1].c) { ghost = `清洗后仍有残留：${rows[i - 1].d} 与 ${rows[i].d} 同为 ${rows[i].c}`; break; }
   }
+  const n = (k) => (removed && removed[k] ? removed[k].length : 0);
   const cut = removed
-    ? removed.ghost.length + removed.weekend.length + removed.newyear.length + removed.dup.length
+    ? n('ghost') + n('weekend') + n('newyear') + n('dup') + n('offCalendar') + n('startFake')
     : 0;
   const cutDetail = removed
-    ? `剔除 ${cut} 行（幽灵 ${removed.ghost.length}／周末 ${removed.weekend.length}／元旦 ${removed.newyear.length}／重复 ${removed.dup.length}）`
+    ? `剔除 ${cut} 行（非交易日 ${n('offCalendar') + n('startFake')}／幽灵 ${n('ghost')}／周末 ${n('weekend')}／元旦 ${n('newyear')}／重复 ${n('dup')}）`
     : '无清洗信息';
   add(4, '没有混进重复抄来的假数据', !ghost, ghost || cutDetail);
 
@@ -589,14 +617,26 @@ async function runDaily(env, { force = false } = {}) {
 
   // ---- 抓数据 ----
   const from = shiftDays(today, -150);
+  // 清洗用的官方日历。窗口往前 150 天，1–5 月跑的时候会伸进上一年，把那一年的也带上。
+  // 「覆盖」按月判断：某个月一个交易日都没有，说明那个月根本没取到，
+  // 这时不能拿它当标准，否则会把真实数据当成非交易日删掉。
+  const calDays = new Set(cal.tradingDays);
+  if (from.slice(0, 4) !== year) {
+    const pc = await G.readJSON(`calendar/${from.slice(0, 4)}.json`);
+    if (pc) for (const d of pc.tradingDays) calDays.add(d);
+  }
+  const calMonths = new Set([...calDays].map((d) => d.slice(0, 7)));
+  const tradingCal = { covers: (d) => calMonths.has(d.slice(0, 7)), has: (d) => calDays.has(d) };
   const [idxRes, bondRes] = await Promise.all([
-    timed('中证指数', fetchCSI('H00922', from, today)),
+    timed('中证指数', fetchCSI('H00922', from, today, tradingCal)),
     // 闲钱腿：交银稳利中短债债券A。取不到就让下面沿用 series 里已有的值，
     // 下一轮再抓一次就补上了 —— 绝不能因为净值晚发就中断整轮运行。
     timed('基金净值', fetchFundNAV(env.CASH_FUND || CASH_FUND).catch(() => ({ rows: [], name: null }))),
   ]);
   const idx = idxRes.rows;
   const removed = idxRes.removed;
+  const fakes = [...removed.offCalendar, ...removed.startFake];
+  if (fakes.length) log.push(`中证数据里混进了非交易日 ${fakes.join('、')}，已按官方日历剔除`);
   const bond = bondRes.rows;
 
   // ---- 校验 2：今天的数据到位了吗 ----

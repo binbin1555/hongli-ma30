@@ -73,6 +73,11 @@ const MUTANTS = [
     "    if (false) return { ok: null, reason: '那一轮可能还在发推送，先不补发' };", 'push-resend'],
   ['补发不说明是补发', 'worker', "const resentLine = resent ? `\\n↻ 补发：${resent}` : '';", "const resentLine = '';", 'push-resend'],
 
+  // —— 中证窗口起点落在休市日（09-28 整天停跑）——
+  ['清洗不用官方日历', 'worker', '      if (tradingCal.covers(r0.d) && !tradingCal.has(r0.d)) {', '      if (false) {', 'csi-window'],
+  ['起点假行删反方向', 'worker', 'if (rows.length >= 2 && rows[0].d === startYmd && rows[0].c === rows[1].c) {',
+    'if (false) {', 'csi-window'],
+
   // —— 卡片与算法 ——
   ['买入金额漏算手续费', 'core', '(target - V) / (1 + w * c)', '(target - V)', 'happy'],
   ['日期不写月日', 'core', '${+d.slice(5, 7)} 月 ${+d.slice(8, 10)} 日', '某天', 'happy'],
