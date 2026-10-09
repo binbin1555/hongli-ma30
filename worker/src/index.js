@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '7082e7511a';
+const BUILD = '8fb32ca215';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -42,15 +42,31 @@ function shiftDays(ymd, n) {
 const ymd = (s) => `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
 const compact = (s) => s.replace(/-/g, '');
 
-async function retryFetch(url, opts = {}, tries = 4, label = '') {
+/**
+ * 带重试的请求。timeoutMs > 0 时，每一次尝试超过这么久没响应就主动放弃、进入下一次。
+ *
+ * 没有超时的话，对方服务器「既不成功也不报错、一直挂着」时，这里会永远等下去 ——
+ * 重试根本轮不到第二次。2026-09-18 的推送就是这么丢的：账本 21:00:43 正常提交，
+ * 随后发往 Bark 的请求一直没回音，直到 Cloudflare 把 Worker 掐掉，
+ * 既没发出去、也没记下「失败」，无声无息。
+ */
+async function retryFetch(url, opts = {}, tries = 4, label = '', timeoutMs = 0) {
   let last;
   for (let i = 0; i < tries; i++) {
+    const ac = timeoutMs > 0 ? new AbortController() : null;
+    const timer = ac ? setTimeout(() => ac.abort(), timeoutMs) : null;
     try {
-      const r = await fetch(url, { ...opts, headers: { 'User-Agent': UA, ...(opts.headers || {}) } });
+      const r = await fetch(url, {
+        ...opts,
+        ...(ac ? { signal: ac.signal } : {}),
+        headers: { 'User-Agent': UA, ...(opts.headers || {}) },
+      });
       if (r.ok) return r;
       last = `HTTP ${r.status}`;
     } catch (e) {
-      last = String(e);
+      last = ac && ac.signal.aborted ? `超过 ${timeoutMs / 1000} 秒没有响应` : String(e);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
     if (i < tries - 1) await new Promise((res) => setTimeout(res, 800 * (i + 1)));
   }
@@ -399,7 +415,7 @@ export function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar,
  */
 let lastPush = null;
 
-async function bark(env, { title, body, level = 'active', group = '红利MA30' }) {
+export async function bark(env, { title, body, level = 'active', group = '红利MA30' }) {
   if (!env.BARK_KEY) {
     lastPush = { ok: false, at: beijingStamp(), reason: '未配置 BARK_KEY' };
     return lastPush;
@@ -411,11 +427,14 @@ async function bark(env, { title, body, level = 'active', group = '红利MA30' }
     icon: env.BARK_ICON || undefined,
   };
   try {
+    // 每次最多等 8 秒。Bark 服务器偶尔会慢到 20 多秒才回（09-16 实测 22 秒），
+    // 偶尔干脆不回（09-18）。三次封顶约 26 秒，挂住也能在 Cloudflare 收工前
+    // 放弃，并把「推送失败」明明白白记下来，而不是无声消失。
     const r = await retryFetch('https://api.day.app/push', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: JSON.stringify(payload),
-    }, 3, 'Bark');
+    }, 3, 'Bark', +env.BARK_TIMEOUT_MS || 8000);
     const j = await r.json();
     // Bark 即使 HTTP 200 也可能在 body 里报错，两层都要看
     const ok = j && (j.code === 200 || j.code === undefined);
@@ -435,13 +454,16 @@ async function runDaily(env, { force = false } = {}) {
   // 整轮耗时。2026-09-11 那次被触发器的 30 秒超时掐断，事后翻遍 state 和
   // audit 都找不到任何耗时记录，只能靠猜。记下来，下次一眼看得出卡在哪。
   const t0 = Date.now();
+  // 分步耗时。只记总耗时的话，09-24 那次「数据阶段 35 秒」根本看不出是哪个源慢。
+  const steps = {};
+  const timed = (k, p) => { const t = Date.now(); return Promise.resolve(p).finally(() => { steps[k] = Date.now() - t; }); };
   const today = beijingDate();
   const log = [];
   const G = gh(env);
 
   // ---- 校验 1：今天是不是交易日 ----
   const year = today.slice(0, 4);
-  let cal = await G.readJSON(`calendar/${year}.json`);
+  let cal = await timed('读日历', G.readJSON(`calendar/${year}.json`));
   if (!cal || !cal.tradingDays.includes(today)) {
     // 日历里没有今天，可能是休市，也可能是日历没更新到
     const monthMap = await fetchCalendarMonth(today.slice(0, 7)).catch(() => null);
@@ -486,10 +508,10 @@ async function runDaily(env, { force = false } = {}) {
   // ---- 抓数据 ----
   const from = shiftDays(today, -150);
   const [idxRes, bondRes] = await Promise.all([
-    fetchCSI('H00922', from, today),
+    timed('中证指数', fetchCSI('H00922', from, today)),
     // 闲钱腿：交银稳利中短债债券A。取不到就让下面沿用 series 里已有的值，
     // 下一轮再抓一次就补上了 —— 绝不能因为净值晚发就中断整轮运行。
-    fetchFundNAV(env.CASH_FUND || CASH_FUND).catch(() => ({ rows: [], name: null })),
+    timed('基金净值', fetchFundNAV(env.CASH_FUND || CASH_FUND).catch(() => ({ rows: [], name: null }))),
   ]);
   const idx = idxRes.rows;
   const removed = idxRes.removed;
@@ -513,7 +535,7 @@ async function runDaily(env, { force = false } = {}) {
 
   // ---- ETF 报价 ----
   let etf = null;
-  const etfRes = await fetchETF(env.ETF_CODE || '515180');
+  const etfRes = await timed('ETF报价', fetchETF(env.ETF_CODE || '515180'));
   if (etfRes.failed) {
     log.push(`ETF 报价三个源都取不到：${etfRes.tried.join('、')}`);
   } else {
@@ -522,7 +544,7 @@ async function runDaily(env, { force = false } = {}) {
   }
 
   // ---- 合并进 series ----
-  const series = await G.readJSON('data/series.json');
+  const series = await timed('读行情', G.readJSON('data/series.json'));
   const bondByDate = new Map(bond.map((b) => [b.d, b.c]));
   // 场外基金的净值通常 20:00 之后才陆续发布，而这一轮跑在 21:00 ——
   // 偶尔会赶上还没出。那样今天的 b 是空的、当天不计息，下一轮重抓 150 天
@@ -684,6 +706,9 @@ async function runDaily(env, { force = false } = {}) {
       path: `audit/${today}.json`,
       content: JSON.stringify({
         today, ranAt: beijingStamp(), checks,
+        // 提交前各步耗时（毫秒）。万一推送那步被掐断、回填没跑成，
+        // 至少这一份已经随账本落库，事后能看出前半程有没有异常。
+        timing: { ...steps, 数据就绪: Date.now() - t0 },
         cleaning: { rawCount: idxRes.rawCount, removed },
         rawTail: idx.slice(-5), etf, ma30: +ma30.toFixed(4), signal: sig,
         tierBefore: state.tier, tierAfter: tier, pending, executed, log,
@@ -696,10 +721,10 @@ async function runDaily(env, { force = false } = {}) {
     ? `${today} 成交 ${executed.side === 'BUY' ? '买入' : '卖出'} 至 ${posPct(executed.tierTo)}`
     : pending ? `${today} 出信号 ${pending.side === 'BUY' ? '买入' : '卖出'} → ${execDay || '下一交易日'} 执行`
       : `${today} 无操作`;
-  const sha = await G.commit(files, `chore(daily): ${msg}`);
+  const sha = await timed('提交', G.commit(files, `chore(daily): ${msg}`));
 
   // ---- 推送 ----
-  await pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late });
+  await timed('推送', pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late }));
 
   // 推送结果补记一次：失败时面板上要看得见，否则你不会知道自己漏收了通知。
   // 这次补记失败也不影响主流程 —— 账本已经提交好了。
@@ -707,13 +732,13 @@ async function runDaily(env, { force = false } = {}) {
   // 「推送没送达」。所以把回填本身的错误也带进 HTTP 返回，别让它无声无息。
   let backfillErr = null;
   if (lastPush && !lastPush.ok) {
-    newState.push = { ...lastPush, elapsedMs: Date.now() - t0 };
+    newState.push = { ...lastPush, elapsedMs: Date.now() - t0, steps };
     await G.commit(
       [{ path: 'data/state.json', content: JSON.stringify(newState, null, 2) }],
       `chore(daily): ${today} 推送失败，记录状态`
     ).catch((e) => { backfillErr = String(e && e.message || e); });
   } else if (lastPush) {
-    newState.push = { ok: true, at: lastPush.at, elapsedMs: Date.now() - t0 };
+    newState.push = { ok: true, at: lastPush.at, elapsedMs: Date.now() - t0, steps };
     await G.commit(
       [{ path: 'data/state.json', content: JSON.stringify(newState, null, 2) }],
       `chore(daily): ${today} 推送已送达`
