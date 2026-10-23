@@ -229,7 +229,7 @@ console.log('\n⑧ 真实行情长跑（data/series.json，按 MA30 规则自动
     if (w !== tier) pend = { s: rows[i].d, t: w };
   }
   for (const start of [launch, '2025-06-03', '2026-10-23']) {
-    const cp = checked(`${launch} 起算、${start} 起用，${entries.length} 笔交易`, { rows, entries, start, launch, principal: 1_860_000 });
+    const cp = checked(`${launch} 起算、${start} 起用，${entries.length} 笔交易`, { rows, entries, start, launch, principal: 1_000_000 });
     if (start === launch) {
       if (!cp.shorts.length) ok('三年里没有一笔没买够'); else bad(`出现没买够：${JSON.stringify(cp.shorts)}`);
       const calm = cp.events.filter((e) => !entries.some((x) => x.date === e.d) && !entries.some((x) => tdAfter(rows.map((r) => r.d), x.date, 1) === e.d));
@@ -251,6 +251,52 @@ console.log('\n⑨ 文案：日期打头、金额取整、不出现没有日期�
   if (/\d+\.\d/.test(txt)) bad(`金额没取整：${txt}`); else ok('金额全部取整到元');
   const stray = txt.split('\n').filter((s) => /今天|明天|次日|下一?个交易日/.test(s.replace(/(\d+\s*月\s*\d+\s*日)（[^）]*）/g, '$1')) && !/\d+\s*月\s*\d+\s*日|给不出/.test(s));
   if (stray.length) bad(`相对时间词没带日期：${stray.join(' / ')}`); else ok('相对时间词都只出现在日期后的括号里');
+}
+
+console.log('\n⑩ 平时偏离超过 1% 要补；预告了「哪天起再赎回」，到那天就得赎');
+{
+  // 25% 仓位时红利涨 12%：总资产涨约 3%，缓冲垫目标跟着涨约 1.5% —— 超过 1%，当天就要补
+  // 然后卖到空仓（多出的钱申购交银，是新份额）、没几天又买回 25%：老份额不够补缓冲垫，
+  // 差的那 2% 多要等新份额满 7 天；这几天红利又跌 12%，差额缩到 1% 以内 —— 照样得在预告那天赎
+  const k0 = CAL.indexOf('2026-03-02');
+  const d = (i) => CAL[k0 + i];
+  const px = (rise, fall) => (x) => { const i = CAL.indexOf(x) - k0; return i < 6 ? 100 : i < 12 ? 100 + rise : (100 + rise) * (1 - fall / 100); };
+  const E = led([[d(2), 0, 1], [d(9), 1, 0], [d(11), 0, 1]]);
+  const rows = rowsOf(d(0), d(30), px(12, 12));
+  const cp = checked('涨了又跌', { rows, entries: E, start: d(0) });
+
+  const day6 = dayOf(cp, d(6)), day5 = dayOf(cp, d(5));
+  const S6 = day6.V + day6.cash, want6 = 0.5 * S6 - day5.buf;
+  const r6 = ev(cp, 'REDEEM', d(6))[0];
+  if (want6 > 0.01 * S6 && r6 && near(r6.amount, want6, 1)) ok(`${d(6)} 涨了 12%：缓冲垫比目标少 ${yuan(want6)} 元（超过总资产 1%），当天赎回补上`);
+  else bad(`${d(6)} 应赎回约 ${yuan(want6)} 元补缓冲垫：${JSON.stringify(r6)}`);
+
+  const ctx = (upto, pending = null) => cashPlan({ rows: rows.filter((r) => r.d <= upto), entries: E.filter((e) => e.date <= upto),
+    principal: P, launchDate: d(0), tradingDays: CAL, cfg: { startDate: d(0) }, pending });
+  const eve = ctx(d(10), { tierFrom: 0, tierTo: 1 });
+  const later = eve.next.actions.find((a) => a.kind === 'REDEEM_LATER');
+  if (later && later.day && later.amount > 0.01 * eve.total) ok(`买入前一晚预告：另有约 ${yuan(later.amount)} 元 ${later.day} 起再赎回（超过总资产 1%）`);
+  else bad(`买入前一晚应预告稍后赎回：${JSON.stringify(eve.next.actions)}`);
+  if (later) {
+    // 中间每一晚都还挂着同一个日子 —— 面板横幅靠它撑到那天
+    const mids = CAL.filter((x) => x >= d(11) && x < later.day);
+    const lost = mids.filter((x) => { const c = ctx(x); const a = c.next.actions.find((y) => y.kind === 'REDEEM_LATER' || y.kind === 'REDEEM'); return !a || (a.kind === 'REDEEM_LATER' && a.day !== later.day) || (a.kind === 'REDEEM' && a.day !== later.day); });
+    if (!lost.length) ok(`${mids.join('、')} 每晚都还提示 ${later.day} 赎回`); else bad(`这几晚把预告弄丢了：${lost.join('、')}`);
+    const dl = dayOf(cp, later.day);
+    const S = dl.V + dl.cash, gap = Math.min(0.5 * S, dl.cash) - (dayOf(cp, CAL[CAL.indexOf(later.day) - 1]).buf) - 0;
+    const r = ev(cp, 'REDEEM', later.day)[0];
+    if (r && gap < 0.01 * S) ok(`${later.day} 差额只剩 ${yuan(gap)} 元（不到总资产 1%），仍按预告赎回 ${yuan(r.amount)} 元`);
+    else bad(`${later.day} 应按预告赎回（差额 ${yuan(gap)}，1% = ${yuan(0.01 * S)}）：${JSON.stringify(r)}`);
+  }
+
+  // 同样的路子但不涨：老份额刚好够补，就不该冒出一句「另有约 X 元稍后再赎回」
+  const rows0 = rowsOf(d(0), d(30), px(0, 0));
+  checked('不涨不跌', { rows: rows0, entries: E, start: d(0) });
+  const eve0 = cashPlan({ rows: rows0.filter((r) => r.d <= d(10)), entries: E.filter((e) => e.date <= d(10)),
+    principal: P, launchDate: d(0), tradingDays: CAL, cfg: { startDate: d(0) }, pending: { tierFrom: 0, tierTo: 1 } });
+  const tiny = eve0.next.actions.find((a) => a.kind === 'REDEEM_LATER');
+  if (!tiny) ok('赎不出来的部分不到总资产 1% 时不预告（和平时的偏离一样不用管）');
+  else bad(`不该预告零头：${JSON.stringify(tiny)}`);
 }
 
 console.log(fails ? `\n✗ ${fails} 项不通过` : '\n✓ 全部通过');

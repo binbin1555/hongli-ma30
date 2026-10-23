@@ -507,6 +507,10 @@ export function cashPlan({ rows, entries, principal, launchDate, tradingDays = [
   let lots = [{ v: principal, d: launchDate, old: true }];   // 交银稳利，按申购先后排；起算前就有的钱视为早已持有满 7 天
   let transit = [];                                           // 在途赎回款 { v, apply, arrive }
   const subOn = new Set();                                    // 哪天要把多出来的缓冲垫申购交银
+  // 买入日 / 起用日该补的缓冲垫，因为交银份额不满 7 天没补齐（差额超过总资产的 1% 才算）：
+  // 推送和横幅里已经说了「哪天起再赎回」，到了那天就得照说的赎回 ——
+  // 不能因为这几天涨跌让差额缩到 1% 以内就悄悄不赎了
+  let owe = false;
   const shorts = [];                                          // 买入当天缓冲垫不够的记录
   const days = [], events = [];
   const sum = (a) => a.reduce((p, x) => p + x.v, 0);
@@ -581,7 +585,12 @@ export function cashPlan({ rows, entries, principal, launchDate, tradingDays = [
       // 早上（15:00 前）：缓冲垫按收盘后的目标补足。买入日、起用第一天差多少补多少，平时差超过 1% 才补
       const cashAfter = cashOf() - need + proceeds;
       const deficit = tgt(S, cashAfter) - (buf - need + proceeds) - sum(transit);
-      if (deficit > ((side === 'BUY' || first) ? 1e-9 * S : DRIFT * S)) redeem(d, deficit);
+      const strict = side === 'BUY' || first || owe;
+      if (deficit > (strict ? 1e-9 * S : DRIFT * S)) {
+        const left = deficit - redeem(d, deficit);
+        // 已经预告过的，赎完为止；新出现的，只在买入日 / 起用日、且超过 1% 时才预告
+        owe = owe ? left > 0.005 : (side === 'BUY' || first) && left > DRIFT * S;
+      } else owe = false;
     }
     // 收盘：成交
     if (side === 'BUY') {
@@ -626,14 +635,16 @@ export function cashPlan({ rows, entries, principal, launchDate, tradingDays = [
     const cashAfter = cash - need + proceeds;
     const deficit = tgt(S, cashAfter) - (bufE - need + proceeds) - sum(tranE);
     let redeemArrive = null;
-    if (deficit > ((o.side === 'BUY' || nextFirst) ? 1e-9 * S : DRIFT * S)) {
+    if (deficit > ((o.side === 'BUY' || nextFirst || owe) ? 1e-9 * S : DRIFT * S)) {
       const R = Math.min(deficit, agedAmt(day));
       if (R > 0.005) {
         redeemArrive = nth(day, LAG);
         actions.push({ kind: 'REDEEM', day, amount: R, arrive: redeemArrive, why: o.side === 'BUY' ? 'buy' : nextFirst ? 'start' : 'refill' });
       }
+      // 赎不出来的部分不到总资产的 1%，就和平时的偏离一样不用管，也不预告；
+      // 已经预告过的那笔，则一直提示到赎完为止
       const rest = deficit - R;
-      if (rest > 0.005) {
+      if (rest > (owe ? 0.005 : DRIFT * S)) {
         const young = lots.filter((l) => !aged(l, day));
         const when = young.map((l) => freeFrom(l, day)).filter(Boolean).sort()[0] || null;
         actions.push({ kind: 'REDEEM_LATER', day: when, amount: Math.min(rest, sum(young)) });

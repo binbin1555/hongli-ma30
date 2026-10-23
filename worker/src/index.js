@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '8eb3c86abe';
+const BUILD = '9adb663460';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -517,6 +517,20 @@ async function cashPlanFor(G, env, { rows, entries, launchDate, today, pending, 
   } catch (e) {
     return { error: String(e && e.message || e) };
   }
+}
+
+/**
+ * 某一天要做的申赎（赎回 / 申购交银稳利）。买卖红利之外，这也是一笔真金白银的买卖，
+ * 21:00 推送要拿它当标题、14:30 也要提醒 —— 基金申赎 15:00 截止，错过就晚一个交易日。
+ */
+export function cashDueOn(cash, day) {
+  if (!cash || cash.error || !cash.next || !day) return [];
+  return cash.next.actions.filter((a) => (a.kind === 'REDEEM' || a.kind === 'SUBSCRIBE') && a.day === day);
+}
+
+/** 「赎回交银稳利约 12,345 元」；同一天两笔就用顿号连起来 */
+export function cashDueText(acts) {
+  return acts.map((a) => `${a.kind === 'REDEEM' ? '赎回' : '申购'}交银稳利约 ${money(a.amount)} 元`).join('、');
 }
 
 /** 推送里的「资金安排」一段。没有要做的事就是空串 */
@@ -1016,13 +1030,17 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
     // 周五发出的「明日无需操作」，字面上指的是周六。
     const td = dayLabel(today, today);
     const nd = execDay ? dayLabel(execDay, today) : null;
-    const title = executed
-      ? `✅ ${td.md}已成交　仓位 ${posPct(newState.tier)}`
-      : `红利MA30 · ${td.md}无操作　仓位 ${posPct(newState.tier)}`;
     // 那一天要是有资金上的事（比如卖出后申购交银），就不能再说「无需操作」——
-    // 只是不用买卖红利 ETF。
+    // 只是不用买卖红利 ETF。而且申赎本身就是一笔买卖：标题直接写它，
+    // 并且和买卖红利一样用 timeSensitive，不能混在一条「无操作」的静默推送里。
     const cashTxt = cashBlock(cash, today);
-    const cashDue = !!(cash && !cash.error && cash.next && cash.next.actions.some((a) => a.day === execDay));
+    const due = cashDueOn(cash, execDay);
+    const cashDue = due.length > 0;
+    const title = cashDue
+      ? `💰 ${nd.md} 15:00 前${cashDueText(due)}`
+      : executed
+        ? `✅ ${td.md}已成交　仓位 ${posPct(newState.tier)}`
+        : `红利MA30 · ${td.md}无操作　仓位 ${posPct(newState.tier)}`;
     const idle = cashDue ? '不用买卖红利 ETF' : '无需操作';
     const nextLine = nd
       ? `\n${nd.label}${idle}`
@@ -1030,7 +1048,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
     await bark(env, {
       title,
       body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${cashTxt}${doneLine}${warn}${missed}${resentLine}`,
-      level: 'passive',
+      ...(cashDue ? { level: 'timeSensitive', group: '红利MA30·操作' } : { level: 'passive' }),
     });
   }
   if (late && executed) {
@@ -1048,7 +1066,8 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
  * T+1 盘中提醒（默认 14:30，收盘前半小时）。
  *
  * 只读不写：不碰账本、不改 state、不做任何校验写入。
- * 只有「今天正是某笔挂单的执行日」时才推送，其余情况一律静默，避免变成骚扰。
+ * 今天正是某笔挂单的执行日、或者今天要申赎交银稳利（基金 15:00 截止）时才推送，
+ * 其余情况一律静默，避免变成骚扰。
  */
 export async function remind(env) {
   const today = beijingDate();
@@ -1060,27 +1079,48 @@ export async function remind(env) {
   }
 
   const state = await G.readJSON('data/state.json');
-  if (!state || !state.pending) {
-    return { ok: true, today, skipped: '没有待执行的操作，静默' };
-  }
+  if (!state) return { ok: true, today, skipped: '读不到 state，静默' };
 
   // 挂单该在哪天执行 —— 周五出的信号要到下周一，不能简单加一天
   let days = [...cal.tradingDays];
   const nextCal = await G.readJSON(`calendar/${+today.slice(0, 4) + 1}.json`);
   if (nextCal) days = days.concat(nextCal.tradingDays).sort();
-  const execDay = nextTradingDay(days, state.pending.signalDate);
-  if (execDay !== today) {
-    return { ok: true, today, skipped: `执行日是 ${execDay}，不是 ${today}，静默` };
+  const p = state.pending;
+  const execDay = p ? nextTradingDay(days, p.signalDate) : null;
+
+  // 资金安排和晚上那条推送同源（同一个 cashPlan、同样的挂单）
+  const principal = Number(env.PRINCIPAL || 0);
+  let series = null, ledger = null, cash = null;
+  if (principal > 0) {
+    series = await G.readJSON('data/series.json');
+    ledger = await G.readJSON('data/ledger.json');
+    cash = await cashPlanFor(G, env, {
+      rows: series.rows, entries: ledger.entries, launchDate: state.launchDate,
+      today: state.asof, pending: p || null, calDays: days,
+    });
+  }
+  const due = cashDueOn(cash, today);
+
+  if (!p || execDay !== today) {
+    if (!due.length) {
+      return { ok: true, today, skipped: p ? `执行日是 ${execDay}，不是 ${today}，静默` : '没有待执行的操作，静默' };
+    }
+    // 今天不用买卖红利，但要申赎交银稳利
+    const L = dayLabel(today, today);
+    await bark(env, {
+      title: `⏰ ${L.md} 15:00 前${cashDueText(due)}`,
+      body: `基金申赎 ${L.md} 15:00 截止，${L.md}不用买卖红利 ETF。`
+        + cashBlock(cash, today),
+      level: 'timeSensitive',
+      group: '红利MA30·操作',
+    });
+    return { ok: true, today, reminded: true, cashOnly: true };
   }
 
   // 金额按本金和账本重放得出，和晚上那条推送同源
-  const p = state.pending;
   let est = '';
   let side = p.side;
-  const principal = Number(env.PRINCIPAL || 0);
   if (principal > 0) {
-    const series = await G.readJSON('data/series.json');
-    const ledger = await G.readJSON('data/ledger.json');
     const rows = series.rows.filter((r) => r.d <= state.asof);
     const st = replay(rows, ledger.entries, principal, state.launchDate);
     const o = plannedOrder(st.V, st.cash, p.tierTo);
@@ -1094,16 +1134,7 @@ export async function remind(env) {
   const share = isBuy ? p.tierTo : p.tierFrom;
   const L = dayLabel(today, today);
   // 买入日 15:00 前还要赎回交银稳利 —— 14:30 这条是当天最后一次提醒
-  let cashTxt = '';
-  if (principal > 0) {
-    const series = await G.readJSON('data/series.json');
-    const ledger = await G.readJSON('data/ledger.json');
-    const cash = await cashPlanFor(G, env, {
-      rows: series.rows, entries: ledger.entries, launchDate: state.launchDate,
-      today: state.asof, pending: p, calDays: days,
-    });
-    cashTxt = cashBlock(cash, today);
-  }
+  const cashTxt = cashBlock(cash, today);
   await bark(env, {
     title: `⏰ ${L.md}收盘前${isBuy ? '买入' : '卖出'}第 ${share} 份`,
     body: `仓位 ${posPct(p.tierFrom)} → ${posPct(p.tierTo)}${est}`

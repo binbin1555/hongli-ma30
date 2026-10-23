@@ -7,7 +7,7 @@
  *   四格的占比加起来正好 100.0%，每一格和真实占比相差不超过 0.1 个百分点，彩条宽度与之一致
  *   每一格和核心函数 cashPlan 的结果相差不超过 2 元（取整时尾差只补在最大那一格上）
  *   在途款写出到账日、不满 7 天的交银写出可免费赎回的日期
- *   资金操作的文字、「下一次操作」卡片、横幅里的资金文字，和推送是同一句话
+ *   资金操作的文字、「下一次操作」卡片，和推送是同一句话；每一笔申赎另有一条蓝色横幅，金额一致
  * 另外把时钟拨到不同时刻，核对最上面那句「今天动不动资金」：
  *   操作日 15:00 前 → 要动资金；15:00 后 → 已截止并写出哪天补；前一晚 → 不用动、写出下一步；
  *   数据停更 → 数据没更新；没有操作 → 不用动
@@ -32,7 +32,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 let fails = 0;
 const bad = (m) => { fails++; console.log(`    ✗ ${m}`); };
 const ok = (m) => console.log(`    ✓ ${m}`);
-const P = 1860000;
+const P = 1000000;
 const CFG = { schema: 1, startDate: LAUNCH, bufferRatio: 0.5, arriveDays: 2, minHoldDays: 7, driftPct: 0.01 };
 const toNum = (s) => Number(String(s).replace(/[^\d]/g, ''));
 const NAME = { etf: '红利 ETF', buf: '缓冲垫', jy: '交银稳利', tr: '在途赎回款' };
@@ -158,8 +158,14 @@ console.log('\n【位置与折叠】');
   const nextSub = el('nextSub').innerHTML;
   if (lines.length && nextSub.includes(`<b>资金：</b>${lines.join('；')}`)) ok(`「下一次操作」卡片：资金：${lines.join('；')}`);
   else bad(`「下一次操作」卡片里资金文字不对：${nextSub}`);
-  const bn = banners().find((b) => !/你做了吗/.test(b.text));
-  if (bn && bn.sub.includes(lines[0])) ok('挂单横幅里同样写着赎回安排'); else bad(`横幅里缺资金安排：${bn && bn.sub}`);
+  const bs = banners();
+  const red = cp.next.actions.find((a) => a.kind === 'REDEEM');
+  const amt = red && Math.round(red.amount).toLocaleString('zh-CN');
+  const tb = bs[0], cb = bs.find((b) => b.cash);
+  if (tb && !tb.cash && red && tb.sub.includes(`还要赎回交银稳利约 ${amt} 元`) && tb.sub.includes('蓝色横幅')) ok('挂单横幅点明还要赎回多少、另有蓝色横幅');
+  else bad(`挂单横幅应点明赎回：${tb && tb.sub}`);
+  if (cb && bs.indexOf(cb) === 1 && cb.text === `赎回交银稳利约 ${amt} 元` && cb.btn.textContent === '已完成') ok(`紧跟一条蓝色横幅「${cb.text}」，按钮「已完成」`);
+  else bad(`应紧跟一条赎回横幅：${JSON.stringify(bs.map((b) => [b.cash, b.text, b.btn.textContent]))}`);
   checkLines('挂单', cp);
 }
 

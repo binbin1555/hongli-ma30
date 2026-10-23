@@ -127,6 +127,8 @@ if (!H || !H.S || !H.S.state) { console.log('✗ 页面模块没能加载出数�
 export const banners = () => el('banners').children.map((b) => ({
   el: b,
   sell: b.classes.has('sell'),
+  cash: b.classes.has('cash'),         // 资金上的申赎（赎回 / 申购交银稳利）
+  catchup: b.classes.has('catchup'),   // 缓冲垫不够、要补买的那笔
   kick: (b.queryAll('.bk')[0] || {}).textContent?.replace(/\s+/g, ' ').trim() || '',
   text: (b.queryAll('.bt')[0] || {}).textContent?.replace(/\s+/g, ' ').trim() || '',
   sub: (b.queryAll('.bs')[0] || {}).textContent?.replace(/\s+/g, ' ').trim() || '',

@@ -58,6 +58,10 @@ body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-
 .bn button{font-family:inherit;font-size:16px;font-weight:700;padding:15px 34px;border-radius:8px;
   border:none;background:#fff;color:var(--up);cursor:pointer;flex:none}
 .bn.sell button{color:var(--dn)}
+/* 资金上的申赎（赎回 / 申购交银稳利）：蓝色，和买（红）卖（绿）分开 */
+/* 深浅色都用同一个深蓝：深色主题的 --ac 偏浅，白字压在上面看不清 */
+.bn.cash{background:#2C55C8;box-shadow:0 6px 24px rgba(44,85,200,.30)}
+.bn.cash button{color:#2C55C8}
 .bn button:focus-visible{outline:3px solid #fff;outline-offset:3px}
 /* 第一条是眼下要做的那笔，留足分量；下面几条是「你做了吗」的回头确认，
    同样大的字连排四条会糊成一堵墙，收一号 */
@@ -355,7 +359,7 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = '5d01605caf';
+const CORE_VERSION = 'dab7a400c7';
 const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries, validateState,
         nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct, WEIGHTS, COMMISSION,
         cashPlan, cashPlanLines }
@@ -493,13 +497,13 @@ function accountMoney() {
  * 闲钱分两处放的推算。和推送同一个函数（shared/strategy.js 的 cashPlan），
  * 本金没设或没有 cashplan.json 时返回 null；推算出错返回 { error }，绝不让它拖垮整页。
  */
-function cashNow() {
+function cashNow(trace = false) {
   const principal = num(LS.get('principal', 0));
   if (!principal || !S.cashcfg) return null;
   try {
     return cashPlan({
       rows: S.series.rows.filter((r) => r.d <= S.state.asof), entries: S.ledger.entries, principal,
-      launchDate: S.state.launchDate, tradingDays: S.cal, cfg: S.cashcfg, pending: S.state.pending,
+      launchDate: S.state.launchDate, tradingDays: S.cal, cfg: S.cashcfg, pending: S.state.pending, trace,
     });
   } catch (e) {
     return { error: String((e && e.message) || e) };
@@ -969,22 +973,33 @@ function renderBanner(behind) {
   const M = accountMoney();
   const entries = S.ledger.entries || [];
 
-  // 待办排最前 —— 那是眼下要做的事；其余按信号日从新到旧
+  // 待办排最前 —— 那是眼下要做的事：先是买卖红利的挂单，再是资金上的申赎（按日期）。
+  // 其余是「已经按规则当作做了、等你确认」的，买卖和申赎混在一起按日期从新到旧。
   const items = [];
-  if (S.state.pending) items.push({ ...S.state.pending, done: false });
+  if (S.state.pending) items.push({ ...S.state.pending, type: 'trade', key: S.state.pending.signalDate, done: false });
+  const cash = cashItems();
+  items.push(...cash.filter((c) => !c.done).sort((a, b) => (a.sortDate < b.sortDate ? -1 : a.sortDate > b.sortDate ? 1 : 0)));
+  const hist = [];
   for (const e of [...entries].reverse()) {
-    items.push({ signalDate: e.signalDate, tierFrom: e.tierFrom, tierTo: e.tierTo, date: e.date, done: true });
+    hist.push({ type: 'trade', key: e.signalDate, signalDate: e.signalDate, tierFrom: e.tierFrom, tierTo: e.tierTo, date: e.date, done: true, sortDate: e.date });
   }
+  hist.push(...cash.filter((c) => c.done));
+  // 同一天先说买卖红利、再说申赎 —— 申赎是跟着买卖走的
+  const rank = { trade: 0, cash: 1, catchup: 2 };
+  hist.sort((a, b) => (a.sortDate > b.sortDate ? -1 : a.sortDate < b.sortDate ? 1 : rank[a.type] - rank[b.type]));
+  items.push(...hist);
 
   // 一个信号日只可能对应一笔操作（一天最多走一档）。真出现两笔就是账本坏了。
   // 而它们共用同一个确认标记 —— 排成两条的话，点一条会连带把另一条收掉，
   // 在你眼里就是「我没点的那条自己消失了」。所以合并成一条，另行报警。
+  // 资金上的申赎各有自己的确认标记（种类 + 日期），不参与这条检查。
   const seen = new Set(), dup = [], uniq = [];
   for (const it of items) {
+    if (it.type !== 'trade') { uniq.push(it); continue; }
     if (seen.has(it.signalDate)) { dup.push(it.signalDate); continue; }
     seen.add(it.signalDate); uniq.push(it);
   }
-  const todo = uniq.filter((it) => !acked(it.signalDate));
+  const todo = uniq.filter((it) => !acked(it.key));
 
   // 先全部建好，最后一次性换上去。
   // 原先是先清空、再边建边挂 —— 中途任何一笔抛错，整片横幅就此消失，
@@ -993,7 +1008,7 @@ function renderBanner(behind) {
   const built = [];
   for (const it of todo.slice(0, MAX_BANNERS)) {
     try { built.push(oneBanner(it, M)); }
-    catch (e) { pushNotice(built, '这笔读不出来', it.signalDate, e); }
+    catch (e) { pushNotice(built, '这笔读不出来', it.signalDate || it.day || it.date, e); }
   }
   const rest = todo.slice(MAX_BANNERS);
   if (rest.length) {
@@ -1035,8 +1050,10 @@ function pushNotice(built, title, what, err) {
   built.push(bn);
 }
 
-/** 一条横幅 */
+/** 一条横幅：资金上的申赎、补买各有各的画法 */
 function oneBanner(item, M) {
+  if (item.type === 'cash') return oneCashBanner(item);
+  if (item.type === 'catchup') return oneCatchupBanner(item);
   const st = S.state;
   const buy = item.tierTo > item.tierFrom;
   const share = buy ? item.tierTo : item.tierFrom;
@@ -1104,12 +1121,23 @@ function oneBanner(item, M) {
       + `点「知道了」只收起今天，到了 ${bex.L.md} 它会再出现提醒你。`
       + `<br><b>那天晚上 21:00 系统会按规则把这笔写进不可更改的记录 —— 不管你有没有真的下单</b>，所以别漏做。`;
   }
-  // 还没执行的那条挂单：顺带说清楚钱从哪来、多出来的钱去哪
+  // 还没执行的那条挂单：资金上的申赎各有一条横幅（排在这条下面），这里只点一句；
+  // 缓冲垫不够付这笔时，直接在这条里说清楚差多少、要等哪天
   let cashTxt = '';
   if (!item.done && M) {
     const cp = cashNow();
-    const L = cp && !cp.error ? cashPlanLines(cp, bjToday()) : [];
-    if (L.length) cashTxt = `<b>资金：</b>${L.join('；')}<br>`;
+    if (cp && !cp.error) {
+      const s = cp.next.short;
+      if (s) {
+        cashTxt += `<b>⚠️ 缓冲垫只有约 ${money(s.have)} 元，这笔差约 ${money(s.gap)} 元，`
+          + (s.until ? `要等 ${dl(s.until)}赎回款到账后再补买</b>。<br>` : '要等赎回款到账后再补买</b>（到账日期交易日历暂时给不出）。<br>');
+      }
+      const acts = cp.next.actions.filter((a) => (a.kind === 'REDEEM' || a.kind === 'SUBSCRIBE') && a.day);
+      if (acts.length) {
+        cashTxt += `<b>资金：</b>还要${acts.map((a) => `${a.kind === 'REDEEM' ? '赎回' : '申购'}交银稳利约 ${money(a.amount)} 元（${md(a.day)} 15:00 前）`).join('、')}，`
+          + '各有一条蓝色横幅。<br>';
+      }
+    }
   }
   sub.innerHTML = (estTxt ? estTxt + '，下单以下方计算器为准。<br>' : '') + realNote + cashTxt + body;
 
@@ -1125,6 +1153,121 @@ function oneBanner(item, M) {
   return bn;
 }
 
+/**
+ * 资金上的买卖（赎回 / 申购交银稳利、补买红利 ETF）也要像买卖红利一样排横幅、撑到你确认为止。
+ *   将要做的：cashPlan 的 next.actions（赎回 / 申购 / 份额满 7 天后再赎回）
+ *   已按规则当作做了的：重放里的逐笔记录（events），以及缓冲垫不够时要补买的那几笔（shorts）
+ * 确认标记用「种类 + 日期」：将要做的那条和事后追问的那条是同一笔，点过一次就都收起；
+ * 也和买卖红利的标记（信号日）互不相干 —— 点一条不会连带收掉另一条。
+ */
+function cashItems() {
+  const cp = cashNow(true);
+  if (!cp || cp.error) return [];
+  const out = [];
+  const asof = S.state.asof;
+  for (const a of cp.next.actions) {
+    if (!['REDEEM', 'SUBSCRIBE', 'REDEEM_LATER'].includes(a.kind) || !a.day) continue;
+    const kind = a.kind === 'SUBSCRIBE' ? 'SUBSCRIBE' : 'REDEEM';
+    out.push({ type: 'cash', key: `cash:${kind}:${a.day}`, kind, day: a.day, amount: a.amount,
+      arrive: a.arrive || null, later: a.kind === 'REDEEM_LATER', done: false, sortDate: a.day });
+  }
+  for (const e of cp.events || []) {
+    if ((e.kind !== 'REDEEM' && e.kind !== 'SUBSCRIBE') || e.d > asof) continue;
+    out.push({ type: 'cash', key: `cash:${e.kind}:${e.d}`, kind: e.kind, day: e.d, amount: e.amount,
+      arrive: e.arrive || null, done: true, sortDate: e.d });
+  }
+  for (const x of cp.shorts || []) {
+    out.push({ type: 'catchup', key: `cash:CATCHUP:${x.date}`, date: x.date, gap: x.gap, until: x.until, done: true, sortDate: x.date });
+  }
+  return out;
+}
+
+/** 横幅骨架：底色、上中下三行、一个按钮 */
+function bannerShell(cls, kickTxt, textTxt, subHtml, btnTxt, onClick) {
+  const bn = document.createElement('div');
+  bn.className = cls;
+  const bm = document.createElement('div');
+  bm.className = 'bm';
+  const kick = document.createElement('p'); kick.className = 'bk';
+  const text = document.createElement('p'); text.className = 'bt';
+  const sub = document.createElement('p'); sub.className = 'bs';
+  kick.textContent = kickTxt;
+  text.textContent = textTxt;
+  sub.innerHTML = subHtml;
+  bm.appendChild(kick); bm.appendChild(text); bm.appendChild(sub);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = btnTxt;
+  btn.onclick = onClick;
+  bn.appendChild(bm); bn.appendChild(btn);
+  return bn;
+}
+
+/**
+ * 一条资金横幅（赎回 / 申购交银稳利）。时点按基金 15:00 截止来分：
+ *   那天还没到 → 按钮「知道了」，只收起今天，到了那天它会再出现
+ *   就是今天   → 按钮「已完成」；过了 15:00 改说已截止、写出哪天补
+ *   已经过去   → 系统已按规则当作你做了，追问「你做了吗？」，按钮「我做了」
+ */
+function oneCashBanner(item) {
+  const today = bjToday();
+  const verb = item.kind === 'SUBSCRIBE' ? '申购' : '赎回';
+  const amt = `${verb}交银稳利约 ${money(item.amount)} 元`;
+  const why = item.kind === 'SUBSCRIBE'
+    ? '把缓冲垫超出目标的部分转进交银稳利'
+    : `只赎持有满 7 天的份额${item.arrive ? `，预计 ${dl(item.arrive)}到账` : ''}`;
+  // 漏做了最早哪天能补：今天是交易日、还没到 15:00 就是今天，否则下一个交易日
+  const nx = (S.cal || []).includes(today) && bjHour() < 15 && today > item.day ? today
+    : nextTradingDay(S.cal, today >= item.day ? today : item.day);
+  const makeUp = nx ? `请在 ${dl(nx)}15:00 前补上` : '请在下一个交易日 15:00 前补上（交易日历取不到，给不出具体日期）';
+  let kick, text, body, canDo;
+  if (item.done) {
+    canDo = true;
+    kick = `资金 · ${dl(item.day)}已按规则推算`;
+    text = `${amt}　你做了吗？`;
+    body = `系统看不到你真实的申赎，已经按规则当作你在 ${md(item.day)} ${verb}了，「闲钱放哪」的金额也是这么算的。`
+      + '做了就点「我做了」，这条会一直挂着直到你点它；'
+      + `没做的话，${makeUp}${verb === '赎回' ? '，到账日也会跟着往后推' : ''}。`;
+  } else if (item.day > today) {
+    canDo = false;
+    kick = `资金 · ${dl(item.day)}15:00 前`;
+    text = amt;
+    body = `${why}。<br>现在还做不了 —— 要等到 <b>${dl(item.day)}</b>15:00 前`
+      + (item.later ? '（那天这批份额才持有满 7 天，提前赎回要收 1.5% 赎回费）' : '') + '。'
+      + `点「知道了」只收起今天，到了 ${md(item.day)} 它会再出现提醒你。`;
+  } else if (item.day === today && bjHour() >= 15) {
+    canDo = true;
+    kick = `资金 · ${dl(item.day)}15:00 已过`;
+    text = amt;
+    body = `${why}。<br>基金申赎 15:00 截止。做了就点「已完成」；没做的话，${makeUp}`
+      + `${verb === '赎回' ? '，到账日也会跟着往后推' : ''}。`;
+  } else {
+    canDo = true;
+    kick = item.day < today ? `资金 · ${dl(item.day)}15:00 前 · 已过期，请尽快补做` : `资金 · ${dl(item.day)}15:00 前`;
+    text = amt;
+    body = `${why}。<br>做完点「已完成」，这条才收起；不点它会一直挂着。`
+      + `<b>系统会在 ${md(item.day)}当晚 21:00 按规则当作你已经${verb}了，「闲钱放哪」的金额也照此往下算 —— 不管你有没有真的操作</b>，所以别漏做。`;
+  }
+  return bannerShell('bn cash', kick, text, body, item.done ? '我做了' : canDo ? '已完成' : '知道了', () => {
+    LS.set(`ack.${item.key}`, canDo ? true : bjToday());
+    renderInputDependent();
+  });
+}
+
+/** 缓冲垫不够、那笔红利没买够：赎回款到账后要补买 */
+function oneCatchupBanner(item) {
+  const today = bjToday();
+  const when = item.until
+    ? (item.until > today ? `${dl(item.until)}赎回款到账后` : `赎回款已在 ${dl(item.until)}到账，请尽快`)
+    : '赎回款到账后';
+  return bannerShell('bn catchup', `补买 · ${dl(item.date)}那笔买入时缓冲垫不够`,
+    `补买红利 ETF 约 ${money(item.gap)} 元　你做了吗？`,
+    `${when}补买这部分。账本已按 ${md(item.date)} 的收盘价买足记账，`
+      + '你实盘少买了多少，就要补多少 —— 到下方「每份该是多少钱」填入真实持仓，它会按补买时的价格算出准数。'
+      + '<br>补完点「我做了」，这条会一直挂着直到你点它。',
+    '我做了', () => { LS.set(`ack.${item.key}`, true); renderInputDependent(); });
+}
+
 /** 攒太多时的汇总条 —— 可以一次确认掉，但绝不替你悄悄收起 */
 function rollupBanner(rest) {
   const bn = document.createElement('div');
@@ -1134,10 +1277,13 @@ function rollupBanner(rest) {
   const kick = document.createElement('p'); kick.className = 'bk';
   const text = document.createElement('p'); text.className = 'bt';
   const sub = document.createElement('p'); sub.className = 'bs';
-  const days = rest.map((r) => dayLabel(r.date || r.signalDate, bjToday()).md).join('、');
+  const what = (r) => (r.type === 'cash' ? `${dayLabel(r.day, bjToday()).md}${r.kind === 'SUBSCRIBE' ? '申购' : '赎回'}交银稳利`
+    : r.type === 'catchup' ? `${dayLabel(r.date, bjToday()).md}补买红利`
+      : `${dayLabel(r.date || r.signalDate, bjToday()).md}${r.tierTo > r.tierFrom ? '买入' : '卖出'}红利`);
+  const days = rest.map(what).join('、');
   kick.textContent = '更早的操作';
   text.textContent = `还有 ${rest.length} 笔没确认`;
-  sub.innerHTML = `分别是 ${days}。这些都已按规则写进不可更改的记录。`
+  sub.innerHTML = `分别是 ${days}。这些都已按规则写进不可更改的记录或资金推算。`
     + '<br>都做过了就点「这些我都做了」一次收起；'
     + '拿不准的话，到下方「交易记录（不可更改）」逐笔对一遍你的券商流水。';
   bm.appendChild(kick); bm.appendChild(text); bm.appendChild(sub);
@@ -1145,7 +1291,7 @@ function rollupBanner(rest) {
   btn.type = 'button';
   btn.textContent = '这些我都做了';
   btn.onclick = () => {
-    rest.forEach((r) => LS.set(`ack.${r.signalDate}`, true));
+    rest.forEach((r) => LS.set(`ack.${r.key || r.signalDate}`, true));
     renderInputDependent();
   };
   bn.appendChild(bm); bn.appendChild(btn);

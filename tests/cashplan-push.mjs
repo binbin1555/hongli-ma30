@@ -41,6 +41,7 @@ const EXEC = cal.tradingDays.find((d) => d > TODAY);                       // �
 const lastRows = series0.rows.slice(-29).map((r) => r.c);
 const MA_TODAY_LOW = (lastRows.reduce((a, b) => a + b, 0) + 0) / 30;       // 粗估，下面让今天收盘远低于它
 const CLOSE = +(LAST.c * 0.95).toFixed(2);                                 // 跌 5%：一定跌破 MA30×0.97
+let closeToday = CLOSE;                                                     // 场景里可以改成平盘（不出信号）
 const NAV = +(LAST.b * 1.0001).toFixed(4);
 const ETFP = 1.3;
 const ymd8 = (d) => d.replace(/-/g, '');
@@ -65,7 +66,7 @@ globalThis.fetch = async (input, opts = {}) => {
   if (url.startsWith('https://www.csindex.com.cn/')) {
     const q = new URL(url).searchParams;
     const a = q.get('startDate'), b = q.get('endDate');
-    const rows = [...series0.rows.map((r) => ({ d: r.d, c: r.c })), { d: TODAY, c: CLOSE }];
+    const rows = [...series0.rows.map((r) => ({ d: r.d, c: r.c })), { d: TODAY, c: closeToday }];
     const data = rows.filter((r) => ymd8(r.d) >= a && ymd8(r.d) <= b).map((r, k, arr) => ({
       tradeDate: ymd8(r.d), close: r.c, changePct: k ? +((r.c / arr[k - 1].c - 1) * 100).toFixed(2) : 0,
     }));
@@ -106,7 +107,7 @@ globalThis.fetch = async (input, opts = {}) => {
 };
 
 const { default: worker } = await import('../worker/src/index.js');
-const PRINCIPAL = 1860000;
+const PRINCIPAL = 1000000;
 const envOf = (extra = {}) => ({
   RUN_TOKEN: 'T', GITHUB_TOKEN: 'x', GH_OWNER: 'o', GH_REPO: 'r', GH_BRANCH: BR,
   BARK_KEY: 'k', PRINCIPAL: String(PRINCIPAL), BARK_TIMEOUT_MS: '200', ...extra,
@@ -231,6 +232,74 @@ console.log('\n⑤ 推送没送达、22:30 补发：资金安排照原样');
   if (first && again && block(first.body) && block(again.body) === block(first.body)) ok('补发的资金安排和原推送一字不差');
   else bad(`补发不一致：\n原：${first && block(first.body)}\n补：${again && block(again.body)}`);
 }
+
+/*
+ * 申赎本身就是一笔买卖：没有买卖红利的挂单、只有资金上的事要做时，
+ * 21:00 那条不能再是「无操作」的静默推送，14:30 也要提醒 —— 基金 15:00 截止。
+ */
+console.log(`\n⑥ ${TODAY} 没出信号、没有挂单，但 ${EXEC} 起用缓冲垫：21:00 推送标题直接说赎回`);
+{
+  const cfg = { schema: 1, startDate: EXEC, bufferRatio: 0.5, arriveDays: 2, minHoldDays: 7, driftPct: 0.01 };
+  closeToday = +(LAST.c * 1.001).toFixed(2);   // 小涨一点：平盘会被当成重复抄来的假数据
+  seed(cfg);
+  at(`${TODAY} 21:00:30`);
+  const r = await call('/run', envOf());
+  const { cp, lines, st } = expected(cfg);
+  const red = cp.next.actions.find((a) => a.kind === 'REDEEM');
+  const b = barks[0];
+  const md = dayLabel(EXEC, TODAY).md;
+  if (st.pending) bad(`剧本应当没有挂单：${JSON.stringify(st.pending)}`);
+  else if (!red || red.day !== EXEC) bad(`${EXEC} 应当要赎回：${JSON.stringify(cp.next.actions)}`);
+  else if (!b) bad('没有发出推送');
+  else {
+    const amt = Math.round(red.amount).toLocaleString('en-US');
+    if (b.title === `💰 ${md} 15:00 前赎回交银稳利约 ${amt} 元`) ok(`标题：${b.title}`); else bad(`标题应直接说赎回：${b.title}`);
+    if (b.level === 'timeSensitive' && b.group === '红利MA30·操作') ok('和买卖红利一样用 timeSensitive、归在「操作」组'); else bad(`级别不对：${b.level} / ${b.group}`);
+    const want = `资金安排：\n${lines.map((x) => `· ${x}`).join('\n')}`;
+    if (b.body.includes(want) && b.body.includes('不用买卖红利 ETF') && !b.body.includes('无需操作')) ok('正文写「不用买卖红利 ETF」+ 资金安排，不说「无需操作」');
+    else bad(`正文不对：\n${b.body}`);
+  }
+  noMoney(r.text, cp, 'HTTP 返回');
+}
+
+console.log(`\n⑦ ${EXEC} 14:30：没有挂单，只要赎回交银 —— 盘中照样提醒`);
+{
+  barks = [];
+  at(`${EXEC} 14:30:00`);
+  const r = await call('/remind', envOf());
+  const cfg = repoJSON('data/cashplan.json');
+  const { cp, lines } = expected(cfg, EXEC);
+  const red = cp.next.actions.find((a) => a.kind === 'REDEEM');
+  const b = barks[0];
+  const md = dayLabel(EXEC, EXEC).md;
+  const body = JSON.parse(r.text);
+  if (b && red && b.title === `⏰ ${md} 15:00 前赎回交银稳利约 ${Math.round(red.amount).toLocaleString('en-US')} 元` && b.level === 'timeSensitive') ok(`提醒标题：${b.title}`);
+  else bad(`应当提醒赎回：${JSON.stringify(b)} / ${r.text}`);
+  if (b && b.body.includes(`资金安排：\n${lines.map((x) => `· ${x}`).join('\n')}`) && b.body.includes('不用买卖红利 ETF')) ok('提醒正文带着和晚上同一套资金安排');
+  else bad(`提醒正文不对：${b && b.body}`);
+  if (body.reminded && body.cashOnly) ok('HTTP 返回：reminded、cashOnly'); else bad(`HTTP 返回不对：${r.text}`);
+  noMoney(r.text, cp, '盘中提醒的 HTTP 返回');
+}
+
+console.log(`\n⑧ 缓冲垫早就备好、没出信号：21:00 照旧「无操作」静默推送，14:30 不打扰`);
+{
+  const cfg = { schema: 1, startDate: base.launchDate, bufferRatio: 0.5, arriveDays: 2, minHoldDays: 7, driftPct: 0.01 };
+  closeToday = +(LAST.c * 1.001).toFixed(2);   // 小涨一点：平盘会被当成重复抄来的假数据
+  seed(cfg);
+  at(`${TODAY} 21:00:30`);
+  await call('/run', envOf());
+  const { cp, st } = expected(cfg);
+  const b = barks[0];
+  if (st.pending || cp.next.actions.length) bad(`剧本应当什么都不用做：${JSON.stringify({ p: st.pending, a: cp.next.actions })}`);
+  else if (b && /无操作/.test(b.title) && b.level === 'passive') ok(`标题「${b.title}」，passive`);
+  else bad(`没事的日子推送不对：${JSON.stringify(b)}`);
+  barks = [];
+  at(`${EXEC} 14:30:00`);
+  const r = await call('/remind', envOf());
+  if (!barks.length && /静默/.test(JSON.parse(r.text).skipped || '')) ok(`14:30 静默：${JSON.parse(r.text).skipped}`);
+  else bad(`不该提醒：${r.text} / ${JSON.stringify(barks)}`);
+}
+closeToday = CLOSE;
 
 console.log(fails ? `\n✗ ${fails} 项不通过` : '\n✓ 全部通过');
 process.exitCode = fails ? 1 : 0;

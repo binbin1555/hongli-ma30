@@ -116,6 +116,10 @@ for (const [name, over] of SCEN) {
   const btxt = bs.map((b) => b.text).join(' ∥ ');
   const bsub = bs.map((b) => b.sub).join(' ∥ ');
   const behind = H.behindState();
+  // 时点、方向只和买卖红利那几条比；资金上的申赎横幅说的是另一件事（措辞照样全部受检）
+  const tb = bs.filter((b) => !b.cash && !b.catchup);
+  const tkick = tb.map((b) => b.kick).join(' ∥ ');
+  const tbtxt = tb.map((b) => b.text).join(' ∥ ');
 
   console.log(`【${name}】`);
   console.log(`  卡片  ${line}`);
@@ -131,14 +135,14 @@ for (const [name, over] of SCEN) {
   if (/收盘（执行日已过）/.test(all)) bad(`${name}：「执行日已过」插在句子中间，读不通`);
   // 卡片在讲挂单时，横幅不能对同一笔挂单说另一个时点。
   // （卡片在讲「补做」时两者本来就说的不是一件事，不比。）
-  if (on && !behind) {
-    if (line.startsWith('今天收盘前') !== kick.includes('今天收盘前')) {
-      bad(`${name}：卡片「${line.slice(0, 10)}…」与横幅「${kick}」时点对不上`);
+  if (tb.length && !behind) {
+    if (line.startsWith('今天收盘前') !== tkick.includes('今天收盘前')) {
+      bad(`${name}：卡片「${line.slice(0, 10)}…」与横幅「${tkick}」时点对不上`);
     }
     // 横幅在「已记账、等你确认」状态下讲的是**过去那一笔**，
     // 而卡片讲的是**下一步**，两者方向本来就可能不同，不该比。
-    if (!/你做了吗/.test(btxt) && line.includes('买入') !== btxt.includes('买入')) {
-      bad(`${name}：卡片说${line.includes('买入') ? '买入' : '卖出'}，横幅说${btxt.includes('买入') ? '买入' : '卖出'}`);
+    if (!/你做了吗/.test(tbtxt) && line.includes('买入') !== tbtxt.includes('买入')) {
+      bad(`${name}：卡片说${line.includes('买入') ? '买入' : '卖出'}，横幅说${tbtxt.includes('买入') ? '买入' : '卖出'}`);
     }
   }
   // 说了「N 笔」就得真有 N 笔对得上的记录
