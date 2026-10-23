@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "note": "闲钱分两处放：缓冲垫（当天就能用来买 ETF 的现金类）+ 交银稳利。这里只存规则参数和起用日期，不存任何金额；金额由本金和账本推算。",
+  "startDate": "2026-10-23",
+  "bufferRatio": 0.5,
+  "arriveDays": 2,
+  "minHoldDays": 7,
+  "driftPct": 0.01
+}

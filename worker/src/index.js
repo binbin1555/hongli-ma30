@@ -12,7 +12,7 @@
 
 import {
   ma, signal, nextTier, replay, plannedOrder, shares, triggers, auditLedger, beijingDate, nextTradingDay, validateState,
-  dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct,
+  dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct, cashPlan, cashPlanLines,
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
 
@@ -20,7 +20,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '44906d5d30';
+const BUILD = '8eb3c86abe';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -492,6 +492,42 @@ async function execDayAfter(G, calDays, today) {
 }
 
 /**
+ * 闲钱分两处放（缓冲垫 + 交银稳利）的推算，给推送用。
+ *
+ * 规则参数和起用日在 data/cashplan.json（不含金额），本金在 Worker 密钥里。
+ * 任何一样缺了就返回 null —— 推送照旧，只是不带资金安排。
+ * 推算本身出错时返回 { error }，推送里注明一句，绝不让它拖垮记账和推送。
+ */
+async function cashPlanFor(G, env, { rows, entries, launchDate, today, pending, calDays }) {
+  const principal = Number(env.PRINCIPAL || 0);
+  if (!(principal > 0)) return null;
+  try {
+    const cfg = await G.readJSON('data/cashplan.json', null);
+    if (!cfg) return null;
+    let days = [...(calDays || [])];
+    // 年底时到账日会落到次年，把次年日历也带上（平时它必然 404，不白发请求）
+    if (+today.slice(5, 7) >= 11) {
+      const nx = await G.readJSON(`calendar/${+today.slice(0, 4) + 1}.json`, null);
+      if (nx) days = days.concat(nx.tradingDays);
+    }
+    return cashPlan({
+      rows: rows.filter((r) => r.d <= today), entries, principal, launchDate,
+      tradingDays: days, cfg, pending,
+    });
+  } catch (e) {
+    return { error: String(e && e.message || e) };
+  }
+}
+
+/** 推送里的「资金安排」一段。没有要做的事就是空串 */
+export function cashBlock(cash, today) {
+  if (!cash) return '';
+  if (cash.error) return `\n⚠️ 资金安排这次没算出来（${cash.error.slice(0, 60)}），不影响上面的操作，请到面板核对`;
+  const lines = cashPlanLines(cash, today);
+  return lines.length ? `\n资金安排：\n${lines.map((x) => `· ${x}`).join('\n')}` : '';
+}
+
+/**
  * 补发推送：今天已经跑过、账本已经提交，但推送没有送达记录。
  *
  * 2026-09-18 那次，账本在 21:00:43 正常提交，发往 Bark 的请求却一直没回音，
@@ -536,10 +572,16 @@ async function resendPush(env, G, state, today) {
     plan.shares = etf && etf.d === today ? shares(plan.amount, etf.c) : null;
   }
 
+  const seriesAll = await G.readJSON('data/series.json');
+  const cash = await cashPlanFor(G, env, {
+    rows: seriesAll.rows, entries: ledger.entries, launchDate: state.launchDate, today, pending,
+    calDays: cal ? cal.tradingDays : [],
+  });
+
   const why = prev && prev.reason ? `（${prev.reason}）` : '';
   lastPush = null;
   await pushDaily(env, {
-    today, newState: state, pending, execDay, plan, etf,
+    today, newState: state, pending, execDay, plan, etf, cash,
     executed: audit.executed || null,
     checks: audit.checks,
     late: !!(audit.executed && audit.executed.late),
@@ -779,6 +821,11 @@ async function runDaily(env, { force = false } = {}) {
     plan.shares = etf && etf.d === today ? shares(plan.amount, etf.c) : null;
   }
 
+  // ---- 闲钱放哪（缓冲垫 + 交银稳利）：只进推送，不进仓库、不进 HTTP 返回 ----
+  const cash = await cashPlanFor(G, env, {
+    rows, entries: ledger.entries, launchDate: state.launchDate, today, pending, calDays: cal.tradingDays,
+  });
+
   // ---- 组装新 state ----
   const newState = {
     ...state,
@@ -845,7 +892,7 @@ async function runDaily(env, { force = false } = {}) {
   const sha = await timed('提交', G.commit(files, `chore(daily): ${msg}`));
 
   // ---- 推送 ----
-  await timed('推送', pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late }));
+  await timed('推送', pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late, cash }));
 
   // 推送结果补记一次：失败时面板上要看得见，否则你不会知道自己漏收了通知。
   // 这次补记失败也不影响主流程 —— 账本已经提交好了。
@@ -874,6 +921,8 @@ async function runDaily(env, { force = false } = {}) {
     backfillErr,
     elapsedMs: Date.now() - t0,
     planned: plan ? { side: plan.side, targetWeight: plan.targetWeight, hasShares: plan.shares != null } : null,
+    // 只说算没算出来，不带金额
+    cashPlan: cash ? (cash.error ? 'error' : 'ok') : 'off',
   };
 }
 
@@ -899,7 +948,7 @@ export function execWording(today, execDay) {
   };
 }
 
-export async function pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late, resent = null }) {
+export async function pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late, resent = null, cash = null }) {
   const i = newState.index;
   const chg = i.changePct != null ? `${i.changePct > 0 ? '+' : ''}${i.changePct}%` : '';
   // 检查名现在是肯定句（「ETF 报价和指数是同一天的」），光列名字会被读成
@@ -939,6 +988,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       body: `仓位 ${posPct(pending.tierFrom)} → ${posPct(pending.tierTo)}${est}`
         + `\n${w.long}`
         + `\n${CLOSE_TIP}`
+        + cashBlock(cash, today)
         + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${doneLine}${warn}${missed}${resentLine}`,
       level: 'timeSensitive',
       group: '红利MA30·操作',
@@ -969,12 +1019,17 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
     const title = executed
       ? `✅ ${td.md}已成交　仓位 ${posPct(newState.tier)}`
       : `红利MA30 · ${td.md}无操作　仓位 ${posPct(newState.tier)}`;
+    // 那一天要是有资金上的事（比如卖出后申购交银），就不能再说「无需操作」——
+    // 只是不用买卖红利 ETF。
+    const cashTxt = cashBlock(cash, today);
+    const cashDue = !!(cash && !cash.error && cash.next && cash.next.actions.some((a) => a.day === execDay));
+    const idle = cashDue ? '不用买卖红利 ETF' : '无需操作';
     const nextLine = nd
-      ? `\n${nd.label}无需操作`
-      : `\n${NO_EXEC_DATE}无需操作`;
+      ? `\n${nd.label}${idle}`
+      : `\n${NO_EXEC_DATE}${idle}`;
     await bark(env, {
       title,
-      body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${doneLine}${warn}${missed}${resentLine}`,
+      body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${cashTxt}${doneLine}${warn}${missed}${resentLine}`,
       level: 'passive',
     });
   }
@@ -1038,11 +1093,23 @@ export async function remind(env) {
   const isBuy = side === 'BUY';
   const share = isBuy ? p.tierTo : p.tierFrom;
   const L = dayLabel(today, today);
+  // 买入日 15:00 前还要赎回交银稳利 —— 14:30 这条是当天最后一次提醒
+  let cashTxt = '';
+  if (principal > 0) {
+    const series = await G.readJSON('data/series.json');
+    const ledger = await G.readJSON('data/ledger.json');
+    const cash = await cashPlanFor(G, env, {
+      rows: series.rows, entries: ledger.entries, launchDate: state.launchDate,
+      today: state.asof, pending: p, calDays: days,
+    });
+    cashTxt = cashBlock(cash, today);
+  }
   await bark(env, {
     title: `⏰ ${L.md}收盘前${isBuy ? '买入' : '卖出'}第 ${share} 份`,
     body: `仓位 ${posPct(p.tierFrom)} → ${posPct(p.tierTo)}${est}`
       + `\n信号出在 ${p.signalDate}，执行日就是 ${today}（${L.wd}）。`
-      + `\n${CLOSE_TIP}`,
+      + `\n${CLOSE_TIP}`
+      + cashTxt,
     level: 'timeSensitive',
     group: '红利MA30·操作',
   });

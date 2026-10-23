@@ -177,6 +177,13 @@ tr:last-child td{border-bottom:none}
 .setbtn.done{background:var(--ac);border-color:var(--ac);color:#fff}
 .setbtn:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 
+/* 闲钱放哪 */
+.cashrows>div.tot{border-top:1px solid var(--ln);padding-top:6px;margin-top:2px}
+.cashrows b{text-align:right}
+.cashrows small{display:block;color:var(--dm);font-size:11.5px;text-align:right;font-family:inherit;font-weight:400}
+.cashnext{margin:14px 0 0;font-size:13px;line-height:1.65}
+.cashnext p{margin:0 0 4px}
+.cashnext ul{margin:4px 0 0;padding-left:18px}
 @media (max-width:520px){.card,#nextCard{padding:17px 16px}.big{font-size:27px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -215,6 +222,14 @@ tr:last-child td{border-bottom:none}
       <p class="big"><span id="tierNum">–</span></p>
       <div class="pips" id="pips"></div>
     </div>
+  </div>
+
+  <!-- 闲钱分两处放：缓冲垫（当天可用）+ 交银稳利。金额按本金和账本推算，见 shared/strategy.js 的 cashPlan -->
+  <div class="card" id="cashCard" hidden>
+    <p class="k">闲钱放哪 · 缓冲垫 + 交银稳利</p>
+    <div class="pnlrows cashrows" id="cashRows"></div>
+    <div class="cashnext" id="cashNext"></div>
+    <p class="note" id="cashNote"></p>
   </div>
 
   <div class="card">
@@ -312,9 +327,10 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = 'daab999c0d';
+const CORE_VERSION = '5d01605caf';
 const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries, validateState,
-        nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct, WEIGHTS, COMMISSION }
+        nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct, WEIGHTS, COMMISSION,
+        cashPlan, cashPlanLines }
   = await import(`./shared/strategy.js?v=${CORE_VERSION}`);
 
 const $ = (id) => document.getElementById(id);
@@ -413,7 +429,9 @@ async function load() {
       + `若持续出现，请检查 Worker 日志。</p></div>`;
     return;
   }
-  S = { state, ledger, series, cal: [] };
+  // 闲钱规则（缓冲垫比例、起用日）。404 就当没开这个功能，页面其余部分照旧
+  const cashcfg = await fetch('./data/cashplan.json' + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  S = { state, ledger, series, cal: [], cashcfg };
   // 交易日历用来把「下一个交易日」算成具体日期（周五出信号要到下周一）
   // 次年日历只在临近年底才取：平时它必然 404，白发一次请求还在控制台留红字
   const nearYearEnd = +state.asof.slice(5, 7) >= 11;
@@ -441,6 +459,89 @@ function accountMoney() {
   // 实测运行 2 天、累计 +0.5%，外推出来是「年化 +148%」，看一眼就会对策略产生错觉。
   const annual = days >= 90 ? (Math.pow(ratio, 365.25 / days) - 1) * 100 : null;
   return { principal, ...d, days, annual, cumPct: (ratio - 1) * 100 };
+}
+
+/**
+ * 闲钱分两处放的推算。和推送同一个函数（shared/strategy.js 的 cashPlan），
+ * 本金没设或没有 cashplan.json 时返回 null；推算出错返回 { error }，绝不让它拖垮整页。
+ */
+function cashNow() {
+  const principal = num(LS.get('principal', 0));
+  if (!principal || !S.cashcfg) return null;
+  try {
+    return cashPlan({
+      rows: S.series.rows.filter((r) => r.d <= S.state.asof), entries: S.ledger.entries, principal,
+      launchDate: S.state.launchDate, tradingDays: S.cal, cfg: S.cashcfg, pending: S.state.pending,
+    });
+  } catch (e) {
+    return { error: String((e && e.message) || e) };
+  }
+}
+
+/**
+ * 几个金额各自取整后，加起来要正好等于取整后的总数。
+ * 各自四舍五入再相加，常常会和上方显示的总资产差 1 元 —— 一个对不上的数会让人怀疑整张表。
+ * 差额补在最大的那一项上（最大余数法的简化版，差额最多一两元）。
+ */
+function roundParts(vals, total) {
+  const r = vals.map((v) => Math.round(v));
+  const diff = Math.round(total) - r.reduce((a, b) => a + b, 0);
+  if (diff) { let k = 0; r.forEach((v, j) => { if (v > r[k]) k = j; }); r[k] += diff; }
+  return r;
+}
+
+/** 「闲钱放哪」卡片 */
+function renderCash(M) {
+  const card = $('cashCard');
+  if (!S.cashcfg) { card.hidden = true; return; }
+  card.hidden = false;
+  const pctB = `${Math.round((S.cashcfg.bufferRatio ?? 0.5) * 100)}%`;
+  const rows = $('cashRows'), next = $('cashNext'), note = $('cashNote');
+  note.innerHTML = `没买红利的钱分两处放：<b>缓冲垫</b>放在当天就能用来买 ETF 的现金类里（证券账户里的现金、现金管理、场内货币类），`
+    + `目标是总资产的 ${pctB}（现金不到 ${pctB} 时就全部当缓冲垫）；其余放<b>交银稳利</b>。`
+    + `买入执行日 15:00 前赎回交银稳利补回缓冲垫，买入的钱从缓冲垫出；卖出的钱先进缓冲垫，超出的部分在卖出后的第一个交易日申购交银稳利（具体日期写在上面的资金操作里）。`
+    + `<br>金额和「账户盈亏」一样按本金和账本推算，四项相加等于上方总资产。`
+    + `为了这条等式成立，缓冲垫也按交银稳利的净值计息 —— 实际缓冲垫的收益会略低一点。`;
+  const cp = cashNow();
+  if (!M || !cp) {
+    rows.innerHTML = '<div><span>各项金额</span><b>设本金后显示</b></div>';
+    next.innerHTML = '';
+    return;
+  }
+  if (cp.error) {
+    rows.innerHTML = `<div><span>各项金额</span><b>算不出来</b></div>`;
+    next.innerHTML = `<p class="errbox">闲钱推算出错：${cp.error.slice(0, 120)}。上面的操作提醒不受影响。</p>`;
+    return;
+  }
+  const today = bjToday();
+  const tr = cp.transit.map((t) => ({ ...t, r: Math.round(t.amount) }));
+  const trR = tr.reduce((a, t) => a + t.r, 0);
+  const [rV, rBuf, rJ] = (() => {
+    const x = roundParts([cp.V, cp.buffer, trR, cp.jiaoyin], M.total);
+    return [x[0], x[1], x[3]];
+  })();
+  const sub = (t) => `<small>${t}</small>`;
+  const trTxt = tr.length
+    ? tr.map((t) => `${money(t.r)} 元 ${t.arrive ? `${dl(t.arrive)}到账` : '到账日期交易日历暂时给不出'}`).join('；')
+    : '';
+  const yg = cp.young.filter((y) => y.amount >= 0.5);
+  const jTxt = yg.length
+    ? yg.map((y) => `其中 ${money(y.amount)} 元持有不满 7 天，${y.freeFrom ? `${dl(y.freeFrom)}起可免费赎回` : '满 7 天后可免费赎回'}`).join('；')
+    : '';
+  const bufTxt = cp.active ? `目标 ${money(cp.target)} 元（总资产的 ${pctB}，不超过全部现金）` : '缓冲垫规则还没起用';
+  rows.innerHTML =
+      `<div><span>红利 ETF</span><b>${money(rV)}</b></div>`
+    + `<div><span>缓冲垫（当天可用）</span><b>${money(rBuf)}${sub(bufTxt)}</b></div>`
+    + `<div><span>在途赎回款</span><b>${money(trR)}${trTxt ? sub(trTxt) : ''}</b></div>`
+    + `<div><span>交银稳利</span><b>${money(rJ)}${jTxt ? sub(jTxt) : ''}</b></div>`
+    + `<div class="tot"><span>合计（＝上方总资产）</span><b>${money(M.total)}</b></div>`;
+  const lines = cashPlanLines(cp, today);
+  const short = cp.shorts.filter((x) => x.date >= (S.cal.filter((d) => d <= S.state.asof).slice(-5)[0] || x.date));
+  const shortTxt = short.map((x) => `⚠️ ${dl(x.date)}那笔买入时缓冲垫差约 ${money(x.gap)} 元，`
+    + (x.until ? `要等 ${dl(x.until)}赎回款到账后补买` : '要等赎回款到账后补买')).join('<br>');
+  next.innerHTML = (cp.next.day ? `<p><b>${dl(cp.next.day)}的资金操作</b></p>` : '<p><b>接下来的资金操作</b></p>')
+    + (lines.length ? `<ul>${lines.map((x) => `<li>${x}</li>`).join('')}</ul>` : '<p>没有要做的资金操作（缓冲垫和交银稳利都在目标上）。</p>')
+    + (shortTxt ? `<p>${shortTxt}</p>` : '');
 }
 
 // 距离触发还有多远 —— 逻辑在 shared/strategy.js，受回归测试覆盖
@@ -671,6 +772,10 @@ function renderNext(behind) {
         }
       }
     }
+    // 资金安排（赎回交银 / 申购交银）——和推送同一套文字
+    const cp = M ? cashNow() : null;
+    const cashL = cp && !cp.error ? cashPlanLines(cp, bjToday()) : [];
+    if (cashL.length) realLine += `<br><b>资金：</b>${cashL.join('；')}`;
     const ex = execInfo(st.pending.signalDate);
     $('nextLine').innerHTML = ex.leadHtml
       + `<b style="color:var(--${buy ? 'up' : 'dn'})">${buy ? '买入' : '卖出'}第 ${share} 份</b>`;
@@ -894,7 +999,14 @@ function oneBanner(item, M) {
       + `点「知道了」只收起今天，到了 ${bex.L.md} 它会再出现提醒你。`
       + `<br><b>那天晚上 21:00 系统会按规则把这笔写进不可更改的记录 —— 不管你有没有真的下单</b>，所以别漏做。`;
   }
-  sub.innerHTML = (estTxt ? estTxt + '，下单以下方计算器为准。<br>' : '') + realNote + body;
+  // 还没执行的那条挂单：顺带说清楚钱从哪来、多出来的钱去哪
+  let cashTxt = '';
+  if (!item.done && M) {
+    const cp = cashNow();
+    const L = cp && !cp.error ? cashPlanLines(cp, bjToday()) : [];
+    if (L.length) cashTxt = `<b>资金：</b>${L.join('；')}<br>`;
+  }
+  sub.innerHTML = (estTxt ? estTxt + '，下单以下方计算器为准。<br>' : '') + realNote + cashTxt + body;
 
   bm.appendChild(kick); bm.appendChild(text); bm.appendChild(sub);
   const btn = document.createElement('button');
@@ -1008,6 +1120,7 @@ function render() {
   }
   renderInputDependent();
 
+  renderCash(M);
   renderLedger(M);
   buildRanges();
   renderHealth();

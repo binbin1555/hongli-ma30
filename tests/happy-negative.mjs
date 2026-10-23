@@ -84,6 +84,22 @@ const MUTANTS = [
   ['仓位又变回分数', 'core', "`${Math.round(WEIGHTS[tier] * 100)}%`", '`${tier}/5 档`', 'happy'],
   ['长说明又摊回卡片上', 'page',
     '`<details class="how"><summary>这是怎么运作的</summary><div class="body">`', '`<span>`', 'happy'],
+
+  // —— 闲钱分两处放（缓冲垫 + 交银稳利）——
+  ['到账日少算一天', 'core', 'nth(d, LAG)', 'nth(d, LAG - 1)', 'cashplan'],
+  ['赎回不看 7 天', 'core', 'if (r <= 1e-9 || !aged(l, d)) break;', 'if (r <= 1e-9) break;', 'cashplan'],
+  ['持有天数按申请日算', 'core', 'return cs && cr ? nat(cs, cr) >= HOLD : nat(l.d, r) >= HOLD + 3;', 'return nat(l.d, r) >= HOLD;', 'cashplan'],
+  ['缓冲垫比例写死四成', 'core', 'Math.max(0, Math.min(B * S, cash))', 'Math.max(0, Math.min(0.4 * S, cash))', 'cashplan'],
+  ['在途款不计息', 'core', 'for (const l of lots) l.v *= g; for (const t of transit) t.v *= g;', 'for (const l of lots) l.v *= g;', 'cashplan'],
+  ['卖出后不申购交银', 'core', 'if (buf - tgt(S2, cashOf()) > DRIFT * S2) {', 'if (false) {', 'cashplan'],
+  ['买入日不提醒赎回', 'core', "if (deficit > ((o.side === 'BUY' || nextFirst) ? 1e-9 * S : DRIFT * S)) {", 'if (false) {', 'cashplan-push'],
+  ['缓冲垫不够不报警', 'core', 'short = { day, have: bufE, need, gap: need - bufE, until };', 'short = null;', 'cashplan-push'],
+  ['推送漏掉资金安排', 'worker', '        + cashBlock(cash, today)\n', '', 'cashplan-push'],
+  ['盘中提醒漏掉资金', 'worker', '      + cashTxt,', "      + '',", 'cashplan-push'],
+  ['金额漏进HTTP返回', 'worker', "cashPlan: cash ? (cash.error ? 'error' : 'ok') : 'off',", "cashPlan: cash ? (cash.error ? 'error' : cash) : 'off',", 'cashplan-push'],
+  ['面板不补取整尾差', 'page', 'if (diff) { let k = 0;', 'if (false) { let k = 0;', 'cashplan-panel'],
+  ['在途不写到账日', 'page', "`${money(t.r)} 元 ${t.arrive ? `${dl(t.arrive)}到账` : '到账日期交易日历暂时给不出'}`", "`${money(t.r)} 元`", 'cashplan-panel'],
+  ['挂单卡片不带资金', 'page', "if (cashL.length) realLine += `<br><b>资金：</b>${cashL.join('；')}`;", '', 'cashplan-panel'],
 ];
 
 let broken = 0;
