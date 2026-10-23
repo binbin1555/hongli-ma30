@@ -177,13 +177,35 @@ tr:last-child td{border-bottom:none}
 .setbtn.done{background:var(--ac);border-color:var(--ac);color:#fff}
 .setbtn:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 
-/* 闲钱放哪 */
-.cashrows>div.tot{border-top:1px solid var(--ln);padding-top:6px;margin-top:2px}
-.cashrows b{text-align:right}
-.cashrows small{display:block;color:var(--dm);font-size:11.5px;text-align:right;font-family:inherit;font-weight:400}
-.cashnext{margin:14px 0 0;font-size:13px;line-height:1.65}
-.cashnext p{margin:0 0 4px}
-.cashnext ul{margin:4px 0 0;padding-left:18px}
+/* 闲钱放哪 —— 紧跟「下一次操作」，第一眼要看出今天动不动资金 */
+.cashcard{border-left:7px solid var(--ac);box-shadow:0 3px 18px rgba(0,0,0,.06)}
+.cashcard.act{border-left-color:var(--up)}
+.cashcard.ok{border-left-color:var(--dn)}
+.cashcard.warn{border-left-color:var(--warn)}
+.cashhead{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.cashhead .k{margin:0}
+.cstat{font-size:12.5px;font-weight:700;padding:4px 12px;border-radius:999px;white-space:nowrap;
+  background:var(--chip);color:var(--dm)}
+.cstat.act{background:var(--up);color:#fff}
+.cstat.ok{background:var(--dn);color:#fff}
+.cstat.warn{background:var(--warn);color:#fff}
+.cashtodo{font-size:clamp(18px,4.8vw,23px);font-weight:700;line-height:1.4;margin:12px 0 0;text-wrap:balance}
+.cashcard.act .cashtodo{color:var(--up)}
+.cashsub{font-size:13px;color:var(--dm);line-height:1.65;margin:8px 0 0}
+.cashsub ul{margin:2px 0 0;padding-left:18px}
+.cashsub li{margin:2px 0}
+.cashsub b{color:var(--tx)}
+.cashbar{display:flex;height:12px;border-radius:6px;overflow:hidden;margin:16px 0 0;background:var(--chip)}
+.cashbar span{display:block;height:100%}
+.cashgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(136px,1fr));gap:9px;margin:12px 0 0}
+.ct{background:var(--chip);border-radius:9px;padding:10px 12px;min-width:0}
+.ct .cl{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dm)}
+.ct .cl i{width:9px;height:9px;border-radius:50%;flex:none}
+.ct .ca{display:block;font-family:var(--mono);font-size:18px;font-weight:700;margin:4px 0 0;line-height:1.25}
+.ct .cpct{display:block;font-style:normal;font-family:var(--mono);font-size:12.5px;color:var(--dm);margin:2px 0 0}
+.ct small{display:block;font-size:11px;color:var(--dm);margin:4px 0 0;line-height:1.45}
+.cashtot{font-size:12.5px;color:var(--dm);margin:10px 0 0;text-align:right}
+.cashtot b{font-family:var(--mono);color:var(--tx)}
 @media (max-width:520px){.card,#nextCard{padding:17px 16px}.big{font-size:27px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -206,6 +228,20 @@ tr:last-child td{border-bottom:none}
     <p id="nextSub"></p>
   </div>
 
+  <!-- 闲钱分两处放：缓冲垫（当天可用）+ 交银稳利。金额按本金和账本推算，见 shared/strategy.js 的 cashPlan -->
+  <div class="card cashcard" id="cashCard" hidden>
+    <div class="cashhead">
+      <p class="k">闲钱放哪 · 缓冲垫 + 交银稳利</p>
+      <span class="cstat" id="cashStat"></span>
+    </div>
+    <p class="cashtodo" id="cashTodo"></p>
+    <div class="cashsub" id="cashSub"></div>
+    <div class="cashbar" id="cashBar" role="img"></div>
+    <div class="cashgrid" id="cashGrid"></div>
+    <p class="cashtot" id="cashTot"></p>
+    <details class="how"><summary>这是怎么运作的</summary><div class="body note" id="cashNote"></div></details>
+  </div>
+
   <div class="grid2">
     <div class="card">
       <p class="k">账户盈亏</p>
@@ -222,14 +258,6 @@ tr:last-child td{border-bottom:none}
       <p class="big"><span id="tierNum">–</span></p>
       <div class="pips" id="pips"></div>
     </div>
-  </div>
-
-  <!-- 闲钱分两处放：缓冲垫（当天可用）+ 交银稳利。金额按本金和账本推算，见 shared/strategy.js 的 cashPlan -->
-  <div class="card" id="cashCard" hidden>
-    <p class="k">闲钱放哪 · 缓冲垫 + 交银稳利</p>
-    <div class="pnlrows cashrows" id="cashRows"></div>
-    <div class="cashnext" id="cashNext"></div>
-    <p class="note" id="cashNote"></p>
   </div>
 
   <div class="card">
@@ -490,58 +518,135 @@ function roundParts(vals, total) {
   return r;
 }
 
+/**
+ * 百分比取一位小数，加起来要正好 100.0%。
+ * 各自四舍五入常常凑出 99.9% 或 100.1%，看着像算错了 —— 尾差补在最大那一项上。
+ */
+function pctParts(vals, total) {
+  if (!(total > 0)) return vals.map(() => 0);
+  const r = vals.map((v) => Math.round((v / total) * 1000));
+  const diff = 1000 - r.reduce((a, b) => a + b, 0);
+  if (diff) { let k = 0; r.forEach((v, j) => { if (v > r[k]) k = j; }); r[k] += diff; }
+  return r.map((x) => x / 10);
+}
+
+/**
+ * 卡片最上面那句：今天动不动资金。
+ *
+ * 看的是「接下来最早的那一笔资金操作」落在哪天、现在几点：
+ *   落在今天、还没到 15:00 → 要操作（基金申赎 15:00 截止）
+ *   落在今天、已过 15:00   → 已截止：做了就不用管，没做的话下一个交易日补
+ *   落在今天之后          → 今天不用操作，同时写出那天要做什么
+ *   落在今天之前          → 数据还没更新到今天（系统没跑成）
+ *   一笔都没有            → 不用操作
+ * 日期一律用具体日期打头，「今天」只在括号里。
+ */
+function cashStatus(cp) {
+  const today = bjToday();
+  if (!cp.next.active) {
+    return { cls: '', chip: '还没起用', todo: `缓冲垫规则从 ${dl(cp.startDate)}起用`,
+      lead: '在那之前闲钱照旧全放交银稳利，到了那天这里会写出第一步要赎回多少。' };
+  }
+  if (!cp.next.day) {
+    return { cls: 'warn', chip: '日历缺失', todo: '交易日历暂时取不到，给不出具体日期', lead: '' };
+  }
+  const acts = cp.next.actions.filter((a) => ['REDEEM', 'SUBSCRIBE', 'REDEEM_LATER'].includes(a.kind) && a.day);
+  const first = acts.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0))[0];
+  if (!first) {
+    return { cls: 'ok', chip: `${md(today)}不用动资金`, todo: '资金都在目标上，不用动',
+      lead: '要动的时候，这里和推送都会提前写出日期和金额。' };
+  }
+  const verb = first.kind === 'SUBSCRIBE' ? '申购' : '赎回';
+  const what = first.kind === 'REDEEM_LATER'
+    ? `${dl(first.day)}起赎回交银稳利约 ${money(first.amount)} 元（那批份额满 7 天了）`
+    : `${dl(first.day)}15:00 前${verb}交银稳利约 ${money(first.amount)} 元`;
+  if (first.day < today) {
+    return { cls: 'warn', chip: '数据没更新', todo: `本该在 ${what}`,
+      lead: `系统的数据停在 ${md(S.state.asof)}，还没算到今天的情况 —— 已经做了就不用管，请看下方「设置与数据健康」。` };
+  }
+  if (first.day === today && first.kind !== 'REDEEM_LATER' && bjHour() >= 15) {
+    const nd = nextTradingDay(S.cal, today);
+    return { cls: 'warn', chip: '已过 15:00', todo: `${dl(today)}15:00 前要${verb}的那笔已经截止`,
+      lead: `做了就不用管；没做的话，${nd ? `${dl(nd)}15:00 前补上` : '下一个交易日 15:00 前补上（交易日历暂时给不出具体日期）'}`
+        + (verb === '赎回' ? '，到账会跟着晚一个交易日。' : '。') };
+  }
+  if (first.day === today) {
+    return { cls: 'act', chip: `${md(today)}要动资金`, todo: what, what, lead: '' };
+  }
+  return { cls: '', chip: `${md(today)}不用动资金`, todo: `下一步：${what}`, what, lead: '' };
+}
+
 /** 「闲钱放哪」卡片 */
 function renderCash(M) {
   const card = $('cashCard');
   if (!S.cashcfg) { card.hidden = true; return; }
   card.hidden = false;
   const pctB = `${Math.round((S.cashcfg.bufferRatio ?? 0.5) * 100)}%`;
-  const rows = $('cashRows'), next = $('cashNext'), note = $('cashNote');
-  note.innerHTML = `没买红利的钱分两处放：<b>缓冲垫</b>放在当天就能用来买 ETF 的现金类里（证券账户里的现金、现金管理、场内货币类），`
+  $('cashNote').innerHTML = `没买红利的钱分两处放：<b>缓冲垫</b>放在当天就能用来买 ETF 的现金类里（证券账户里的现金、现金管理、场内货币类），`
     + `目标是总资产的 ${pctB}（现金不到 ${pctB} 时就全部当缓冲垫）；其余放<b>交银稳利</b>。`
-    + `买入执行日 15:00 前赎回交银稳利补回缓冲垫，买入的钱从缓冲垫出；卖出的钱先进缓冲垫，超出的部分在卖出后的第一个交易日申购交银稳利（具体日期写在上面的资金操作里）。`
-    + `<br>金额和「账户盈亏」一样按本金和账本推算，四项相加等于上方总资产。`
+    + `<br>买入执行日 15:00 前赎回交银稳利补回缓冲垫，买入的钱从缓冲垫出；卖出的钱先进缓冲垫，`
+    + `超出的部分在卖出后的第一个交易日申购交银稳利（具体日期写在上面）。赎回只动持有满 7 天的份额，按份额确认日算。`
+    + `<br>金额和「账户盈亏」一样按本金和账本推算，四项相加等于总资产。`
     + `为了这条等式成立，缓冲垫也按交银稳利的净值计息 —— 实际缓冲垫的收益会略低一点。`;
+  const stat = $('cashStat'), todo = $('cashTodo'), sub = $('cashSub'), bar = $('cashBar'), grid = $('cashGrid'), tot = $('cashTot');
+  const setCls = (c) => { card.className = `card cashcard${c ? ` ${c}` : ''}`; stat.className = `cstat${c ? ` ${c}` : ''}`; };
   const cp = cashNow();
   if (!M || !cp) {
-    rows.innerHTML = '<div><span>各项金额</span><b>设本金后显示</b></div>';
-    next.innerHTML = '';
+    setCls(''); stat.textContent = '未设本金';
+    todo.textContent = '设本金后显示';
+    sub.innerHTML = '本金在下方「设置与数据健康」里设。';
+    bar.innerHTML = ''; grid.innerHTML = ''; tot.innerHTML = '';
     return;
   }
   if (cp.error) {
-    rows.innerHTML = `<div><span>各项金额</span><b>算不出来</b></div>`;
-    next.innerHTML = `<p class="errbox">闲钱推算出错：${cp.error.slice(0, 120)}。上面的操作提醒不受影响。</p>`;
+    setCls('warn'); stat.textContent = '算不出来';
+    todo.textContent = '闲钱推算出错';
+    sub.innerHTML = `${cp.error.slice(0, 120)}。上面的操作提醒不受影响。`;
+    bar.innerHTML = ''; grid.innerHTML = ''; tot.innerHTML = '';
     return;
   }
+
+  // ---- 结论 ----
   const today = bjToday();
-  const tr = cp.transit.map((t) => ({ ...t, r: Math.round(t.amount) }));
-  const trR = tr.reduce((a, t) => a + t.r, 0);
-  const [rV, rBuf, rJ] = (() => {
-    const x = roundParts([cp.V, cp.buffer, trR, cp.jiaoyin], M.total);
-    return [x[0], x[1], x[3]];
-  })();
-  const sub = (t) => `<small>${t}</small>`;
-  const trTxt = tr.length
-    ? tr.map((t) => `${money(t.r)} 元 ${t.arrive ? `${dl(t.arrive)}到账` : '到账日期交易日历暂时给不出'}`).join('；')
-    : '';
-  const yg = cp.young.filter((y) => y.amount >= 0.5);
-  const jTxt = yg.length
-    ? yg.map((y) => `其中 ${money(y.amount)} 元持有不满 7 天，${y.freeFrom ? `${dl(y.freeFrom)}起可免费赎回` : '满 7 天后可免费赎回'}`).join('；')
-    : '';
-  const bufTxt = cp.active ? `目标 ${money(cp.target)} 元（总资产的 ${pctB}，不超过全部现金）` : '缓冲垫规则还没起用';
-  rows.innerHTML =
-      `<div><span>红利 ETF</span><b>${money(rV)}</b></div>`
-    + `<div><span>缓冲垫（当天可用）</span><b>${money(rBuf)}${sub(bufTxt)}</b></div>`
-    + `<div><span>在途赎回款</span><b>${money(trR)}${trTxt ? sub(trTxt) : ''}</b></div>`
-    + `<div><span>交银稳利</span><b>${money(rJ)}${jTxt ? sub(jTxt) : ''}</b></div>`
-    + `<div class="tot"><span>合计（＝上方总资产）</span><b>${money(M.total)}</b></div>`;
+  const st = cashStatus(cp);
+  setCls(st.cls);
+  stat.textContent = st.chip;
+  todo.textContent = st.todo;
   const lines = cashPlanLines(cp, today);
   const short = cp.shorts.filter((x) => x.date >= (S.cal.filter((d) => d <= S.state.asof).slice(-5)[0] || x.date));
   const shortTxt = short.map((x) => `⚠️ ${dl(x.date)}那笔买入时缓冲垫差约 ${money(x.gap)} 元，`
-    + (x.until ? `要等 ${dl(x.until)}赎回款到账后补买` : '要等赎回款到账后补买')).join('<br>');
-  next.innerHTML = (cp.next.day ? `<p><b>${dl(cp.next.day)}的资金操作</b></p>` : '<p><b>接下来的资金操作</b></p>')
-    + (lines.length ? `<ul>${lines.map((x) => `<li>${x}</li>`).join('')}</ul>` : '<p>没有要做的资金操作（缓冲垫和交银稳利都在目标上）。</p>')
-    + (shortTxt ? `<p>${shortTxt}</p>` : '');
+    + (x.until ? `要等 ${dl(x.until)}赎回款到账后补买` : '要等赎回款到账后补买'));
+  // 大字已经说过的那半句，明细里不再重复，只留括号里的补充（份额要求、到账日）
+  const detail = (x) => {
+    if (!st.what || !x.startsWith(st.what)) return x;
+    return x.slice(st.what.length).replace(/^（/, '').replace(/）$/, '');
+  };
+  const list = [...(cp.next.active ? lines.map(detail).filter(Boolean) : []), ...shortTxt];
+  sub.innerHTML = (st.lead ? `<b>${st.lead}</b>` : '')
+    + (list.length ? `<ul>${list.map((x) => `<li>${x}</li>`).join('')}</ul>` : '');
+
+  // ---- 金额与占比 ----
+  const tr = cp.transit.map((t) => ({ ...t, r: Math.round(t.amount) }));
+  const trR = tr.reduce((a, t) => a + t.r, 0);
+  const amt = roundParts([cp.V, cp.buffer, cp.jiaoyin, trR], M.total);
+  const pc = pctParts(amt, Math.round(M.total));
+  const yg = cp.young.filter((y) => y.amount >= 0.5);
+  const parts = [
+    { k: 'etf', name: '红利 ETF', color: 'var(--up)', note: '' },
+    { k: 'buf', name: '缓冲垫现金', color: 'var(--ac)',
+      note: cp.active ? `目标 ${money(cp.target)} 元（总资产的 ${pctB}，不超过全部现金）` : '缓冲垫规则还没起用' },
+    { k: 'jy', name: '交银稳利', color: 'var(--dn)',
+      note: yg.map((y) => `其中 ${money(y.amount)} 元持有不满 7 天，${y.freeFrom ? `${dl(y.freeFrom)}起可免费赎回` : '满 7 天后可免费赎回'}`).join('；') },
+    { k: 'tr', name: '在途赎回款', color: 'var(--warn)',
+      note: tr.map((t) => `${money(t.r)} 元 ${t.arrive ? `${dl(t.arrive)}到账` : '到账日期交易日历暂时给不出'}`).join('；') },
+  ];
+  bar.innerHTML = parts.map((x, j) => (pc[j] > 0 ? `<span style="width:${pc[j]}%;background:${x.color}"></span>` : '')).join('');
+  bar.setAttribute('aria-label', parts.map((x, j) => `${x.name} ${pc[j].toFixed(1)}%`).join('，'));
+  grid.innerHTML = parts.map((x, j) => `<div class="ct" data-k="${x.k}">`
+    + `<span class="cl"><i style="background:${x.color}"></i>${x.name}</span>`
+    + `<b class="ca">${money(amt[j])}</b><i class="cpct">${pc[j].toFixed(1)}%</i>`
+    + (x.note ? `<small>${x.note}</small>` : '') + `</div>`).join('');
+  tot.innerHTML = `合计 <b>${money(M.total)}</b> 元（＝「账户盈亏」里的总资产）`;
 }
 
 // 距离触发还有多远 —— 逻辑在 shared/strategy.js，受回归测试覆盖

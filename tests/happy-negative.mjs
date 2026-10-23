@@ -100,6 +100,10 @@ const MUTANTS = [
   ['面板不补取整尾差', 'page', 'if (diff) { let k = 0;', 'if (false) { let k = 0;', 'cashplan-panel'],
   ['在途不写到账日', 'page', "`${money(t.r)} 元 ${t.arrive ? `${dl(t.arrive)}到账` : '到账日期交易日历暂时给不出'}`", "`${money(t.r)} 元`", 'cashplan-panel'],
   ['挂单卡片不带资金', 'page', "if (cashL.length) realLine += `<br><b>资金：</b>${cashL.join('；')}`;", '', 'cashplan-panel'],
+  ['过了15点不说截止', 'page', "first.kind !== 'REDEEM_LATER' && bjHour() >= 15", 'false', 'cashplan-panel'],
+  ['前一晚误报要动钱', 'page', '  if (first.day === today) {\n    return { cls: \'act\'', '  if (first.day >= today) {\n    return { cls: \'act\'', 'cashplan-panel'],
+  ['说明文字没有折叠', 'page', '<details class="how"><summary>这是怎么运作的</summary><div class="body note" id="cashNote">',
+    '<div class="how"><p>这是怎么运作的</p><div class="body note" id="cashNote">', 'cashplan-panel'],
 ];
 
 let broken = 0;
