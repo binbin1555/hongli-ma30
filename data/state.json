@@ -35,7 +35,20 @@
   },
   "consecutiveTradingDays": 0,
   "lastExecuted": null,
-  "push": null,
+  "push": {
+    "ok": true,
+    "at": "2026-10-26 21:00:46",
+    "elapsedMs": 10831,
+    "steps": {
+      "读日历": 841,
+      "基金净值": 1380,
+      "中证指数": 1532,
+      "ETF报价": 1444,
+      "读行情": 328,
+      "提交": 4840,
+      "推送": 950
+    }
+  },
   "prevPush": {
     "ok": true,
     "at": "2026-10-23 21:00:49",
