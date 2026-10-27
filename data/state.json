@@ -1,41 +1,42 @@
 {
   "schema": 1,
   "launchDate": "2026-09-10",
-  "asof": "2026-10-26",
-  "lastRun": "2026-10-26 21:00:41",
+  "asof": "2026-10-27",
+  "lastRun": "2026-10-27 21:00:44",
   "tier": 0,
   "pending": null,
   "index": {
     "code": "H00922",
-    "close": 11911.51,
-    "ma30": 12037.22,
-    "ratio": 0.9896,
-    "changePct": 1.25,
-    "buyTrigger": 11676.1,
-    "sellTrigger": 12277.96,
-    "pctToBuy": -1.98,
-    "pctToSell": 3.08
+    "close": 11987.04,
+    "ma30": 12033.74,
+    "ratio": 0.9961,
+    "changePct": 0.63,
+    "buyTrigger": 11672.72,
+    "sellTrigger": 12274.41,
+    "pctToBuy": -2.62,
+    "pctToSell": 2.4
   },
   "bond": {
     "code": "008204",
     "name": "交银稳利中短债债券A",
-    "close": 1.2394
+    "close": 1.2396
   },
   "etf": {
     "code": "515180",
-    "close": 1.353,
-    "asof": "2026-10-26",
+    "close": 1.364,
+    "asof": "2026-10-27",
     "stale": false
   },
   "checks": {
     "passed": 10,
     "total": 10,
     "failed": [],
-    "ranAt": "2026-10-26 21:00:41"
+    "ranAt": "2026-10-27 21:00:44"
   },
   "consecutiveTradingDays": 0,
   "lastExecuted": null,
-  "push": {
+  "push": null,
+  "prevPush": {
     "ok": true,
     "at": "2026-10-26 21:00:46",
     "elapsedMs": 10831,
@@ -47,20 +48,6 @@
       "读行情": 328,
       "提交": 4840,
       "推送": 950
-    }
-  },
-  "prevPush": {
-    "ok": true,
-    "at": "2026-10-23 21:00:49",
-    "elapsedMs": 16283,
-    "steps": {
-      "读日历": 777,
-      "中证指数": 1612,
-      "基金净值": 7228,
-      "ETF报价": 1360,
-      "读行情": 278,
-      "提交": 4791,
-      "推送": 1010
     }
   }
 }
