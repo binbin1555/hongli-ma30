@@ -1,20 +1,20 @@
 {
   "schema": 1,
   "launchDate": "2026-09-10",
-  "asof": "2026-10-27",
-  "lastRun": "2026-10-27 21:00:44",
+  "asof": "2026-10-28",
+  "lastRun": "2026-10-28 21:00:44",
   "tier": 0,
   "pending": null,
   "index": {
     "code": "H00922",
-    "close": 11987.04,
-    "ma30": 12033.74,
-    "ratio": 0.9961,
-    "changePct": 0.63,
-    "buyTrigger": 11672.72,
-    "sellTrigger": 12274.41,
-    "pctToBuy": -2.62,
-    "pctToSell": 2.4
+    "close": 11990.5,
+    "ma30": 12025.07,
+    "ratio": 0.9971,
+    "changePct": 0.03,
+    "buyTrigger": 11664.32,
+    "sellTrigger": 12265.57,
+    "pctToBuy": -2.72,
+    "pctToSell": 2.29
   },
   "bond": {
     "code": "008204",
@@ -23,19 +23,20 @@
   },
   "etf": {
     "code": "515180",
-    "close": 1.364,
-    "asof": "2026-10-27",
+    "close": 1.361,
+    "asof": "2026-10-28",
     "stale": false
   },
   "checks": {
     "passed": 10,
     "total": 10,
     "failed": [],
-    "ranAt": "2026-10-27 21:00:44"
+    "ranAt": "2026-10-28 21:00:44"
   },
   "consecutiveTradingDays": 0,
   "lastExecuted": null,
-  "push": {
+  "push": null,
+  "prevPush": {
     "ok": true,
     "at": "2026-10-27 21:00:49",
     "elapsedMs": 15123,
@@ -47,20 +48,6 @@
       "读行情": 280,
       "提交": 4443,
       "推送": 1034
-    }
-  },
-  "prevPush": {
-    "ok": true,
-    "at": "2026-10-26 21:00:46",
-    "elapsedMs": 10831,
-    "steps": {
-      "读日历": 841,
-      "基金净值": 1380,
-      "中证指数": 1532,
-      "ETF报价": 1444,
-      "读行情": 328,
-      "提交": 4840,
-      "推送": 950
     }
   }
 }
