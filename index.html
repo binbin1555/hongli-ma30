@@ -378,7 +378,7 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = 'f8ec4d316c';
+const CORE_VERSION = 'db4a21d4a4';
 const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries, validateState,
         nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct, WEIGHTS, COMMISSION,
         cashPlan, cashPlanLines, gateState, gateLine, gateBlockedText }
@@ -721,8 +721,8 @@ function renderGate() {
     + '被拦下的买入不进交易记录，会单独出一条紫色横幅告诉你不用操作。'
     + '<br><b>为什么：</b>MA30 分档在「跌了会弹回来」的行情里赚钱，在不给像样反弹的慢熊里会一路加满仓、跟着跌。'
     + '2005 年以来伤到这套规则的慢熊（2008 年、2010–2012 年），起点都是红利比国债还贵的时候。'
-    + '<br><b>回测（2005–2026 年，中证红利）：</b>一共拦过 13 段，最近一次处于上膛是 2019 年 5 月；'
-    + '2008 年那段把 −47.5% 保成了 −3.3%。2005 年以来年化从 4.4% 提到 8.1%，最大回撤从 −64.7% 收窄到 −38.5%。'
+    + '<br><b>回测（2005–2026 年，中证红利）：</b>一共拦过 15 段（8 段帮了忙、7 段帮了倒忙），最近一次处于上膛是 2019 年 5 月；'
+    + '2008 年那段把 −47.5% 保成了 −3.3%。2005 年以来年化从 4.4% 提到 7.7%，最大回撤从 −64.7% 收窄到 −38.5%。'
     + '近十年拦过 2 段（2016 年 1 月、2018 年 6 月），都帮了忙，但那两次利差恰好在 0 附近，算运气。'
     + '<br><b>管不住的：</b>大跌的第一段（指数还没跌破年线，2008 年那 −38.5% 就是这么来的）；'
     + '「便宜但越来越差」的慢熊（利差一直是正的，闸门不会上膛）。'
