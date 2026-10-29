@@ -1,0 +1,166 @@
+{
+  "today": "2026-10-29",
+  "ranAt": "2026-10-29 21:00:40",
+  "checks": [
+    {
+      "id": 1,
+      "name": "这一天确实是交易日",
+      "ok": true,
+      "detail": "2026-10-29 在交易所日历里",
+      "fatal": true
+    },
+    {
+      "id": 2,
+      "name": "当天的中证红利收盘价已经拿到",
+      "ok": true,
+      "detail": "最新数据日期 2026-10-29",
+      "fatal": true
+    },
+    {
+      "id": 3,
+      "name": "行情日期没有乱序，也没有混进非交易日",
+      "ok": true,
+      "detail": "102 行，逐日核对交易所日历一致",
+      "fatal": true
+    },
+    {
+      "id": 4,
+      "name": "没有混进重复抄来的假数据",
+      "ok": true,
+      "detail": "剔除 0 行（非交易日 0／幽灵 0／周末 0／元旦 0／重复 0）",
+      "fatal": true
+    },
+    {
+      "id": 5,
+      "name": "涨跌幅和收盘价能对得上",
+      "ok": true,
+      "detail": "逐行一致",
+      "fatal": true
+    },
+    {
+      "id": 6,
+      "name": "没有异常的单日暴涨暴跌（超过 ±11% 视为数据出错）",
+      "ok": true,
+      "detail": "通过",
+      "fatal": true
+    },
+    {
+      "id": 7,
+      "name": "算均线要的 30 天行情是齐的",
+      "ok": true,
+      "detail": "102 / 30",
+      "fatal": true
+    },
+    {
+      "id": 8,
+      "name": "ETF 报价和指数是同一天的",
+      "ok": true,
+      "detail": "ETF 2026-10-29 vs 指数 2026-10-29",
+      "fatal": false
+    },
+    {
+      "id": 9,
+      "name": "当前仓位和交易记录对得上",
+      "ok": true,
+      "detail": "0 → 0，与账本最后一笔（无记录，应为 0 档）吻合",
+      "fatal": true
+    },
+    {
+      "id": 10,
+      "name": "交易记录前后连得上",
+      "ok": true,
+      "detail": "0 笔全部自洽",
+      "fatal": true
+    },
+    {
+      "id": 11,
+      "name": "闸门要用的数据是新的",
+      "ok": true,
+      "detail": "价格指数 2026-10-29、10 年国债 2026-10-29（1.62%）　股息率 4.44%，利差 2.81%",
+      "fatal": false
+    }
+  ],
+  "timing": {
+    "读日历": 834,
+    "国债收益率": 984,
+    "中证指数": 1650,
+    "价格指数": 2751,
+    "基金净值": 3038,
+    "ETF报价": 1549,
+    "读行情": 289,
+    "数据就绪": 6510
+  },
+  "cleaning": {
+    "rawCount": 102,
+    "removed": {
+      "dup": [],
+      "weekend": [],
+      "newyear": [],
+      "ghost": [],
+      "offCalendar": [],
+      "startFake": []
+    }
+  },
+  "rawTail": [
+    {
+      "d": "2026-10-23",
+      "c": 11764.3,
+      "pct": -0.03
+    },
+    {
+      "d": "2026-10-26",
+      "c": 11911.51,
+      "pct": 1.25
+    },
+    {
+      "d": "2026-10-27",
+      "c": 11987.04,
+      "pct": 0.63
+    },
+    {
+      "d": "2026-10-28",
+      "c": 11990.5,
+      "pct": 0.03
+    },
+    {
+      "d": "2026-10-29",
+      "c": 12093.93,
+      "pct": 0.86
+    }
+  ],
+  "etf": {
+    "c": 1.373,
+    "d": "2026-10-29",
+    "source": "腾讯",
+    "tried": []
+  },
+  "ma30": 12015.2857,
+  "signal": null,
+  "tierBefore": 0,
+  "tierAfter": 0,
+  "pending": null,
+  "executed": null,
+  "gate": {
+    "asof": "2026-10-29",
+    "close": 12093.93,
+    "active": true,
+    "dataOk": true,
+    "problem": null,
+    "armed": false,
+    "memArmed": false,
+    "below": false,
+    "blocking": false,
+    "ma250": 11865.44,
+    "dy": 0.044353,
+    "y10": 0.016233,
+    "spread": 0.02812,
+    "pDate": "2026-10-29",
+    "yDate": "2026-10-29",
+    "staleP": 0,
+    "staleY": 0,
+    "blocked": null
+  },
+  "log": [
+    "闲钱基准 008204 今天的净值还没发布，本次不计息，下一轮补上"
+  ]
+}

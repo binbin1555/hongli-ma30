@@ -1,20 +1,20 @@
 {
   "schema": 1,
   "launchDate": "2026-09-10",
-  "asof": "2026-10-28",
-  "lastRun": "2026-10-28 21:00:44",
+  "asof": "2026-10-29",
+  "lastRun": "2026-10-29 21:00:40",
   "tier": 0,
   "pending": null,
   "index": {
     "code": "H00922",
-    "close": 11990.5,
-    "ma30": 12025.07,
-    "ratio": 0.9971,
-    "changePct": 0.03,
-    "buyTrigger": 11664.32,
-    "sellTrigger": 12265.57,
-    "pctToBuy": -2.72,
-    "pctToSell": 2.29
+    "close": 12093.93,
+    "ma30": 12015.29,
+    "ratio": 1.0065,
+    "changePct": 0.86,
+    "buyTrigger": 11654.83,
+    "sellTrigger": 12255.59,
+    "pctToBuy": -3.63,
+    "pctToSell": 1.34
   },
   "bond": {
     "code": "008204",
@@ -23,19 +23,20 @@
   },
   "etf": {
     "code": "515180",
-    "close": 1.361,
-    "asof": "2026-10-28",
+    "close": 1.373,
+    "asof": "2026-10-29",
     "stale": false
   },
   "checks": {
-    "passed": 10,
-    "total": 10,
+    "passed": 11,
+    "total": 11,
     "failed": [],
-    "ranAt": "2026-10-28 21:00:44"
+    "ranAt": "2026-10-29 21:00:40"
   },
   "consecutiveTradingDays": 0,
   "lastExecuted": null,
-  "push": {
+  "push": null,
+  "prevPush": {
     "ok": true,
     "at": "2026-10-28 21:00:49",
     "elapsedMs": 11385,
@@ -49,18 +50,24 @@
       "推送": 928
     }
   },
-  "prevPush": {
-    "ok": true,
-    "at": "2026-10-27 21:00:49",
-    "elapsedMs": 15123,
-    "steps": {
-      "读日历": 760,
-      "中证指数": 2105,
-      "基金净值": 5506,
-      "ETF报价": 2287,
-      "读行情": 280,
-      "提交": 4443,
-      "推送": 1034
-    }
+  "gate": {
+    "asof": "2026-10-29",
+    "close": 12093.93,
+    "active": true,
+    "dataOk": true,
+    "problem": null,
+    "armed": false,
+    "memArmed": false,
+    "below": false,
+    "blocking": false,
+    "ma250": 11865.44,
+    "dy": 0.044353,
+    "y10": 0.016233,
+    "spread": 0.02812,
+    "pDate": "2026-10-29",
+    "yDate": "2026-10-29",
+    "staleP": 0,
+    "staleY": 0,
+    "blocked": null
   }
 }
