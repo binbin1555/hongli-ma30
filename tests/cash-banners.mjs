@@ -144,8 +144,10 @@ console.log('\n【三】攒了一堆没确认：买卖和申赎按日期混排�
   const shown = r.bs.filter((x) => x !== roll).length;
   if (total > 5 && shown === 5 && roll && roll.text === `还有 ${total - 5} 笔没确认`) ok(`共 ${total} 笔（买卖 ${chain.length}、申赎 ${cashEv.length}）：排 5 条 + 汇总「${roll.text}」`);
   else bad(`应排 5 条 + 汇总 ${total - 5} 笔：${show(r.bs)}`);
-  // 最新的排最前：倒数第 2 天的申购（卖出后那天），然后是倒数第 3 天的卖出；最早那两笔赎回进了汇总
-  const subEv = cashEv.find((e) => e.kind === 'SUBSCRIBE');
+  // 最新的排最前：倒数第 2 天的申购（卖出后那天），然后是倒数第 3 天的卖出；最早那两笔赎回进了汇总。
+  // 申购取最近的那笔：行情越攒越长，起算以来缓冲垫漂移也会冒出别的申购（10 月下旬就多了一笔 9 月 18 日的），
+  // 取最早那笔就会拿错比较对象
+  const subEv = cashEv.filter((e) => e.kind === 'SUBSCRIBE').pop();
   const b0 = r.bs[0], b1 = r.bs[1];
   if (subEv && b0.cash && b0.text.startsWith(`申购交银稳利约 ${yuan(subEv.amount)} 元`) && b0.kick.includes(dayLabel(subEv.d, last).label) && !b1.cash && b1.sell) {
     ok(`最新的在最前：${b0.text}，然后才是 ${D(3)} 那笔卖出`);

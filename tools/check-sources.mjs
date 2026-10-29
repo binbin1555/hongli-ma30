@@ -7,7 +7,7 @@
  *
  *   npm run check:sources
  */
-import { fetchETF } from '../worker/src/index.js';
+import { fetchETF, fetchCGB10 } from '../worker/src/index.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36';
 const pad = (s, n) => String(s).padEnd(n);
@@ -19,8 +19,8 @@ const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
 const ymd = (d) => d.replace(/-/g, '');
 const back = (n) => new Date(Date.now() + 8 * 3600e3 - n * 86400e3).toISOString().slice(0, 10);
 
-// 1) 中证指数
-for (const code of ['H00922']) {
+// 1) 中证指数（000922 是闸门算股息率用的价格指数）
+for (const code of ['H00922', '000922']) {
   try {
     const r = await fetch(`https://www.csindex.com.cn/csindex-home/perf/index-perf`
       + `?indexCode=${code}&startDate=${ymd(back(20))}&endDate=${ymd(today)}`,
@@ -55,5 +55,12 @@ try {
   if (q.tried.length) err('ETF 首选源', '腾讯不可用，正靠备用源撑着，建议留意');
 } catch (e) { err('ETF 行情', e.message); }
 
-console.log(bad === 0 ? '\n  三个数据源全部正常 ✓' : `\n  有 ${bad} 项异常 ✗`);
+// 4) 10 年国债收益率（闸门算利差用，走 Worker 里同一份实现）
+try {
+  const { rows } = await fetchCGB10();
+  const last = rows[rows.length - 1];
+  ok('10 年国债收益率', `${rows.length} 天，最新 ${last.d} ${last.y}%`);
+} catch (e) { err('10 年国债收益率', e.message); }
+
+console.log(bad === 0 ? '\n  数据源全部正常 ✓' : `\n  有 ${bad} 项异常 ✗`);
 process.exit(bad === 0 ? 0 : 1);

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "中证红利 MA30 停车策略：每交易日自动抓数、算信号、记账、推送 Bark",
   "scripts": {
-    "test": "node tests/crosscheck.mjs && node tests/wording.mjs && node tests/calculator.mjs && node tests/journey.mjs && node tests/happy.mjs && node tests/consecutive.mjs && node tests/banners.mjs && node tests/banner-persistence.mjs && node tests/push-timeout.mjs && node tests/push-resend.mjs && node tests/csi-window.mjs && node tests/cashplan.mjs && node tests/cashplan-push.mjs && node tests/cashplan-panel.mjs && node tests/cash-banners.mjs",
+    "test": "node tests/crosscheck.mjs && node tests/wording.mjs && node tests/calculator.mjs && node tests/journey.mjs && node tests/happy.mjs && node tests/consecutive.mjs && node tests/banners.mjs && node tests/banner-persistence.mjs && node tests/push-timeout.mjs && node tests/push-resend.mjs && node tests/csi-window.mjs && node tests/cashplan.mjs && node tests/cashplan-push.mjs && node tests/cashplan-panel.mjs && node tests/cash-banners.mjs && node tests/gate.mjs && node tests/gate-panel.mjs",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "serve": "python -m http.server 8777",
@@ -27,7 +27,10 @@
     "cashplan": "node tests/cashplan.mjs",
     "cashplan-push": "node tests/cashplan-push.mjs",
     "cashplan-panel": "node tests/cashplan-panel.mjs",
-    "cash-banners": "node tests/cash-banners.mjs"
+    "cash-banners": "node tests/cash-banners.mjs",
+    "gate": "node tests/gate.mjs",
+    "gate-panel": "node tests/gate-panel.mjs",
+    "migrate:gate": "node tools/migrate-gate.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.42.0"

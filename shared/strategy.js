@@ -719,3 +719,173 @@ export function cashPlanLines(cp, today) {
   }
   return lines;
 }
+
+/* ======================================================================
+ * 闸门：红利变贵、而且已经跌破年线时，不执行买入信号
+ *
+ * MA30 分档在「跌了会弹回来」的行情里赚钱，在不给像样反弹的慢熊里会一路
+ * 加到满仓、跟着跌（2008 年一年亏 55%，要到 2021 年才回本）。历史上伤到这套
+ * 规则的慢熊，起点都是红利偏贵的时候 —— 股息率比 10 年国债收益率还低。
+ * 闸门只在这种时候、并且指数已经跌破年线时出手：
+ *
+ *   年线    H00922 最近 250 个交易日收盘价的算术平均（含当日）
+ *   股息率  最近 250 个交易日指数实际收到的分红 ÷ 当日价格指数点位
+ *           每天的分红点数 = max(0, 全收益涨幅 ÷ 价格涨幅 − 1) × 前一天的价格点位
+ *           （全收益指数 H00922 和价格指数 000922 的差就是分红；和全部回测同一个算法）
+ *   利差    股息率 − 10 年期国债到期收益率
+ *   上膛    利差跌破 −0.25%；回到 +0.25% 以上才解除 —— 回差，免得利差在 0 附近
+ *           来回穿越时闸门隔天开、隔天关
+ *   拦截    已上膛，并且当天收盘在年线下：这时出现的买入信号不执行；卖出信号任何时候都不受影响
+ *
+ * 数据缺失：价格指数或国债收益率某天取不到，沿用最近一次的值；连续 5 个交易日
+ * 都取不到，按「未上膛」处理（买入照常），并在推送里告警 —— 辅助数据坏了，
+ * 不能拖垮主策略。
+ *
+ * 回差有记忆，但这里不存任何可变状态：每次都从整条行情从头推演一遍，
+ * 和账本重放同一个思路 —— 行情没变，结果就永远一样。
+ *
+ * 2005–2026 年回测（中证红利，这套回差规则）：一共拦过 13 段，最近一次处于上膛是
+ * 2019 年 5 月；2008 年那段把 −47.5% 保成了 −3.3%；近十年拦过 2 段（2016 年 1 月、
+ * 2018 年 6 月），都帮了忙 —— 但那两次利差恰好在 0 附近，算运气，不算本事。
+ * 它管不住两种情况：大跌的第一段（指数还没跌破年线），以及「便宜但越来越差」的
+ * 慢熊（利差一直是正的，不会上膛）。
+ * ====================================================================== */
+export const GATE = {
+  maLen: 250,             // 年线
+  divWindow: 250,         // 股息率按最近 250 个交易日的分红算
+  armBelow: -0.0025,      // 利差跌破这里上膛
+  disarmAbove: 0.0025,    // 回到这里以上解除
+  staleDays: 5,           // 连续这么多个交易日取不到数据，就按未上膛处理
+  startDate: '2026-10-29', // 从这一天起拦截（之前的账本不受影响；那时也从未上膛）
+};
+
+/**
+ * 闸门在某一天的状态。rows 为升序 [{d, c, p?, y?}]：c 全收益收盘、p 价格指数收盘、y 10 年国债收益率（%）。
+ * upto 给定时只看这一天及以前的行情。
+ *
+ * @returns {null|{
+ *   asof:string, close:number, ma250:number|null, dy:number|null, y10:number|null, spread:number|null,
+ *   pDate:string|null, yDate:string|null, staleP:number, staleY:number,
+ *   dataOk:boolean, problem:string|null,
+ *   armed:boolean, memArmed:boolean, below:boolean, blocking:boolean, active:boolean
+ * }}
+ *   dy / y10 / spread 都是小数（0.0447 表示 4.47%）；staleP / staleY 是最近一次有数距今几个交易日（0 = 当天有）。
+ *   armed 是「这一天按什么处理」：数据不行时恒为 false（放行）；memArmed 是回差记住的状态。
+ *   active 为 false 表示还没到起用日 —— 状态照算照显示，只是不拦。
+ */
+export function gateState(rows, upto = null) {
+  const rs = (rows || []).filter((r) => r && (upto == null || r.d <= upto));
+  const n = rs.length;
+  if (!n) return null;
+  const good = (v) => typeof v === 'number' && isFinite(v) && v > 0;
+
+  // 1. 每天的分红点数。只在两个都有价格指数的行之间算，中间缺了就跨过去 ——
+  //    跨过去的那几天里要是除了息，分红照样落在这一对的后一天，不会漏。
+  //    全收益涨幅 ÷ 价格涨幅明显小于 1（全收益反而跌得多）或大得离谱，说明两边不是同一天的数：
+  //    这一天的价格指数当作没取到，绝不让一个错配的数悄悄混进股息率。
+  const div = new Array(n).fill(0);
+  const pOk = new Array(n).fill(false);
+  let last = -1, first = -1;
+  for (let i = 0; i < n; i++) {
+    const r = rs[i];
+    if (!good(r.p) || !good(r.c)) continue;
+    if (last >= 0) {
+      const a = rs[last];
+      const raw = (r.c / a.c) / (r.p / a.p) - 1;
+      if (!(raw > -0.003 && raw < 0.03)) continue;
+      div[i] = Math.max(0, raw) * a.p;
+    }
+    pOk[i] = true;
+    if (first < 0) first = i;
+    last = i;
+  }
+  const cum = new Array(n + 1).fill(0);
+  for (let i = 0; i < n; i++) cum[i + 1] = cum[i] + div[i];
+
+  // 2. 逐日推演（回差要从头记起）
+  let memArmed = false, lastP = -1, lastY = -1, closeSum = 0;
+  let out = null;
+  for (let i = 0; i < n; i++) {
+    const r = rs[i];
+    closeSum += r.c;
+    if (i >= GATE.maLen) closeSum -= rs[i - GATE.maLen].c;
+    if (pOk[i]) lastP = i;
+    if (good(r.y) && r.y < 20) lastY = i;
+    const ma250 = i >= GATE.maLen - 1 ? closeSum / GATE.maLen : null;
+    const staleP = lastP < 0 ? Infinity : i - lastP;
+    const staleY = lastY < 0 ? Infinity : i - lastY;
+    // 股息率要整整一年的分红：价格指数得从窗口开头之前就有
+    const ttmOk = lastP >= 0 && first >= 0 && first <= i - GATE.divWindow;
+    const dy = ttmOk ? (cum[i + 1] - cum[i + 1 - GATE.divWindow]) / rs[lastP].p : null;
+    const y10 = lastY >= 0 ? rs[lastY].y / 100 : null;
+    const spread = dy != null && y10 != null ? dy - y10 : null;
+    let problem = null;
+    if (ma250 == null) problem = `行情不足 ${GATE.maLen} 个交易日，算不出年线`;
+    else if (!ttmOk) problem = '价格指数不足一整年，算不出股息率';
+    else if (staleP >= GATE.staleDays) problem = `价格指数已连续 ${staleP} 个交易日没取到`;
+    else if (y10 == null) problem = '还没有 10 年国债收益率';
+    else if (staleY >= GATE.staleDays) problem = `10 年国债收益率已连续 ${staleY} 个交易日没取到`;
+    const dataOk = !problem;
+    if (dataOk) {
+      if (!memArmed && spread < GATE.armBelow) memArmed = true;
+      else if (memArmed && spread > GATE.disarmAbove) memArmed = false;
+    }
+    if (i === n - 1) {
+      const armed = dataOk && memArmed;
+      const below = ma250 != null && r.c < ma250;
+      const active = r.d >= GATE.startDate;
+      out = {
+        asof: r.d, close: r.c, ma250, dy, y10, spread,
+        pDate: lastP >= 0 ? rs[lastP].d : null, yDate: lastY >= 0 ? rs[lastY].d : null,
+        staleP: isFinite(staleP) ? staleP : null, staleY: isFinite(staleY) ? staleY : null,
+        dataOk, problem, armed, memArmed, below, active,
+        blocking: active && armed && below,
+      };
+    }
+  }
+  return out;
+}
+
+/** 闸门拦不拦这一天的信号：只拦买入，卖出任何时候都放行 */
+export function gateBlocks(sig, tier, gate) {
+  return sig === 'BUY' && tier < MAX_TIER && !!gate && gate.blocking === true;
+}
+
+/**
+ * 闸门状态说成一行人话。推送和面板共用这一份，两边一字不差。
+ * 日期一律用 dayLabel 打头，相对说法只在括号里。
+ */
+export function gateLine(g, today) {
+  if (!g) return '闸门：没有行情，算不出状态';
+  const p2 = (x) => `${(x * 100).toFixed(2)}%`;
+  const s2 = (x) => `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(2)}%`;
+  const int = (x) => Math.round(x).toLocaleString('en-US');
+  if (!g.dataOk) return `⚠️ 闸门：${g.problem}，暂按「未上膛」处理，买入照常执行`;
+  const nums = `利差 ${s2(g.spread)}（股息率 ${p2(g.dy)} − 10 年国债 ${p2(g.y10)}）`;
+  const pos = `收盘在年线（${int(g.ma250)}）${g.below ? '下方' : '上方'} ${Math.abs((g.close / g.ma250 - 1) * 100).toFixed(1)}%`;
+  const stale = [
+    g.staleP > 0 ? `价格指数沿用 ${dayLabel(g.pDate, today).md}的数据` : '',
+    g.staleY > 0 ? `国债收益率沿用 ${dayLabel(g.yDate, today).md}的数据` : '',
+  ].filter(Boolean).join('，');
+  const tail = stale ? `（${stale}）` : '';
+  const when = g.active ? '' : `；${dayLabel(GATE.startDate, today).md}起生效`;
+  if (!g.armed) return `闸门未上膛：${nums}，跌破 −0.25% 才上膛；${pos}${when}${tail}`;
+  if (!g.below) return `闸门已上膛：${nums}，回到 +0.25% 以上才解除；${pos}，买入信号照常执行${when}${tail}`;
+  return `闸门已上膛且${pos}：${nums}，这时出现的买入信号不会执行${when}${tail}`;
+}
+
+/**
+ * 一笔被闸门拦下的买入，说成人话（推送正文、面板横幅共用）。
+ * b = { signalDate, tierFrom, tierTo, close, ma250, dy, y10, spread }
+ * execDay 是按原规则本该执行的那天（取不到就传 null）。
+ */
+export function gateBlockedText(b, execDay, today) {
+  const p2 = (x) => `${(x * 100).toFixed(2)}%`;
+  const s2 = (x) => `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(2)}%`;
+  const int = (x) => Math.round(x).toLocaleString('en-US');
+  const when = execDay ? `会在 ${dayLabel(execDay, today).label}` : `会在${NO_EXEC_DATE}`;
+  return `${dayLabel(b.signalDate, today).label}收盘 ${int(b.close)} 跌破了买入线，按原规则${when}买入第 ${b.tierTo} 份；`
+    + `但收盘在年线（${int(b.ma250)}）下方 ${Math.abs((b.close / b.ma250 - 1) * 100).toFixed(1)}%，`
+    + `利差 ${s2(b.spread)}（股息率 ${p2(b.dy)} − 10 年国债 ${p2(b.y10)}）已跌破上膛线 —— 红利偏贵又跌破年线，闸门拦下了这笔买入。`
+    + `账本不会记它，仓位仍是 ${posPct(b.tierFrom)}。`;
+}

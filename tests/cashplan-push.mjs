@@ -66,7 +66,10 @@ globalThis.fetch = async (input, opts = {}) => {
   if (url.startsWith('https://www.csindex.com.cn/')) {
     const q = new URL(url).searchParams;
     const a = q.get('startDate'), b = q.get('endDate');
-    const rows = [...series0.rows.map((r) => ({ d: r.d, c: r.c })), { d: TODAY, c: closeToday }];
+    // 000922 是闸门用的价格指数：今天和全收益同涨同跌（不是除息日）
+    const px = q.get('indexCode') === '000922';
+    const rows = [...series0.rows.map((r) => ({ d: r.d, c: px ? r.p : r.c })),
+      { d: TODAY, c: px ? +(LAST.p * closeToday / LAST.c).toFixed(2) : closeToday }];
     const data = rows.filter((r) => ymd8(r.d) >= a && ymd8(r.d) <= b).map((r, k, arr) => ({
       tradeDate: ymd8(r.d), close: r.c, changePct: k ? +((r.c / arr[k - 1].c - 1) * 100).toFixed(2) : 0,
     }));
@@ -80,6 +83,11 @@ globalThis.fetch = async (input, opts = {}) => {
   if (url.startsWith('https://qt.gtimg.cn/')) {
     const f = Array(40).fill('0'); f[3] = String(ETFP); f[30] = `${ymd8(TODAY)}150000`;
     return new Response(`v_sh515180="${f.join('~')}";`, { status: 200 });
+  }
+  if (url.startsWith('https://datacenter-web.eastmoney.com/')) {
+    // 10 年国债收益率：只给到仓库最后一天 —— 21:00 那一轮常常还拿不到当天的
+    const data = series0.rows.slice(-30).reverse().map((r) => ({ SOLAR_DATE: `${r.d} 00:00:00`, EMM00166466: r.y }));
+    return json({ result: { data } });
   }
   const gbase = 'https://api.github.com/repos/o/r';
   if (!url.startsWith(gbase)) throw new Error(`测试里不该请求 ${url}`);

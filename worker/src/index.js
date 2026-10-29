@@ -2,7 +2,7 @@
  * 红利 MA30 停车策略 · Cloudflare Worker
  *
  * 由 cron-job.org 在每个交易日北京时间 21:00 触发一次：
- *   查交易日历 → 抓中证数据 → 10 项校验 → 算信号 → 提交 GitHub → 发 Bark 推送
+ *   查交易日历 → 抓中证数据 → 11 项校验 → 算信号（含闸门）→ 提交 GitHub → 发 Bark 推送
  *
  * 设计原则：
  *   1. 任何一项校验不过，都要推一条带原因的告警，绝不静默失败。
@@ -13,6 +13,7 @@
 import {
   ma, signal, nextTier, replay, plannedOrder, shares, triggers, auditLedger, beijingDate, nextTradingDay, validateState,
   dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct, cashPlan, cashPlanLines,
+  gateState, gateBlocks, gateLine, gateBlockedText,
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
 
@@ -20,11 +21,15 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '9adb663460';
+const BUILD = '49afa2fdb4';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
 const EM_RT = 'https://push2.eastmoney.com/api/qt/stock/get';
+// 10 年期国债到期收益率（中债口径），闸门算利差用
+const EM_DC = 'https://datacenter-web.eastmoney.com/api/data/v1/get';
+// 闸门算股息率用的价格指数：和全收益 H00922 的差就是分红
+const PRICE_INDEX = '000922';
 // 闲钱停在哪：这只基金的累计净值就是「没买红利的钱」的收益基准。
 // 换基准必须连同 series.json 的 b 列整列重建，见 tools/migrate-cash-benchmark.mjs。
 const CASH_FUND = '008204';
@@ -283,6 +288,28 @@ export async function fetchCSI(code, startYmd, endYmd, tradingCal = null) {
     clean.push(r0);
   }
   return { rows: clean, removed, rawCount };
+}
+
+/**
+ * 10 年期国债到期收益率（%），最近 30 个交易日，升序 [{d, y}]。闸门算利差用。
+ *
+ * 中债的收益率曲线一般傍晚才发布，21:00 这一轮常常只拿得到前一天的 ——
+ * 那没关系：闸门沿用最近一次的值，下一轮重抓 30 天，缺的那天自然补上。
+ * 银行间市场在调休的周末也开门，那几天的数在 A 股行情里没有对应的日子，合并时自然被丢掉。
+ */
+export async function fetchCGB10() {
+  const r = await retryFetch(`${EM_DC}?reportName=RPTA_WEB_TREASURYYIELD&columns=SOLAR_DATE,EMM00166466`
+    + '&sortColumns=SOLAR_DATE&sortTypes=-1&pageNumber=1&pageSize=30&source=WEB&client=WEB',
+  { headers: { Referer: 'https://data.eastmoney.com/' } }, 3, '10 年国债收益率', 8000);
+  const j = await r.json();
+  const rows = [];
+  for (const x of (j && j.result && j.result.data) || []) {
+    const d = String(x.SOLAR_DATE || '').slice(0, 10), y = Number(x.EMM00166466);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d) && isFinite(y) && y > 0 && y < 20) rows.push({ d, y });
+  }
+  rows.sort((a, b) => (a.d < b.d ? -1 : 1));
+  if (!rows.length) throw new Error('10 年国债收益率：接口返回空');
+  return { rows };
 }
 
 /**
@@ -686,11 +713,15 @@ async function runDaily(env, { force = false } = {}) {
   }
   const calMonths = new Set([...calDays].map((d) => d.slice(0, 7)));
   const tradingCal = { covers: (d) => calMonths.has(d.slice(0, 7)), has: (d) => calDays.has(d) };
-  const [idxRes, bondRes] = await Promise.all([
+  const [idxRes, bondRes, pxRes, cgbRes] = await Promise.all([
     timed('中证指数', fetchCSI('H00922', from, today, tradingCal)),
     // 闲钱腿：交银稳利中短债债券A。取不到就让下面沿用 series 里已有的值，
     // 下一轮再抓一次就补上了 —— 绝不能因为净值晚发就中断整轮运行。
     timed('基金净值', fetchFundNAV(env.CASH_FUND || CASH_FUND).catch(() => ({ rows: [], name: null }))),
+    // 闸门的两样数据：价格指数（算股息率）、10 年国债收益率（算利差）。
+    // 取不到同样不中断：沿用 series 里已有的值，连续 5 个交易日都取不到才按「未上膛」放行。
+    timed('价格指数', fetchCSI(PRICE_INDEX, from, today, tradingCal).catch((e) => ({ rows: [], err: String(e && e.message || e) }))),
+    timed('国债收益率', fetchCGB10().catch((e) => ({ rows: [], err: String(e && e.message || e) }))),
   ]);
   const idx = idxRes.rows;
   const removed = idxRes.removed;
@@ -734,6 +765,11 @@ async function runDaily(env, { force = false } = {}) {
   if (!bondByDate.has(today)) {
     log.push(`闲钱基准 ${env.CASH_FUND || CASH_FUND} 今天的净值还没发布，本次不计息，下一轮补上`);
   }
+  // 闸门的两列：当天没取到就沿用已有的值（下一轮窗口重抓会补上），绝不拿 null 盖掉已有的数
+  const pxByDate = new Map((pxRes.rows || []).map((x) => [x.d, x.c]));
+  const yByDate = new Map((cgbRes.rows || []).map((x) => [x.d, x.y]));
+  if (!pxByDate.has(today)) log.push(`价格指数 ${PRICE_INDEX} 今天的收盘没取到${pxRes.err ? `（${pxRes.err.slice(0, 60)}）` : ''}，闸门沿用最近一次的值`);
+  if (cgbRes.err) log.push(`10 年国债收益率没取到（${cgbRes.err.slice(0, 60)}），闸门沿用最近一次的值`);
   const known = new Map(series.rows.map((r) => [r.d, r]));
   const closes = idx.map((r) => r.c);
   for (let i = 0; i < idx.length; i++) {
@@ -746,6 +782,8 @@ async function runDaily(env, { force = false } = {}) {
       c: +r.c.toFixed(2),
       m: m != null ? +m.toFixed(2) : (prev ? prev.m : null),
       b: bondByDate.has(r.d) ? +bondByDate.get(r.d).toFixed(4) : (prev ? prev.b : null),
+      p: pxByDate.has(r.d) ? +pxByDate.get(r.d).toFixed(2) : (prev && prev.p != null ? prev.p : null),
+      y: yByDate.has(r.d) ? +yByDate.get(r.d).toFixed(4) : (prev && prev.y != null ? prev.y : null),
     });
   }
   const rows = [...known.values()].sort((a, b2) => (a.d < b2.d ? -1 : 1));
@@ -791,9 +829,20 @@ async function runDaily(env, { force = false } = {}) {
     tier = p.tierTo;
   }
 
+  // ---- 闸门：红利偏贵（利差跌破上膛线）又跌破年线时，买入信号不执行 ----
+  const gate = gateState(rows, today);
+
   // ---- 今日信号 → 明日挂单 ----
   const sig = signal(close, ma30);
-  const want = nextTier(tier, sig);
+  let want = nextTier(tier, sig);
+  // 被拦下的买入不进账本、不出挂单，只记进 gatelog（面板据此出横幅）和当天的 audit
+  const blocked = want > tier && gateBlocks(sig, tier, gate)
+    ? {
+      signalDate: today, tierFrom: tier, tierTo: want, close: +close.toFixed(2),
+      ma250: +gate.ma250.toFixed(2), dy: +gate.dy.toFixed(6), y10: +gate.y10.toFixed(6), spread: +gate.spread.toFixed(6),
+    }
+    : null;
+  if (blocked) want = tier;
   const pending = want !== tier
     ? { signalDate: today, tierFrom: tier, tierTo: want, side: want > tier ? 'BUY' : 'SELL' }
     : null;
@@ -813,6 +862,16 @@ async function runDaily(env, { force = false } = {}) {
     id: 10, name: '交易记录前后连得上', ok: audit.length === 0,
     detail: audit.length ? audit.slice(0, 3).map((a) => a.msg).join('；') : `${ledger.entries.length} 笔全部自洽`,
     fatal: true,
+  });
+
+  // 11 闸门的数据：非致命。不行时闸门按「未上膛」放行，主策略照常 —— 但必须说出来
+  checks.push({
+    id: 11, name: '闸门要用的数据是新的', ok: !!(gate && gate.dataOk),
+    detail: !gate ? '没有行情'
+      : !gate.dataOk ? `${gate.problem}，闸门暂按未上膛处理`
+        : `价格指数 ${gate.pDate}、10 年国债 ${gate.yDate}（${(gate.y10 * 100).toFixed(2)}%）`
+          + `　股息率 ${(gate.dy * 100).toFixed(2)}%，利差 ${(gate.spread * 100).toFixed(2)}%`,
+    fatal: false,
   });
 
   const fatal = checks.filter((c) => !c.ok && c.fatal);
@@ -872,6 +931,17 @@ async function runDaily(env, { force = false } = {}) {
       ranAt: beijingStamp(),
     },
     lastExecuted: executed ? { date: executed.date, side: executed.side, tierTo: executed.tierTo } : state.lastExecuted || null,
+    // 闸门这一天的状态（只有指数层面的数，没有金额）。blocked 只在这一天拦下了买入时才有
+    gate: gate ? {
+      asof: gate.asof, close: +gate.close.toFixed(2), active: gate.active, dataOk: gate.dataOk, problem: gate.problem,
+      armed: gate.armed, memArmed: gate.memArmed, below: gate.below, blocking: gate.blocking,
+      ma250: gate.ma250 != null ? +gate.ma250.toFixed(2) : null,
+      dy: gate.dy != null ? +gate.dy.toFixed(6) : null,
+      y10: gate.y10 != null ? +gate.y10.toFixed(6) : null,
+      spread: gate.spread != null ? +gate.spread.toFixed(6) : null,
+      pDate: gate.pDate, yDate: gate.yDate, staleP: gate.staleP, staleY: gate.staleY,
+      blocked,
+    } : null,
     // 占位：本次推送结果由下面那次提交回填。
     // 同时把上一次的结果带上 —— 万一回填没跑成，至少还留着上一次的痕迹，
     // 面板据此能说出「昨晚那次推送没有记录成功」。
@@ -893,16 +963,23 @@ async function runDaily(env, { force = false } = {}) {
         timing: { ...steps, 数据就绪: Date.now() - t0 },
         cleaning: { rawCount: idxRes.rawCount, removed },
         rawTail: idx.slice(-5), etf, ma30: +ma30.toFixed(4), signal: sig,
-        tierBefore: state.tier, tierAfter: tier, pending, executed, log,
+        tierBefore: state.tier, tierAfter: tier, pending, executed, gate: newState.gate, log,
       }, null, 2),
     },
   ];
   if (executed) files.push({ path: 'data/ledger.json', content: JSON.stringify(ledger, null, 2) });
+  // 被闸门拦下的买入记一笔：它不进账本（没有成交），但要留痕 —— 面板靠它出横幅，事后也查得到
+  if (blocked) {
+    const glog = await G.readJSON('data/gatelog.json', { schema: 1, entries: [] });
+    glog.entries = (glog.entries || []).filter((e) => e.signalDate !== today).concat([blocked]);
+    files.push({ path: 'data/gatelog.json', content: JSON.stringify(glog, null, 2) });
+  }
 
   const msg = executed
     ? `${today} 成交 ${executed.side === 'BUY' ? '买入' : '卖出'} 至 ${posPct(executed.tierTo)}`
     : pending ? `${today} 出信号 ${pending.side === 'BUY' ? '买入' : '卖出'} → ${execDay || '下一交易日'} 执行`
-      : `${today} 无操作`;
+      : blocked ? `${today} 买入信号被闸门拦下`
+        : `${today} 无操作`;
   const sha = await timed('提交', G.commit(files, `chore(daily): ${msg}`));
 
   // ---- 推送 ----
@@ -937,6 +1014,7 @@ async function runDaily(env, { force = false } = {}) {
     planned: plan ? { side: plan.side, targetWeight: plan.targetWeight, hasShares: plan.shares != null } : null,
     // 只说算没算出来，不带金额
     cashPlan: cash ? (cash.error ? 'error' : 'ok') : 'off',
+    gate: gate ? { dataOk: gate.dataOk, armed: gate.armed, blocking: gate.blocking, blocked: !!blocked } : null,
   };
 }
 
@@ -986,6 +1064,11 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       + `${executed.side === 'BUY' ? '买入' : '卖出'}，仓位 ${posPct(executed.tierFrom)}→${posPct(executed.tierTo)}`
       + `${executed.late ? '（迟到执行）' : ''}`
     : '';
+  // 闸门：每天一行状态；拦下买入的那天单独成一条，和买卖提醒同一级别（会响铃）——
+  // 不然你看见指数跌破了买入线，很可能照习惯去下单
+  const g = newState.gate || null;
+  const gLine = g ? `\n${gateLine(g, today)}` : '';
+  const gBlocked = g && g.blocked && g.blocked.signalDate === today ? g.blocked : null;
 
   if (pending) {
     // 方向以公式实际算出来的为准，不按档位方向假设
@@ -1003,7 +1086,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
         + `\n${w.long}`
         + `\n${CLOSE_TIP}`
         + cashBlock(cash, today)
-        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${doneLine}${warn}${missed}${resentLine}`,
+        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${gLine}${doneLine}${warn}${missed}${resentLine}`,
       level: 'timeSensitive',
       group: '红利MA30·操作',
     });
@@ -1036,19 +1119,25 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
     const cashTxt = cashBlock(cash, today);
     const due = cashDueOn(cash, execDay);
     const cashDue = due.length > 0;
-    const title = cashDue
-      ? `💰 ${nd.md} 15:00 前${cashDueText(due)}`
-      : executed
-        ? `✅ ${td.md}已成交　仓位 ${posPct(newState.tier)}`
-        : `红利MA30 · ${td.md}无操作　仓位 ${posPct(newState.tier)}`;
+    const title = gBlocked
+      ? `⛔ ${td.md}买入信号被闸门拦下　仓位仍 ${posPct(newState.tier)}`
+      : cashDue
+        ? `💰 ${nd.md} 15:00 前${cashDueText(due)}`
+        : executed
+          ? `✅ ${td.md}已成交　仓位 ${posPct(newState.tier)}`
+          : `红利MA30 · ${td.md}无操作　仓位 ${posPct(newState.tier)}`;
     const idle = cashDue ? '不用买卖红利 ETF' : '无需操作';
     const nextLine = nd
       ? `\n${nd.label}${idle}`
       : `\n${NO_EXEC_DATE}${idle}`;
+    const body = gBlocked
+      ? `${gateBlockedText(gBlocked, execDay, today)}${nextLine}`
+        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${cashTxt}${doneLine}${warn}${missed}${resentLine}`
+      : `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${gLine}${cashTxt}${doneLine}${warn}${missed}${resentLine}`;
     await bark(env, {
       title,
-      body: `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${cashTxt}${doneLine}${warn}${missed}${resentLine}`,
-      ...(cashDue ? { level: 'timeSensitive', group: '红利MA30·操作' } : { level: 'passive' }),
+      body,
+      ...(gBlocked || cashDue ? { level: 'timeSensitive', group: '红利MA30·操作' } : { level: 'passive' }),
     });
   }
   if (late && executed) {

@@ -210,6 +210,14 @@ tr:last-child td{border-bottom:none}
 .ct small{display:block;font-size:11px;color:var(--dm);margin:4px 0 0;line-height:1.45}
 .cashtot{font-size:12.5px;color:var(--dm);margin:10px 0 0;text-align:right}
 .cashtot b{font-family:var(--mono);color:var(--tx)}
+
+/* 闸门 —— 红利偏贵又跌破年线时，买入信号不执行 */
+.gatecard{border-left:7px solid var(--dn)}
+.gatecard.warn{border-left-color:var(--warn)}
+.gatecard.act{border-left-color:var(--up)}
+.gateline{font-size:13.5px;line-height:1.65;margin:10px 0 0}
+.bn.gate{background:#5B4B8A;box-shadow:0 6px 24px rgba(91,75,138,.30)}
+.bn.gate button{color:#5B4B8A}
 @media (max-width:520px){.card,#nextCard{padding:17px 16px}.big{font-size:27px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -277,6 +285,17 @@ tr:last-child td{border-bottom:none}
         <p class="sm" id="maSub">–</p>
       </div>
     </div>
+  </div>
+
+  <!-- 闸门：利差跌破 −0.25% 上膛（回到 +0.25% 以上解除），上膛时收盘又在年线下，买入信号不执行。见 shared/strategy.js 的 gateState -->
+  <div class="card cashcard gatecard" id="gateCard">
+    <div class="cashhead">
+      <p class="k">闸门</p>
+      <span class="cstat" id="gateStat">–</span>
+    </div>
+    <p class="gateline" id="gateLine">–</p>
+    <div class="cashgrid" id="gateGrid"></div>
+    <details class="how"><summary>这是怎么运作的</summary><div class="body note" id="gateNote"></div></details>
   </div>
 
   <div class="card">
@@ -359,10 +378,10 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = 'dab7a400c7';
+const CORE_VERSION = 'f8ec4d316c';
 const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries, validateState,
         nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct, WEIGHTS, COMMISSION,
-        cashPlan, cashPlanLines }
+        cashPlan, cashPlanLines, gateState, gateLine, gateBlockedText }
   = await import(`./shared/strategy.js?v=${CORE_VERSION}`);
 
 const $ = (id) => document.getElementById(id);
@@ -463,7 +482,9 @@ async function load() {
   }
   // 闲钱规则（缓冲垫比例、起用日）。404 就当没开这个功能，页面其余部分照旧
   const cashcfg = await fetch('./data/cashplan.json' + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  S = { state, ledger, series, cal: [], cashcfg };
+  // 被闸门拦下的买入（不进账本，单独记一份）。404 就是一次都没拦过
+  const gatelog = await fetch('./data/gatelog.json' + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  S = { state, ledger, series, cal: [], cashcfg, gatelog: gatelog || { entries: [] } };
   // 交易日历用来把「下一个交易日」算成具体日期（周五出信号要到下周一）
   // 次年日历只在临近年底才取：平时它必然 404，白发一次请求还在控制台留红字
   const nearYearEnd = +state.asof.slice(5, 7) >= 11;
@@ -655,6 +676,61 @@ function renderCash(M) {
 
 // 距离触发还有多远 —— 逻辑在 shared/strategy.js，受回归测试覆盖
 const nextMove = () => nextMoveFn(S.state.index, S.state.tier, S.state.pending);
+
+/**
+ * 闸门这一天的状态。优先用 Worker 当晚写进 state.json 的那份 —— 推送里说的就是它；
+ * 新版 Worker 还没跑过（state 里还没有 gate）时，用同一个函数从行情现算，两边一个算法。
+ */
+function gateNow() {
+  const g = S.state.gate;
+  if (g && g.asof === S.state.asof) return g;
+  const local = gateState(S.series.rows || [], S.state.asof);
+  return local ? { ...local, blocked: null, local: true } : null;
+}
+/** 最近一次运行拦下的那笔买入（只认数据日当天的） */
+function gateBlockedNow() {
+  const g = S.state.gate;
+  return g && g.blocked && g.blocked.signalDate === S.state.asof ? g.blocked : null;
+}
+
+function renderGate() {
+  const card = $('gateCard'), stat = $('gateStat');
+  const g = gateNow();
+  card.classList.remove('ok', 'warn', 'act');
+  const today = bjToday();
+  $('gateLine').textContent = gateLine(g, today);
+  if (!g) { stat.textContent = '算不出'; stat.className = 'cstat warn'; card.classList.add('warn'); $('gateGrid').innerHTML = ''; return; }
+  const [label, cls] = !g.dataOk ? ['数据异常', 'warn'] : !g.armed ? ['未上膛', 'ok'] : g.below ? ['拦截中', 'act'] : ['已上膛', 'warn'];
+  stat.textContent = label;
+  stat.className = `cstat ${cls}`;
+  card.classList.add(cls);
+  const p2 = (x) => (isFinite(x) && x !== null ? `${(x * 100).toFixed(2)}%` : '–');
+  const s2 = (x) => (isFinite(x) && x !== null ? `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(2)}%` : '–');
+  const away = isFinite(g.ma250) && g.ma250 ? (g.close / g.ma250 - 1) * 100 : null;
+  const tile = (name, val, note) => `<div class="ct"><span class="cl">${name}</span><b class="ca">${val}</b><small>${note}</small></div>`;
+  $('gateGrid').innerHTML = [
+    tile('股息率（过去 12 个月）', p2(g.dy), g.pDate ? `按 ${md(g.pDate)}的价格指数算` : '还没有价格指数'),
+    tile('10 年国债收益率', p2(g.y10), g.yDate ? `${md(g.yDate)}（中债）` : '还没有数据'),
+    tile('利差', s2(g.spread), g.armed ? '回到 +0.25% 以上才解除' : '跌破 −0.25% 才上膛'),
+    tile('年线（250 日均线）', isFinite(g.ma250) && g.ma250 ? int(g.ma250) : '–',
+      away === null ? '' : `${md(g.asof)}收盘在它${away < 0 ? '下方' : '上方'} ${Math.abs(away).toFixed(1)}%`),
+  ].join('');
+  $('gateNote').innerHTML =
+    '<b>规则：</b>红利变贵（股息率减 10 年国债收益率的利差跌破 −0.25%）就「上膛」，利差回到 +0.25% 以上才解除；'
+    + '上膛期间，只要收盘在年线（最近 250 个交易日的平均）之下，这一天出现的买入信号就不执行。卖出信号任何时候都照常。'
+    + '被拦下的买入不进交易记录，会单独出一条紫色横幅告诉你不用操作。'
+    + '<br><b>为什么：</b>MA30 分档在「跌了会弹回来」的行情里赚钱，在不给像样反弹的慢熊里会一路加满仓、跟着跌。'
+    + '2005 年以来伤到这套规则的慢熊（2008 年、2010–2012 年），起点都是红利比国债还贵的时候。'
+    + '<br><b>回测（2005–2026 年，中证红利）：</b>一共拦过 13 段，最近一次处于上膛是 2019 年 5 月；'
+    + '2008 年那段把 −47.5% 保成了 −3.3%。2005 年以来年化从 4.4% 提到 8.1%，最大回撤从 −64.7% 收窄到 −38.5%。'
+    + '近十年拦过 2 段（2016 年 1 月、2018 年 6 月），都帮了忙，但那两次利差恰好在 0 附近，算运气。'
+    + '<br><b>管不住的：</b>大跌的第一段（指数还没跌破年线，2008 年那 −38.5% 就是这么来的）；'
+    + '「便宜但越来越差」的慢熊（利差一直是正的，闸门不会上膛）。'
+    + '<br><b>数据：</b>股息率用全收益指数 H00922 和价格指数 000922 的差推算 —— 过去 250 个交易日指数实际收到的分红，除以当前点位；'
+    + '10 年国债收益率取中债口径（东方财富数据中心）。某样数据取不到时沿用最近一次的值；'
+    + '连续 5 个交易日都取不到，按「未上膛」处理，买入照常，并在推送里告警。'
+    + (g.local ? `<br><b>注意：</b>这里的数是页面按行情现算的；${md(S.state.asof)}之后的第一次运行起，改为显示系统当晚算定的那份。` : '');
+}
 
 /**
  * 实盘是否落后于账本。
@@ -898,8 +974,25 @@ function renderNext(behind) {
           + (ex.L.diff > 1 ? `，距今 ${ex.L.diff} 天，中间的休市日不用操作` : '')
           : '　·　交易日历暂时取不到，给不出执行日期')
       + `<br>${CLOSE_TIP}`;
+  } else if (gateBlockedNow()) {
+    // 收盘跌破了买入线、却没有待执行的操作 —— 是闸门拦下的，不是系统没跑完
+    const b = gateBlockedNow();
+    const nx = nextTradingDay(S.cal, st.asof);
+    $('nextLine').innerHTML = `${dl(st.asof)}的买入信号被闸门拦下，<b>不用操作</b>`;
+    $('nextSub').innerHTML = gateBlockedText(b, nx, bjToday())
+      + (nx ? `<br>${dl(nx)}不用买入。之后每天照常判断：闸门解除、或收盘回到年线上方，买入信号就恢复执行。`
+        : '<br>之后每天照常判断（交易日历暂时取不到，给不出具体日期）。')
+      + otherSide('buy', tier, i)
+      + '<br>详见下方「闸门」。';
   } else if (mv.kind === 'buy') {
     card.classList.add('buy');
+    // 闸门上膛时，跌到买入线不一定会买 —— 先说清楚，免得到时候以为系统坏了
+    const g = gateNow();
+    const gNote = g && g.dataOk && g.armed
+      ? (g.below
+        ? `<br><b>⛔ 闸门正在拦截</b>：收盘在年线（${int(g.ma250)}）之下，这时出现的买入信号不会执行。详见下方「闸门」。`
+        : `<br><b>⛔ 闸门已上膛</b>：跌到 ${int(mv.target)} 时，收盘若也在年线（${int(g.ma250)}）之下，这笔买入不会执行。详见下方「闸门」。`)
+      : '';
     if (mv.need <= 0) {
       $('nextLine').innerHTML = `${dl(st.asof)}收盘已跌破买入线，<b style="color:var(--up)">但系统还没记下这笔操作</b>`;
       $('nextSub').innerHTML = `${md(st.asof)}（${wd(st.asof)}）收盘 <b>${int(i.close)}</b> 已在买入线 <b>${int(i.buyTrigger)}</b> 之下`
@@ -908,6 +1001,7 @@ function renderNext(behind) {
     } else {
       $('nextLine').innerHTML = `距离下一次买入，还需中证红利<b style="color:var(--up)">跌 ${mv.need.toFixed(2)}%</b>`;
       $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　买入第 <b>${tier + 1}</b> 份（仓位 ${posPct(tier)} → ${posPct(tier + 1)}）`
+        + gNote
         + otherSide('buy', tier, i)
         + howItWorks(st, i);
     }
@@ -984,8 +1078,9 @@ function renderBanner(behind) {
     hist.push({ type: 'trade', key: e.signalDate, signalDate: e.signalDate, tierFrom: e.tierFrom, tierTo: e.tierTo, date: e.date, done: true, sortDate: e.date });
   }
   hist.push(...cash.filter((c) => c.done));
+  hist.push(...gateItems());
   // 同一天先说买卖红利、再说申赎 —— 申赎是跟着买卖走的
-  const rank = { trade: 0, cash: 1, catchup: 2 };
+  const rank = { trade: 0, cash: 1, catchup: 2, gate: 3 };
   hist.sort((a, b) => (a.sortDate > b.sortDate ? -1 : a.sortDate < b.sortDate ? 1 : rank[a.type] - rank[b.type]));
   items.push(...hist);
 
@@ -1054,6 +1149,7 @@ function pushNotice(built, title, what, err) {
 function oneBanner(item, M) {
   if (item.type === 'cash') return oneCashBanner(item);
   if (item.type === 'catchup') return oneCatchupBanner(item);
+  if (item.type === 'gate') return oneGateBanner(item);
   const st = S.state;
   const buy = item.tierTo > item.tierFrom;
   const share = buy ? item.tierTo : item.tierFrom;
@@ -1268,6 +1364,32 @@ function oneCatchupBanner(item) {
     '我做了', () => { LS.set(`ack.${item.key}`, true); renderInputDependent(); });
 }
 
+/**
+ * 被闸门拦下的买入。它不进账本、不用你做任何事 —— 但你多半看见了指数跌破买入线，
+ * 不说一声的话很可能照习惯去下单。撑到你点「知道了」为止（永久收起）。
+ * 来源是 data/gatelog.json；当晚那笔要是还没进 gatelog（取文件失败），就从 state.json 补上。
+ */
+function gateItems() {
+  const seen = new Set(), out = [];
+  const add = (b) => {
+    if (!b || !b.signalDate || seen.has(b.signalDate)) return;
+    seen.add(b.signalDate);
+    out.push({ ...b, type: 'gate', key: `gate:${b.signalDate}`, date: b.signalDate, done: true, sortDate: b.signalDate });
+  };
+  for (const b of (S.gatelog && S.gatelog.entries) || []) add(b);
+  add(gateBlockedNow());
+  return out;
+}
+
+function oneGateBanner(item) {
+  const nx = nextTradingDay(S.cal, item.date);
+  return bannerShell('bn gate', `闸门 · ${dl(item.date)}收盘跌破买入线`,
+    `买入第 ${item.tierTo} 份被闸门拦下　不用操作`,
+    gateBlockedText(item, nx, bjToday())
+      + '<br>这条只是告诉你：系统没有记这笔买入，你也不用去券商下单。点「知道了」收起。规则见下方「闸门」。',
+    '知道了', () => { LS.set(`ack.${item.key}`, true); renderInputDependent(); });
+}
+
 /** 攒太多时的汇总条 —— 可以一次确认掉，但绝不替你悄悄收起 */
 function rollupBanner(rest) {
   const bn = document.createElement('div');
@@ -1279,7 +1401,8 @@ function rollupBanner(rest) {
   const sub = document.createElement('p'); sub.className = 'bs';
   const what = (r) => (r.type === 'cash' ? `${dayLabel(r.day, bjToday()).md}${r.kind === 'SUBSCRIBE' ? '申购' : '赎回'}交银稳利`
     : r.type === 'catchup' ? `${dayLabel(r.date, bjToday()).md}补买红利`
-      : `${dayLabel(r.date || r.signalDate, bjToday()).md}${r.tierTo > r.tierFrom ? '买入' : '卖出'}红利`);
+      : r.type === 'gate' ? `${dayLabel(r.date, bjToday()).md}买入信号被闸门拦下（不用操作）`
+        : `${dayLabel(r.date || r.signalDate, bjToday()).md}${r.tierTo > r.tierFrom ? '买入' : '卖出'}红利`);
   const days = rest.map(what).join('、');
   kick.textContent = '更早的操作';
   text.textContent = `还有 ${rest.length} 笔没确认`;
@@ -1372,6 +1495,7 @@ function render() {
   renderInputDependent();
 
   renderCash(M);
+  renderGate();
   renderLedger(M);
   buildRanges();
   renderHealth();
@@ -1986,6 +2110,7 @@ function renderHealth() {
     6: '没有异常的单日暴涨暴跌（超过 ±11% 视为数据出错）',
     7: '算均线要的 30 天行情是齐的', 8: 'ETF 报价和指数是同一天的',
     9: '当前仓位和交易记录对得上', 10: '交易记录前后连得上',
+    11: '闸门要用的数据是新的',
   };
   const failedIds = new Set(failed.map((f) => f.id));
   $('checks').innerHTML = Object.entries(names).map(([id, nm]) => {
@@ -2001,6 +2126,7 @@ function renderHealth() {
     + (push ? `　推送 <b style="color:${push.ok ? 'var(--dn)' : 'var(--up)'}">${push.ok ? '已送达' : '失败'}</b>。` : '')
     + `　行情 ${S.series.rows.length} 个交易日。`
     + `<br>信号源 中证指数 H00922（全收益）／ 闲钱基准 ${S.state.bond?.name || '交银稳利中短债债券A'}（${S.state.bond?.code || '008204'}）累计净值 ／ 交易日历 深交所官方接口 ／ ETF 报价 ${S.state.etf?.code || '—'}。`
+    + '<br>闸门数据 中证红利价格指数 000922（和全收益指数的差就是分红，用来推算股息率）／ 10 年期国债收益率 中债口径（东方财富数据中心）。'
     + `<br><b>MA30 由本系统计算，不是抓来的</b>：中证接口只提供收盘价，均线是取最近 30 个交易日收盘价的算术平均`
     + `（含当日）实时算出。图上和这里显示的均线保留两位小数，但<b>判断买卖信号时用的是不经舍入的完整精度值</b>。`
     + `<br>账本记的是<b>理论值</b>：买了红利的那部分按全收益指数算，还没买红利的钱按交银稳利的累计净值算。实盘会有跟踪误差和税费，通常略低于这里显示的数字。`;

@@ -75,12 +75,21 @@ function relativeOffenders(text) {
 /* ---------------- 共享测试台 ---------------- */
 // DOM 假件、抠模块、造场景的工具都在 harness.mjs 里，和 calculator.mjs 共用。
 // 别在这里再写一份 —— 两份迟早分家（calc 曾经因此一直拿 0 在算）。
-import { H, el, store, ROOT, CAL, TODAY, CORE, put, at, pend, SIG, fractionsIn, banners } from './harness.mjs';
+import { H, el, store, ROOT, CAL, TODAY, CORE, put, at, pend, SIG, fractionsIn, banners, BASE } from './harness.mjs';
 
 const S_pendingNow = () => !!(H && H.S && H.S.state && H.S.state.pending);
 
 /* ---------------- 场景表 ---------------- */
 const M = 6000;
+/** 闸门的几种状态（指数点位跟着场景走：收盘 close，年线在它上方或下方 2%） */
+const G = (close, { armed = true, below = true, dataOk = true, blocked = null } = {}) => ({
+  asof: BASE.asof, close, active: true, dataOk, problem: dataOk ? null : '10 年国债收益率已连续 5 个交易日没取到',
+  armed: dataOk && armed, memArmed: armed, below, blocking: dataOk && armed && below,
+  // 没上膛时利差得在 −0.25% 上方，否则自相矛盾（真实运行里跌破 −0.25% 当天就上膛了）
+  ma250: below ? close * 1.02 : close * 0.98, dy: armed ? 0.031 : 0.039, y10: 0.034, spread: armed ? -0.003 : 0.005,
+  pDate: BASE.asof, yDate: BASE.asof, staleP: 0, staleY: 0, blocked,
+});
+const GB = (close) => ({ signalDate: BASE.asof, tierFrom: 0, tierTo: 1, close, ma250: close * 1.02, dy: 0.031, y10: 0.034, spread: -0.003 });
 const SCEN = [
   ['空仓等待买入', { tier: 0, index: at(M, M) }],
   ['半仓等待（买卖都还远）', { tier: 2, index: at(M, M) }],
@@ -100,6 +109,12 @@ const SCEN = [
   }],
   ['实盘超前·账本里没有对应记录', { tier: 0, index: at(M, M), calc: { cash: 500000, hold: 500000 }, chain: [] }],
   ['挂单在身·实盘还落后', { tier: 2, pending: pend(SIG.today, 2, 3), index: at(M, M * 0.96), calc: { cash: 1000000, hold: 0 } }],
+  ['闸门已上膛·收盘还在年线上方', { tier: 0, index: at(M, M), chain: [], gate: G(M, { below: false }) }],
+  ['闸门正在拦截·还没出买入信号', { tier: 0, index: at(M, M * 0.99), chain: [], gate: G(M * 0.99) }],
+  ['闸门拦下了买入', { tier: 0, index: at(M, M * 0.96), chain: [], gate: G(M * 0.96, { blocked: GB(M * 0.96) }) }],
+  ['闸门数据异常·按未上膛放行', { tier: 0, index: at(M, M), chain: [], gate: G(M, { dataOk: false }) }],
+  ['闸门拦过一笔·旧的还没点', { tier: 0, index: at(M, M), chain: [], gate: G(M, { armed: false, below: false }),
+    gatelog: { entries: [{ ...GB(M * 0.95), signalDate: SIG.past }] } }],
 ];
 
 /* ---------------- 跑 + 断言 ---------------- */
@@ -108,8 +123,11 @@ store.set('hlma30.principal', '1000000');
 for (const [name, over] of SCEN) {
   put(over);
   H.renderInputDependent();
+  H.renderGate();
   const line = el('nextLine').textContent.trim();
   const sub = el('nextSub').textContent.trim();
+  // 闸门卡片也过一遍同样的规矩（每个场景都有它：没给闸门状态时页面按行情现算）
+  const gcard = `${el('gateStat').textContent}｜${el('gateLine').textContent}｜${el('gateGrid').textContent}｜${el('gateNote').textContent}`;
   const bs = banners();
   const on = bs.length > 0;
   const kick = bs.map((b) => b.kick).join(' ∥ ');
@@ -117,7 +135,7 @@ for (const [name, over] of SCEN) {
   const bsub = bs.map((b) => b.sub).join(' ∥ ');
   const behind = H.behindState();
   // 时点、方向只和买卖红利那几条比；资金上的申赎横幅说的是另一件事（措辞照样全部受检）
-  const tb = bs.filter((b) => !b.cash && !b.catchup);
+  const tb = bs.filter((b) => !b.cash && !b.catchup && !b.gate);
   const tkick = tb.map((b) => b.kick).join(' ∥ ');
   const tbtxt = tb.map((b) => b.text).join(' ∥ ');
 
@@ -126,7 +144,8 @@ for (const [name, over] of SCEN) {
   console.log(`  副行  ${sub}`);
   if (on) { console.log(`  横幅  ${kick}`); console.log(`        ${btxt}`); console.log(`        ${bsub}`); }
 
-  const all = `${line}｜${sub}｜${on ? kick + btxt + bsub : ''}`;
+  if (over.gate || over.gatelog) console.log(`  闸门  ${el('gateStat').textContent}｜${el('gateLine').textContent}`);
+  const all = `${line}｜${sub}｜${on ? kick + btxt + bsub : ''}｜${gcard}`;
   if (!line) bad(`${name}：卡片主行是空的`);
   for (const junk of ['undefined', 'NaN', 'null', 'Infinity', '[object']) {
     if (all.includes(junk)) bad(`${name}：文案里漏出了 ${junk}`);
