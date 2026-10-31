@@ -889,3 +889,102 @@ export function gateBlockedText(b, execDay, today) {
     + `利差 ${s2(b.spread)}（股息率 ${p2(b.dy)} − 10 年国债 ${p2(b.y10)}）已跌破上膛线 —— 红利偏贵又跌破年线，闸门拦下了这笔买入。`
     + `账本不会记它，仓位仍是 ${posPct(b.tierFrom)}。`;
 }
+
+/* ======================================================================
+ * 追高线：收盘比年线高出 3% 以上时，不执行买入信号
+ *
+ * 熊市的第一段常常是这样：大盘已经在跌，红利还停在年线上方很远的地方，
+ * 第一次回调就触发了买入，买完才开始补跌（2007 年 10 月、2008 年 1 月、2015 年 6 月）。
+ * 闸门只在年线下方出手，管不到这一段；追高线只管这一件事：
+ *
+ *   年线    H00922 最近 250 个交易日收盘价的算术平均（含当日），和闸门同一条
+ *   追高线  年线 × 1.03
+ *   拦截    当天收盘在追高线上方：这一天出现的买入信号不执行；卖出信号任何时候都不受影响
+ *
+ * 行情不足 250 个交易日、或窗口里有收盘价缺失，算不出年线时放行（买入照常）。
+ * 不存任何可变状态，和闸门一样每次从行情现算。
+ *
+ * 熊市回测（中证红利，2007–2026 年沪深300 跌 20% 进、反弹 30% 出的 8 段熊市，
+ * 每段从空仓起跑、算到低点，叠加在闸门之上）：
+ *   更早五段（2007–2015）  从高点起跑 −38.8% → −14.7%；跌满 20% 才起跑 −22.9% → −18.4%；
+ *                          最深回撤 −38.5% / −35.8% → −15.1%
+ *   近十年三段              从高点起跑 +80.2% → +86.9%；跌满 20% 才起跑 +56.6% → +56.4%
+ * 阈值取 2%–6%、年线取 200 / 250 / 300 日、窗口前后挪动，结论方向都不变；上证红利上效果更强。
+ * 它挡掉的历史买入一共 42 档、12 段行情，平均每档 −1.9%，赚钱的只有 15 档。
+ *
+ * 它管不住、甚至帮倒忙的：急跌后快速反弹（2009 年 8 月暴跌后那次反弹它没买，
+ * 等回到年线附近才买，反而多亏）；年线下方接飞刀（2008 年底、2010–2012 年慢熊、
+ * 2016 年 1 月）。价值几乎都来自 2008 年那一类熊市 —— 它是防大亏的保险，不是多赚的办法。
+ * ====================================================================== */
+export const CHASE = {
+  maLen: 250,               // 年线
+  above: 0.03,              // 比年线高出这么多就不追
+  startDate: '2026-11-02',  // 从这一天起拦截（之前的账本不受影响）
+};
+
+/**
+ * 追高线在某一天的状态。rows 为升序 [{d, c}]，c 是 H00922 收盘；upto 给定时只看这一天及以前。
+ *
+ * @returns {null|{asof:string, close:number|null, ma250:number|null, line:number|null, dev:number|null,
+ *   ok:boolean, problem:string|null, above:boolean, active:boolean, blocking:boolean}}
+ *   line 是追高线（年线 × 1.03）；dev 是收盘相对年线的偏离（0.0275 表示高 2.75%）；
+ *   ok 为 false 时一律放行；active 为 false 表示还没到起用日 —— 照算照显示，只是不拦。
+ */
+export function chaseState(rows, upto = null) {
+  const rs = (rows || []).filter((r) => r && (upto == null || r.d <= upto));
+  const n = rs.length;
+  if (!n) return null;
+  const good = (v) => typeof v === 'number' && isFinite(v) && v > 0;
+  const last = rs[n - 1];
+  let ma250 = null, problem = null;
+  if (!good(last.c)) problem = '当天的收盘价取不到，算不出位置';
+  else if (n < CHASE.maLen) problem = `行情不足 ${CHASE.maLen} 个交易日，算不出年线`;
+  else {
+    let s = 0;
+    for (let i = n - CHASE.maLen; i < n; i++) {
+      if (!good(rs[i].c)) { problem = `最近 ${CHASE.maLen} 个交易日里有收盘价缺失，算不出年线`; break; }
+      s += rs[i].c;
+    }
+    if (!problem) ma250 = s / CHASE.maLen;
+  }
+  const ok = !problem;
+  const line = ok ? ma250 * (1 + CHASE.above) : null;
+  const above = ok && last.c > line;
+  const active = last.d >= CHASE.startDate;
+  return {
+    asof: last.d, close: good(last.c) ? last.c : null, ma250, line,
+    dev: ok ? last.c / ma250 - 1 : null,
+    ok, problem, above, active, blocking: active && above,
+  };
+}
+
+/** 追高线拦不拦这一天的信号：只拦买入，卖出任何时候都放行 */
+export function chaseBlocks(sig, tier, ch) {
+  return sig === 'BUY' && tier < MAX_TIER && !!ch && ch.blocking === true;
+}
+
+/**
+ * 追高线状态说成一行人话。推送和面板共用这一份，两边一字不差。
+ */
+export function chaseLine(ch, today) {
+  if (!ch) return '追高线：没有行情，算不出状态';
+  if (!ch.ok) return `⚠️ 追高线：${ch.problem}，暂不拦截，买入照常执行`;
+  const int = (x) => Math.round(x).toLocaleString('en-US');
+  const pos = `收盘比年线（${int(ch.ma250)}）${ch.dev >= 0 ? '高' : '低'} ${Math.abs(ch.dev * 100).toFixed(1)}%`;
+  const when = ch.active ? '' : `；${dayLabel(CHASE.startDate, today).md}起生效`;
+  if (!ch.above) return `追高线 ${int(ch.line)}（年线 × 1.03）：${pos}，在线下方，买入信号照常执行${when}`;
+  return `追高线 ${int(ch.line)}（年线 × 1.03）：${pos}，已在线上方，这时出现的买入信号不会执行${when}`;
+}
+
+/**
+ * 一笔被追高线拦下的买入，说成人话（推送正文、面板横幅共用）。
+ * b = { signalDate, tierFrom, tierTo, close, ma250, line }
+ * execDay 是按原规则本该执行的那天（取不到就传 null）。
+ */
+export function chaseBlockedText(b, execDay, today) {
+  const int = (x) => Math.round(x).toLocaleString('en-US');
+  const when = execDay ? `会在 ${dayLabel(execDay, today).label}` : `会在${NO_EXEC_DATE}`;
+  return `${dayLabel(b.signalDate, today).label}收盘 ${int(b.close)} 跌破了买入线，按原规则${when}买入第 ${b.tierTo} 份；`
+    + `但收盘仍比年线（${int(b.ma250)}）高 ${((b.close / b.ma250 - 1) * 100).toFixed(1)}%，在追高线（${int(b.line)}）上方 —— `
+    + `离年线太远不追，追高线拦下了这笔买入。账本不会记它，仓位仍是 ${posPct(b.tierFrom)}。`;
+}

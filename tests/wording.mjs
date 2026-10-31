@@ -90,6 +90,15 @@ const G = (close, { armed = true, below = true, dataOk = true, blocked = null } 
   pDate: BASE.asof, yDate: BASE.asof, staleP: 0, staleY: 0, blocked,
 });
 const GB = (close) => ({ signalDate: BASE.asof, tierFrom: 0, tierTo: 1, close, ma250: close * 1.02, dy: 0.031, y10: 0.034, spread: -0.003 });
+/** 追高线的几种状态：默认收盘比年线高 1%（线下方）；above 时高 5%；给了 line 就按它定年线 */
+const C = (close, { above = false, ok = true, blocked = null, line = null } = {}) => {
+  const ma250 = ok ? (line ? line / 1.03 : close / (above ? 1.05 : 1.01)) : null;
+  const ln = ok ? ma250 * 1.03 : null;
+  const up = ok && close > ln;
+  return { asof: BASE.asof, close, ma250, line: ln, dev: ok ? close / ma250 - 1 : null, ok,
+    problem: ok ? null : '行情不足 250 个交易日，算不出年线', above: up, active: true, blocking: up, blocked };
+};
+const CB = (close) => ({ signalDate: BASE.asof, tierFrom: 0, tierTo: 1, close, ma250: close / 1.05, line: close / 1.05 * 1.03 });
 const SCEN = [
   ['空仓等待买入', { tier: 0, index: at(M, M) }],
   ['半仓等待（买卖都还远）', { tier: 2, index: at(M, M) }],
@@ -115,6 +124,12 @@ const SCEN = [
   ['闸门数据异常·按未上膛放行', { tier: 0, index: at(M, M), chain: [], gate: G(M, { dataOk: false }) }],
   ['闸门拦过一笔·旧的还没点', { tier: 0, index: at(M, M), chain: [], gate: G(M, { armed: false, below: false }),
     gatelog: { entries: [{ ...GB(M * 0.95), signalDate: SIG.past }] } }],
+  ['追高线拦下了买入', { tier: 0, index: at(M, M * 0.96), chain: [], chase: C(M * 0.96, { above: true, blocked: CB(M * 0.96) }) }],
+  ['追高线·买入线还在线上方', { tier: 0, index: at(M, M), chain: [], chase: C(M, { line: M * 0.9 }) }],
+  ['追高线·收盘已在线上方', { tier: 1, index: at(M, M), chain: [[40, 0, 1]], chase: C(M, { above: true }) }],
+  ['追高线算不出·放行', { tier: 0, index: at(M, M), chain: [], chase: C(M, { ok: false }) }],
+  ['追高线拦过一笔·旧的还没点', { tier: 0, index: at(M, M), chain: [], chase: C(M),
+    chaselog: { entries: [{ ...CB(M * 0.95), signalDate: SIG.past }] } }],
 ];
 
 /* ---------------- 跑 + 断言 ---------------- */
@@ -124,10 +139,13 @@ for (const [name, over] of SCEN) {
   put(over);
   H.renderInputDependent();
   H.renderGate();
+  H.renderChase();
   const line = el('nextLine').textContent.trim();
   const sub = el('nextSub').textContent.trim();
   // 闸门卡片也过一遍同样的规矩（每个场景都有它：没给闸门状态时页面按行情现算）
   const gcard = `${el('gateStat').textContent}｜${el('gateLine').textContent}｜${el('gateGrid').textContent}｜${el('gateNote').textContent}`;
+  // 追高线卡片同上
+  const ccard = `${el('chaseStat').textContent}｜${el('chaseLine').textContent}｜${el('chaseGrid').textContent}｜${el('chaseNote').textContent}`;
   const bs = banners();
   const on = bs.length > 0;
   const kick = bs.map((b) => b.kick).join(' ∥ ');
@@ -135,7 +153,7 @@ for (const [name, over] of SCEN) {
   const bsub = bs.map((b) => b.sub).join(' ∥ ');
   const behind = H.behindState();
   // 时点、方向只和买卖红利那几条比；资金上的申赎横幅说的是另一件事（措辞照样全部受检）
-  const tb = bs.filter((b) => !b.cash && !b.catchup && !b.gate);
+  const tb = bs.filter((b) => !b.cash && !b.catchup && !b.gate && !b.chase);
   const tkick = tb.map((b) => b.kick).join(' ∥ ');
   const tbtxt = tb.map((b) => b.text).join(' ∥ ');
 
@@ -145,7 +163,8 @@ for (const [name, over] of SCEN) {
   if (on) { console.log(`  横幅  ${kick}`); console.log(`        ${btxt}`); console.log(`        ${bsub}`); }
 
   if (over.gate || over.gatelog) console.log(`  闸门  ${el('gateStat').textContent}｜${el('gateLine').textContent}`);
-  const all = `${line}｜${sub}｜${on ? kick + btxt + bsub : ''}｜${gcard}`;
+  if (over.chase || over.chaselog) console.log(`  追高线 ${el('chaseStat').textContent}｜${el('chaseLine').textContent}`);
+  const all = `${line}｜${sub}｜${on ? kick + btxt + bsub : ''}｜${gcard}｜${ccard}`;
   if (!line) bad(`${name}：卡片主行是空的`);
   for (const junk of ['undefined', 'NaN', 'null', 'Infinity', '[object']) {
     if (all.includes(junk)) bad(`${name}：文案里漏出了 ${junk}`);

@@ -110,7 +110,7 @@ if (!m) { console.log('✗ index.html 里找不到 <script type="module">'); pro
 export const CORE_URL = pathToFileURL(join(ROOT, 'shared', 'strategy.js')).href;
 const src = m[1].replace('`./shared/strategy.js?v=', `\`${CORE_URL}?v=`)
   + '\nglobalThis.__H = { get S() { return S; }, set S(v) { S = v; },'
-  + ' renderInputDependent, render, renderGate, drawChart, load, execInfo, behindState, nextMove, calc, LS };\n';
+  + ' renderInputDependent, render, renderGate, renderChase, drawChart, load, execInfo, behindState, nextMove, calc, LS };\n';
 const tmp = join(tmpdir(), `hlma30-harness-${process.pid}.mjs`);
 writeFileSync(tmp, src, 'utf8');
 await import(pathToFileURL(tmp).href);
@@ -130,6 +130,7 @@ export const banners = () => el('banners').children.map((b) => ({
   cash: b.classes.has('cash'),         // 资金上的申赎（赎回 / 申购交银稳利）
   catchup: b.classes.has('catchup'),   // 缓冲垫不够、要补买的那笔
   gate: b.classes.has('gate'),         // 被闸门拦下的买入（不用操作）
+  chase: b.classes.has('chase'),       // 被追高线拦下的买入（不用操作）
   kick: (b.queryAll('.bk')[0] || {}).textContent?.replace(/\s+/g, ' ').trim() || '',
   text: (b.queryAll('.bt')[0] || {}).textContent?.replace(/\s+/g, ' ').trim() || '',
   sub: (b.queryAll('.bs')[0] || {}).textContent?.replace(/\s+/g, ' ').trim() || '',
@@ -180,7 +181,8 @@ export const pend = (sig, from, to) => ({
  * calc 同时写进 localStorage 和两个输入框 —— 页面上这两处永远同步
  * （fillInputs 负责），测试里只写一处会测出假结果。
  */
-export function put({ tier, pending = null, index, chain = null, calc = null, etf = undefined, gate = undefined, gatelog = undefined }) {
+export function put({ tier, pending = null, index, chain = null, calc = null, etf = undefined, gate = undefined, gatelog = undefined,
+  chase = undefined, chaselog = undefined }) {
   const led = ledgerFor(chain ?? CHAIN.slice(0, tier));
   const st = JSON.parse(JSON.stringify(BASE));
   st.launchDate = LAUNCH;
@@ -190,7 +192,9 @@ export function put({ tier, pending = null, index, chain = null, calc = null, et
   if (etf !== undefined) st.etf = etf;
   // 闸门：不给就沿用真实 state 里的那份（新版 Worker 跑过之前没有 —— 页面会按行情现算）
   if (gate !== undefined) st.gate = gate;
-  H.S = { ...H.S, state: st, ledger: led, gatelog: gatelog ?? { entries: [] } };
+  // 追高线：同上，不给就沿用真实 state 里的那份（没有时页面按行情现算）
+  if (chase !== undefined) st.chase = chase;
+  H.S = { ...H.S, state: st, ledger: led, gatelog: gatelog ?? { entries: [] }, chaselog: chaselog ?? { entries: [] } };
   if (calc) {
     store.set('hlma30.calc', JSON.stringify(calc));
     el('inCash').value = String(calc.cash);

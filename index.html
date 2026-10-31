@@ -218,6 +218,9 @@ tr:last-child td{border-bottom:none}
 .gateline{font-size:13.5px;line-height:1.65;margin:10px 0 0}
 .bn.gate{background:#5B4B8A;box-shadow:0 6px 24px rgba(91,75,138,.30)}
 .bn.gate button{color:#5B4B8A}
+/* 追高线 —— 收盘比年线高出 3% 以上时，买入信号不执行（卡片沿用闸门的样式） */
+.bn.chase{background:#2F6B6F;box-shadow:0 6px 24px rgba(47,107,111,.30)}
+.bn.chase button{color:#2F6B6F}
 @media (max-width:520px){.card,#nextCard{padding:17px 16px}.big{font-size:27px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -296,6 +299,17 @@ tr:last-child td{border-bottom:none}
     <p class="gateline" id="gateLine">–</p>
     <div class="cashgrid" id="gateGrid"></div>
     <details class="how"><summary>这是怎么运作的</summary><div class="body note" id="gateNote"></div></details>
+  </div>
+
+  <!-- 追高线：收盘比年线高出 3% 以上时，买入信号不执行。见 shared/strategy.js 的 chaseState -->
+  <div class="card cashcard gatecard" id="chaseCard">
+    <div class="cashhead">
+      <p class="k">追高线</p>
+      <span class="cstat" id="chaseStat">–</span>
+    </div>
+    <p class="gateline" id="chaseLine">–</p>
+    <div class="cashgrid" id="chaseGrid"></div>
+    <details class="how"><summary>这是怎么运作的</summary><div class="body note" id="chaseNote"></div></details>
   </div>
 
   <div class="card">
@@ -378,10 +392,10 @@ tr:last-child td{border-bottom:none}
 // 版本号是 shared/strategy.js 的内容哈希，由 npm run stamp 自动写入。
 // 静态 import 不带查询串，浏览器会一直用缓存里的旧模块 —— 改了核心逻辑后
 // 页面会因为「找不到导出」而白屏。用动态 import 把版本号带上就没这问题。
-const CORE_VERSION = 'db4a21d4a4';
+const CORE_VERSION = '3b6eae4266';
 const { replay, plannedOrder, orderAmount, shares, auditLedger, calcStep, calcCatchUp, missedEntries, validateState,
         nextMove: nextMoveFn, nextTradingDay, beijingDate, dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct, WEIGHTS, COMMISSION,
-        cashPlan, cashPlanLines, gateState, gateLine, gateBlockedText }
+        cashPlan, cashPlanLines, gateState, gateLine, gateBlockedText, chaseState, chaseLine, chaseBlockedText, CHASE }
   = await import(`./shared/strategy.js?v=${CORE_VERSION}`);
 
 const $ = (id) => document.getElementById(id);
@@ -484,7 +498,9 @@ async function load() {
   const cashcfg = await fetch('./data/cashplan.json' + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null);
   // 被闸门拦下的买入（不进账本，单独记一份）。404 就是一次都没拦过
   const gatelog = await fetch('./data/gatelog.json' + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  S = { state, ledger, series, cal: [], cashcfg, gatelog: gatelog || { entries: [] } };
+  // 被追高线拦下的买入，同样单独记一份
+  const chaselog = await fetch('./data/chaselog.json' + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  S = { state, ledger, series, cal: [], cashcfg, gatelog: gatelog || { entries: [] }, chaselog: chaselog || { entries: [] } };
   // 交易日历用来把「下一个交易日」算成具体日期（周五出信号要到下周一）
   // 次年日历只在临近年底才取：平时它必然 404，白发一次请求还在控制台留红字
   const nearYearEnd = +state.asof.slice(5, 7) >= 11;
@@ -724,12 +740,62 @@ function renderGate() {
     + '<br><b>回测（2005–2026 年，中证红利）：</b>一共拦过 15 段（8 段帮了忙、7 段帮了倒忙），最近一次处于上膛是 2019 年 5 月；'
     + '2008 年那段把 −47.5% 保成了 −3.3%。2005 年以来年化从 4.4% 提到 7.7%，最大回撤从 −64.7% 收窄到 −38.5%。'
     + '近十年拦过 2 段（2016 年 1 月、2018 年 6 月），都帮了忙，但那两次利差恰好在 0 附近，算运气。'
-    + '<br><b>管不住的：</b>大跌的第一段（指数还没跌破年线，2008 年那 −38.5% 就是这么来的）；'
+    + '<br><b>管不住的：</b>大跌的第一段（指数还没跌破年线，2008 年那 −38.5% 就是这么来的；这一段交给下方「追高线」）；'
     + '「便宜但越来越差」的慢熊（利差一直是正的，闸门不会上膛）。'
     + '<br><b>数据：</b>股息率用全收益指数 H00922 和价格指数 000922 的差推算 —— 过去 250 个交易日指数实际收到的分红，除以当前点位；'
     + '10 年国债收益率取中债口径（东方财富数据中心）。某样数据取不到时沿用最近一次的值；'
     + '连续 5 个交易日都取不到，按「未上膛」处理，买入照常，并在推送里告警。'
     + (g.local ? `<br><b>注意：</b>这里的数是页面按行情现算的；${md(S.state.asof)}之后的第一次运行起，改为显示系统当晚算定的那份。` : '');
+}
+
+/**
+ * 追高线这一天的状态。和闸门一样：优先用 Worker 当晚写进 state.json 的那份，
+ * 新版 Worker 还没跑过时用同一个函数从行情现算。
+ */
+function chaseNow() {
+  const c = S.state.chase;
+  if (c && c.asof === S.state.asof) return c;
+  const local = chaseState(S.series.rows || [], S.state.asof);
+  return local ? { ...local, blocked: null, local: true } : null;
+}
+/** 最近一次运行被追高线拦下的那笔买入（只认数据日当天的） */
+function chaseBlockedNow() {
+  const c = S.state.chase;
+  return c && c.blocked && c.blocked.signalDate === S.state.asof ? c.blocked : null;
+}
+
+function renderChase() {
+  const card = $('chaseCard'), stat = $('chaseStat');
+  const c = chaseNow();
+  card.classList.remove('ok', 'warn', 'act');
+  const today = bjToday();
+  $('chaseLine').textContent = chaseLine(c, today);
+  if (!c) { stat.textContent = '算不出'; stat.className = 'cstat warn'; card.classList.add('warn'); $('chaseGrid').innerHTML = ''; return; }
+  const [label, cls] = !c.ok ? ['算不出', 'warn'] : !c.above ? ['未触发', 'ok'] : c.active ? ['拦截中', 'act'] : ['在线上方', 'warn'];
+  stat.textContent = label;
+  stat.className = `cstat ${cls}`;
+  card.classList.add(cls);
+  const tile = (name, val, note) => `<div class="ct"><span class="cl">${name}</span><b class="ca">${val}</b><small>${note}</small></div>`;
+  const okNum = (x) => isFinite(x) && x !== null;
+  $('chaseGrid').innerHTML = c.ok ? [
+    tile('收盘（H00922）', int(c.close), `${md(c.asof)}`),
+    tile('年线（250 日均线）', int(c.ma250), `收盘比它${c.dev >= 0 ? '高' : '低'} ${Math.abs(c.dev * 100).toFixed(1)}%`),
+    tile('追高线（年线 × 1.03）', int(c.line),
+      c.above ? `收盘在它上方 ${((c.close / c.line - 1) * 100).toFixed(1)}%` : `收盘再涨 ${((c.line / c.close - 1) * 100).toFixed(1)}% 就到`),
+  ].join('') : (okNum(c.close) ? tile('收盘（H00922）', int(c.close), `${md(c.asof)}`) : '');
+  $('chaseNote').innerHTML =
+    '<b>规则：</b>收盘比年线（最近 250 个交易日的平均，和闸门同一条）高出 3% 以上，也就是在「追高线 = 年线 × 1.03」上方时，'
+    + '这一天出现的买入信号不执行。卖出信号任何时候都照常。被拦下的买入不进交易记录，会单独出一条青色横幅告诉你不用操作。'
+    + '<br><b>为什么：</b>熊市的第一段常常是大盘先跌、红利还停在年线上方很远的地方，第一次回调就触发了买入，买完才开始补跌'
+    + '（2007 年 10 月、2008 年 1 月、2015 年 6 月）。闸门只在年线下方出手，管不到这一段。'
+    + '<br><b>熊市回测（2007–2026 年沪深300 的 8 段熊市，每段从空仓起跑、算到低点）：</b>'
+    + '更早五段从高点起跑的合计亏损由 −38.8% 收窄到 −14.7%，最深回撤由 −38.5% 收窄到 −15.1%；'
+    + '近十年三段由 +80.2% 变为 +86.9%，基本不受影响。它挡掉的历史买入一共 42 档，平均每档 −1.9%。'
+    + '<br><b>管不住的：</b>急跌后快速反弹（2009 年 8 月暴跌后的那次反弹它没买，等回到年线附近才买，反而多亏）；'
+    + '年线下方接飞刀（2008 年底、2010–2012 年慢熊）。它是防大亏的保险，不是多赚的办法。'
+    + '<br><b>数据：</b>只用 H00922 自己的收盘价，不需要额外数据；行情不足 250 个交易日、算不出年线时放行，买入照常。'
+    + (c.active ? '' : `<br><b>生效：</b>${md(CHASE.startDate)}起拦截，之前只显示、不拦。`)
+    + (c.local ? `<br><b>注意：</b>这里的数是页面按行情现算的；${md(S.state.asof)}之后的第一次运行起，改为显示系统当晚算定的那份。` : '');
 }
 
 /**
@@ -984,6 +1050,16 @@ function renderNext(behind) {
         : '<br>之后每天照常判断（交易日历暂时取不到，给不出具体日期）。')
       + otherSide('buy', tier, i)
       + '<br>详见下方「闸门」。';
+  } else if (chaseBlockedNow()) {
+    // 同上：收盘跌破了买入线、却没有待执行的操作 —— 是追高线拦下的
+    const b = chaseBlockedNow();
+    const nx = nextTradingDay(S.cal, st.asof);
+    $('nextLine').innerHTML = `${dl(st.asof)}的买入信号被追高线拦下，<b>不用操作</b>`;
+    $('nextSub').innerHTML = chaseBlockedText(b, nx, bjToday())
+      + (nx ? `<br>${dl(nx)}不用买入。之后每天照常判断：收盘回到追高线下方，买入信号就恢复执行。`
+        : '<br>之后每天照常判断（交易日历暂时取不到，给不出具体日期）。')
+      + otherSide('buy', tier, i)
+      + '<br>详见下方「追高线」。';
   } else if (mv.kind === 'buy') {
     card.classList.add('buy');
     // 闸门上膛时，跌到买入线不一定会买 —— 先说清楚，免得到时候以为系统坏了
@@ -993,6 +1069,12 @@ function renderNext(behind) {
         ? `<br><b>⛔ 闸门正在拦截</b>：收盘在年线（${int(g.ma250)}）之下，这时出现的买入信号不会执行。详见下方「闸门」。`
         : `<br><b>⛔ 闸门已上膛</b>：跌到 ${int(mv.target)} 时，收盘若也在年线（${int(g.ma250)}）之下，这笔买入不会执行。详见下方「闸门」。`)
       : '';
+    // 买入线本身还在追高线上方：跌到那里也不一定会买，同样先说清楚
+    const c = chaseNow();
+    const cNote = c && c.ok && isFinite(mv.target) && mv.target > c.line
+      ? `<br><b>⛔ 追高线</b>：买入线 ${int(mv.target)} 还在追高线（${int(c.line)}，年线 × 1.03）上方 —— `
+        + '跌到那里时收盘若仍在追高线上方，这笔买入不会执行。详见下方「追高线」。'
+      : '';
     if (mv.need <= 0) {
       $('nextLine').innerHTML = `${dl(st.asof)}收盘已跌破买入线，<b style="color:var(--up)">但系统还没记下这笔操作</b>`;
       $('nextSub').innerHTML = `${md(st.asof)}（${wd(st.asof)}）收盘 <b>${int(i.close)}</b> 已在买入线 <b>${int(i.buyTrigger)}</b> 之下`
@@ -1001,7 +1083,7 @@ function renderNext(behind) {
     } else {
       $('nextLine').innerHTML = `距离下一次买入，还需中证红利<b style="color:var(--up)">跌 ${mv.need.toFixed(2)}%</b>`;
       $('nextSub').innerHTML = `跌到 <b>${int(mv.target)}</b> 触发　·　买入第 <b>${tier + 1}</b> 份（仓位 ${posPct(tier)} → ${posPct(tier + 1)}）`
-        + gNote
+        + gNote + cNote
         + otherSide('buy', tier, i)
         + howItWorks(st, i);
     }
@@ -1078,9 +1160,9 @@ function renderBanner(behind) {
     hist.push({ type: 'trade', key: e.signalDate, signalDate: e.signalDate, tierFrom: e.tierFrom, tierTo: e.tierTo, date: e.date, done: true, sortDate: e.date });
   }
   hist.push(...cash.filter((c) => c.done));
-  hist.push(...gateItems());
+  hist.push(...gateItems(), ...chaseItems());
   // 同一天先说买卖红利、再说申赎 —— 申赎是跟着买卖走的
-  const rank = { trade: 0, cash: 1, catchup: 2, gate: 3 };
+  const rank = { trade: 0, cash: 1, catchup: 2, gate: 3, chase: 3 };
   hist.sort((a, b) => (a.sortDate > b.sortDate ? -1 : a.sortDate < b.sortDate ? 1 : rank[a.type] - rank[b.type]));
   items.push(...hist);
 
@@ -1150,6 +1232,7 @@ function oneBanner(item, M) {
   if (item.type === 'cash') return oneCashBanner(item);
   if (item.type === 'catchup') return oneCatchupBanner(item);
   if (item.type === 'gate') return oneGateBanner(item);
+  if (item.type === 'chase') return oneChaseBanner(item);
   const st = S.state;
   const buy = item.tierTo > item.tierFrom;
   const share = buy ? item.tierTo : item.tierFrom;
@@ -1390,6 +1473,31 @@ function oneGateBanner(item) {
     '知道了', () => { LS.set(`ack.${item.key}`, true); renderInputDependent(); });
 }
 
+/**
+ * 被追高线拦下的买入。和闸门那条一样：不进账本、不用做任何事，撑到你点「知道了」为止（永久收起）。
+ * 来源是 data/chaselog.json；当晚那笔要是还没进 chaselog，就从 state.json 补上。
+ */
+function chaseItems() {
+  const seen = new Set(), out = [];
+  const add = (b) => {
+    if (!b || !b.signalDate || seen.has(b.signalDate)) return;
+    seen.add(b.signalDate);
+    out.push({ ...b, type: 'chase', key: `chase:${b.signalDate}`, date: b.signalDate, done: true, sortDate: b.signalDate });
+  };
+  for (const b of (S.chaselog && S.chaselog.entries) || []) add(b);
+  add(chaseBlockedNow());
+  return out;
+}
+
+function oneChaseBanner(item) {
+  const nx = nextTradingDay(S.cal, item.date);
+  return bannerShell('bn chase', `追高线 · ${dl(item.date)}收盘跌破买入线`,
+    `买入第 ${item.tierTo} 份被追高线拦下　不用操作`,
+    chaseBlockedText(item, nx, bjToday())
+      + '<br>这条只是告诉你：系统没有记这笔买入，你也不用去券商下单。点「知道了」收起。规则见下方「追高线」。',
+    '知道了', () => { LS.set(`ack.${item.key}`, true); renderInputDependent(); });
+}
+
 /** 攒太多时的汇总条 —— 可以一次确认掉，但绝不替你悄悄收起 */
 function rollupBanner(rest) {
   const bn = document.createElement('div');
@@ -1402,7 +1510,8 @@ function rollupBanner(rest) {
   const what = (r) => (r.type === 'cash' ? `${dayLabel(r.day, bjToday()).md}${r.kind === 'SUBSCRIBE' ? '申购' : '赎回'}交银稳利`
     : r.type === 'catchup' ? `${dayLabel(r.date, bjToday()).md}补买红利`
       : r.type === 'gate' ? `${dayLabel(r.date, bjToday()).md}买入信号被闸门拦下（不用操作）`
-        : `${dayLabel(r.date || r.signalDate, bjToday()).md}${r.tierTo > r.tierFrom ? '买入' : '卖出'}红利`);
+        : r.type === 'chase' ? `${dayLabel(r.date, bjToday()).md}买入信号被追高线拦下（不用操作）`
+          : `${dayLabel(r.date || r.signalDate, bjToday()).md}${r.tierTo > r.tierFrom ? '买入' : '卖出'}红利`);
   const days = rest.map(what).join('、');
   kick.textContent = '更早的操作';
   text.textContent = `还有 ${rest.length} 笔没确认`;
@@ -1496,6 +1605,7 @@ function render() {
 
   renderCash(M);
   renderGate();
+  renderChase();
   renderLedger(M);
   buildRanges();
   renderHealth();
@@ -2127,6 +2237,7 @@ function renderHealth() {
     + `　行情 ${S.series.rows.length} 个交易日。`
     + `<br>信号源 中证指数 H00922（全收益）／ 闲钱基准 ${S.state.bond?.name || '交银稳利中短债债券A'}（${S.state.bond?.code || '008204'}）累计净值 ／ 交易日历 深交所官方接口 ／ ETF 报价 ${S.state.etf?.code || '—'}。`
     + '<br>闸门数据 中证红利价格指数 000922（和全收益指数的差就是分红，用来推算股息率）／ 10 年期国债收益率 中债口径（东方财富数据中心）。'
+    + '<br>追高线只用 H00922 自己的收盘价（年线 × 1.03），不需要额外数据。'
     + `<br><b>MA30 由本系统计算，不是抓来的</b>：中证接口只提供收盘价，均线是取最近 30 个交易日收盘价的算术平均`
     + `（含当日）实时算出。图上和这里显示的均线保留两位小数，但<b>判断买卖信号时用的是不经舍入的完整精度值</b>。`
     + `<br>账本记的是<b>理论值</b>：买了红利的那部分按全收益指数算，还没买红利的钱按交银稳利的累计净值算。实盘会有跟踪误差和税费，通常略低于这里显示的数字。`;

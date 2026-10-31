@@ -153,7 +153,9 @@ console.log('\n【位置与折叠】');
 }
 {
   const sig = H.S.state.asof;
-  const { cp } = scene('空仓时出了买入挂单', { tier: 0, chain: [], pending: pend(sig, 0, 1), index: at(12400, 11900) });
+  // 时钟拨到执行日上午：周末或节假日跑测试时，真实的今天不是执行日，申赎横幅的按钮会是「知道了」
+  const execDay = CAL.find((d) => d > sig);
+  const { cp } = scene('空仓时出了买入挂单', { tier: 0, chain: [], pending: pend(sig, 0, 1), index: at(12400, 11900), now: [execDay, '10:00'] });
   const lines = cashPlanLines(cp, beijingDate());
   const nextSub = el('nextSub').innerHTML;
   if (lines.length && nextSub.includes(`<b>资金：</b>${lines.join('；')}`)) ok(`「下一次操作」卡片：资金：${lines.join('；')}`);
@@ -204,7 +206,10 @@ console.log('\n【今天动不动资金：把时钟拨到不同时刻】');
   else bad(`数据停更时应明说：${JSON.stringify(h)}`);
 }
 {
-  const fut = { ...CFG, startDate: CAL.find((d) => d > realToday) || '2099-01-02' };
+  // 起用日要晚于数据日之后的第一个交易日：周末跑测试时，「今天之后的第一个交易日」正好就是那一天，
+  // 页面会当它已起用、写出第一步
+  const n1 = CAL.find((d) => d > H.S.state.asof);
+  const fut = { ...CFG, startDate: CAL.find((d) => d > n1 && d > realToday) || '2099-01-02' };
   const { rows, cp } = scene(`起用日在将来（${fut.startDate}）`, { tier: 0, chain: [], cfg: fut });
   checkSums('未起用', rows, cp);
   const h = head();
