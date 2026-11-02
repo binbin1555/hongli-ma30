@@ -1,20 +1,20 @@
 {
   "schema": 1,
   "launchDate": "2026-09-10",
-  "asof": "2026-10-30",
-  "lastRun": "2026-10-30 21:00:42",
+  "asof": "2026-11-02",
+  "lastRun": "2026-11-02 21:00:41",
   "tier": 0,
   "pending": null,
   "index": {
     "code": "H00922",
-    "close": 12193.55,
-    "ma30": 12011.58,
-    "ratio": 1.0151,
-    "changePct": 0.82,
-    "buyTrigger": 11651.23,
-    "sellTrigger": 12251.81,
-    "pctToBuy": -4.45,
-    "pctToSell": 0.48
+    "close": 12183.1,
+    "ma30": 12014.51,
+    "ratio": 1.014,
+    "changePct": -0.09,
+    "buyTrigger": 11654.08,
+    "sellTrigger": 12254.8,
+    "pctToBuy": -4.34,
+    "pctToSell": 0.59
   },
   "bond": {
     "code": "008204",
@@ -24,18 +24,19 @@
   "etf": {
     "code": "515180",
     "close": 1.383,
-    "asof": "2026-10-30",
+    "asof": "2026-11-02",
     "stale": false
   },
   "checks": {
     "passed": 11,
     "total": 11,
     "failed": [],
-    "ranAt": "2026-10-30 21:00:42"
+    "ranAt": "2026-11-02 21:00:41"
   },
   "consecutiveTradingDays": 0,
   "lastExecuted": null,
-  "push": {
+  "push": null,
+  "prevPush": {
     "ok": true,
     "at": "2026-10-30 21:00:48",
     "elapsedMs": 13105,
@@ -51,25 +52,9 @@
       "推送": 954
     }
   },
-  "prevPush": {
-    "ok": true,
-    "at": "2026-10-29 21:00:47",
-    "elapsedMs": 13121,
-    "steps": {
-      "读日历": 834,
-      "国债收益率": 984,
-      "中证指数": 1650,
-      "价格指数": 2751,
-      "基金净值": 3038,
-      "ETF报价": 1549,
-      "读行情": 289,
-      "提交": 4906,
-      "推送": 1705
-    }
-  },
   "gate": {
-    "asof": "2026-10-30",
-    "close": 12193.55,
+    "asof": "2026-11-02",
+    "close": 12183.1,
     "active": true,
     "dataOk": true,
     "problem": null,
@@ -77,14 +62,40 @@
     "memArmed": false,
     "below": false,
     "blocking": false,
-    "ma250": 11867.2,
-    "dy": 0.043929,
-    "y10": 0.0165,
-    "spread": 0.027429,
-    "pDate": "2026-10-30",
-    "yDate": "2026-10-30",
+    "ma250": 11868.89,
+    "dy": 0.043965,
+    "y10": 0.016343,
+    "spread": 0.027622,
+    "pDate": "2026-11-02",
+    "yDate": "2026-11-02",
     "staleP": 0,
     "staleY": 0,
+    "blocked": null
+  },
+  "chase": {
+    "asof": "2026-11-02",
+    "close": 12183.1,
+    "ma250": 11868.89,
+    "line": 12224.95,
+    "dev": 0.026474,
+    "ok": true,
+    "problem": null,
+    "above": false,
+    "active": true,
+    "blocking": false,
+    "blocked": null
+  },
+  "brake": {
+    "asof": "2026-11-02",
+    "close": 12183.1,
+    "ma250": 11868.89,
+    "vol": 0.160614,
+    "ok": true,
+    "problem": null,
+    "below": false,
+    "hot": false,
+    "active": true,
+    "blocking": false,
     "blocked": null
   }
 }
