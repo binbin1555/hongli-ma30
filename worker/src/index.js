@@ -2,7 +2,7 @@
  * 红利 MA30 停车策略 · Cloudflare Worker
  *
  * 由 cron-job.org 在每个交易日北京时间 21:00 触发一次：
- *   查交易日历 → 抓中证数据 → 11 项校验 → 算信号（含闸门、追高线）→ 提交 GitHub → 发 Bark 推送
+ *   查交易日历 → 抓中证数据 → 11 项校验 → 算信号（含闸门、追高线、暴跌刹车）→ 提交 GitHub → 发 Bark 推送
  *
  * 设计原则：
  *   1. 任何一项校验不过，都要推一条带原因的告警，绝不静默失败。
@@ -15,6 +15,7 @@ import {
   dayLabel, NO_EXEC_DATE, CLOSE_TIP, posPct, cashPlan, cashPlanLines,
   gateState, gateBlocks, gateLine, gateBlockedText,
   chaseState, chaseBlocks, chaseLine, chaseBlockedText,
+  brakeState, brakeBlocks, brakeLine, brakeBlockedText,
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
 
@@ -22,7 +23,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = 'df06198045';
+const BUILD = '833d075887';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -834,6 +835,8 @@ async function runDaily(env, { force = false } = {}) {
   const gate = gateState(rows, today);
   // ---- 追高线：收盘比年线高出 3% 以上时，买入信号不执行 ----
   const chase = chaseState(rows, today);
+  // ---- 暴跌刹车：20 日波动率超过 40%、收盘又在年线下方时，买入信号不执行 ----
+  const brake = brakeState(rows, today);
 
   // ---- 今日信号 → 明日挂单 ----
   const sig = signal(close, ma30);
@@ -852,6 +855,12 @@ async function runDaily(env, { force = false } = {}) {
     ? { signalDate: today, tierFrom: tier, tierTo: want, close: +close.toFixed(2), ma250: +chase.ma250.toFixed(2), line: +chase.line.toFixed(2) }
     : null;
   if (chased) want = tier;
+  // 暴跌刹车拦下的买入同样不进账本、不出挂单，记进 brakelog。
+  // 它和闸门都只在年线下方拦，可能同一天都想拦：闸门先拦了就只记 gatelog，一天只留一条
+  const braked = want > tier && brakeBlocks(sig, tier, brake)
+    ? { signalDate: today, tierFrom: tier, tierTo: want, close: +close.toFixed(2), ma250: +brake.ma250.toFixed(2), vol: +brake.vol.toFixed(6) }
+    : null;
+  if (braked) want = tier;
   const pending = want !== tier
     ? { signalDate: today, tierFrom: tier, tierTo: want, side: want > tier ? 'BUY' : 'SELL' }
     : null;
@@ -960,6 +969,14 @@ async function runDaily(env, { force = false } = {}) {
       ok: chase.ok, problem: chase.problem, above: chase.above, active: chase.active, blocking: chase.blocking,
       blocked: chased,
     } : null,
+    // 暴跌刹车这一天的状态（同样只有指数层面的数）。blocked 只在这一天拦下了买入时才有
+    brake: brake ? {
+      asof: brake.asof, close: brake.close != null ? +brake.close.toFixed(2) : null,
+      ma250: brake.ma250 != null ? +brake.ma250.toFixed(2) : null,
+      vol: brake.vol != null ? +brake.vol.toFixed(6) : null,
+      ok: brake.ok, problem: brake.problem, below: brake.below, hot: brake.hot, active: brake.active, blocking: brake.blocking,
+      blocked: braked,
+    } : null,
     // 占位：本次推送结果由下面那次提交回填。
     // 同时把上一次的结果带上 —— 万一回填没跑成，至少还留着上一次的痕迹，
     // 面板据此能说出「昨晚那次推送没有记录成功」。
@@ -981,7 +998,7 @@ async function runDaily(env, { force = false } = {}) {
         timing: { ...steps, 数据就绪: Date.now() - t0 },
         cleaning: { rawCount: idxRes.rawCount, removed },
         rawTail: idx.slice(-5), etf, ma30: +ma30.toFixed(4), signal: sig,
-        tierBefore: state.tier, tierAfter: tier, pending, executed, gate: newState.gate, chase: newState.chase, log,
+        tierBefore: state.tier, tierAfter: tier, pending, executed, gate: newState.gate, chase: newState.chase, brake: newState.brake, log,
       }, null, 2),
     },
   ];
@@ -998,13 +1015,20 @@ async function runDaily(env, { force = false } = {}) {
     clog.entries = (clog.entries || []).filter((e) => e.signalDate !== today).concat([chased]);
     files.push({ path: 'data/chaselog.json', content: JSON.stringify(clog, null, 2) });
   }
+  // 被暴跌刹车拦下的买入：同样不进账本，单独留痕
+  if (braked) {
+    const blog = await G.readJSON('data/brakelog.json', { schema: 1, entries: [] });
+    blog.entries = (blog.entries || []).filter((e) => e.signalDate !== today).concat([braked]);
+    files.push({ path: 'data/brakelog.json', content: JSON.stringify(blog, null, 2) });
+  }
 
   const msg = executed
     ? `${today} 成交 ${executed.side === 'BUY' ? '买入' : '卖出'} 至 ${posPct(executed.tierTo)}`
     : pending ? `${today} 出信号 ${pending.side === 'BUY' ? '买入' : '卖出'} → ${execDay || '下一交易日'} 执行`
       : blocked ? `${today} 买入信号被闸门拦下`
         : chased ? `${today} 买入信号被追高线拦下`
-          : `${today} 无操作`;
+          : braked ? `${today} 买入信号被暴跌刹车拦下`
+            : `${today} 无操作`;
   const sha = await timed('提交', G.commit(files, `chore(daily): ${msg}`));
 
   // ---- 推送 ----
@@ -1041,6 +1065,7 @@ async function runDaily(env, { force = false } = {}) {
     cashPlan: cash ? (cash.error ? 'error' : 'ok') : 'off',
     gate: gate ? { dataOk: gate.dataOk, armed: gate.armed, blocking: gate.blocking, blocked: !!blocked } : null,
     chase: chase ? { ok: chase.ok, above: chase.above, blocking: chase.blocking, blocked: !!chased } : null,
+    brake: brake ? { ok: brake.ok, hot: brake.hot, below: brake.below, blocking: brake.blocking, blocked: !!braked } : null,
   };
 }
 
@@ -1099,6 +1124,10 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
   const ch = newState.chase || null;
   const chLine = ch ? `\n${chaseLine(ch, today)}` : '';
   const cBlocked = ch && ch.blocked && ch.blocked.signalDate === today ? ch.blocked : null;
+  // 暴跌刹车：同样每天一行状态；拦下买入的那天单独成一条、会响铃
+  const bk = newState.brake || null;
+  const bkLine = bk ? `\n${brakeLine(bk, today)}` : '';
+  const bBlocked = bk && bk.blocked && bk.blocked.signalDate === today ? bk.blocked : null;
 
   if (pending) {
     // 方向以公式实际算出来的为准，不按档位方向假设
@@ -1116,7 +1145,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
         + `\n${w.long}`
         + `\n${CLOSE_TIP}`
         + cashBlock(cash, today)
-        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${gLine}${chLine}${doneLine}${warn}${missed}${resentLine}`,
+        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${gLine}${chLine}${bkLine}${doneLine}${warn}${missed}${resentLine}`,
       level: 'timeSensitive',
       group: '红利MA30·操作',
     });
@@ -1153,11 +1182,13 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       ? `⛔ ${td.md}买入信号被闸门拦下　仓位仍 ${posPct(newState.tier)}`
       : cBlocked
         ? `⛔ ${td.md}买入信号被追高线拦下　仓位仍 ${posPct(newState.tier)}`
-        : cashDue
-          ? `💰 ${nd.md} 15:00 前${cashDueText(due)}`
-          : executed
-            ? `✅ ${td.md}已成交　仓位 ${posPct(newState.tier)}`
-            : `红利MA30 · ${td.md}无操作　仓位 ${posPct(newState.tier)}`;
+        : bBlocked
+          ? `⛔ ${td.md}买入信号被暴跌刹车拦下　仓位仍 ${posPct(newState.tier)}`
+          : cashDue
+            ? `💰 ${nd.md} 15:00 前${cashDueText(due)}`
+            : executed
+              ? `✅ ${td.md}已成交　仓位 ${posPct(newState.tier)}`
+              : `红利MA30 · ${td.md}无操作　仓位 ${posPct(newState.tier)}`;
     const idle = cashDue ? '不用买卖红利 ETF' : '无需操作';
     const nextLine = nd
       ? `\n${nd.label}${idle}`
@@ -1168,11 +1199,14 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       : cBlocked
         ? `${chaseBlockedText(cBlocked, execDay, today)}${nextLine}`
           + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${cashTxt}${doneLine}${warn}${missed}${resentLine}`
-        : `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${gLine}${chLine}${cashTxt}${doneLine}${warn}${missed}${resentLine}`;
+        : bBlocked
+          ? `${brakeBlockedText(bBlocked, execDay, today)}${nextLine}`
+            + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${cashTxt}${doneLine}${warn}${missed}${resentLine}`
+          : `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${gLine}${chLine}${bkLine}${cashTxt}${doneLine}${warn}${missed}${resentLine}`;
     await bark(env, {
       title,
       body,
-      ...(gBlocked || cBlocked || cashDue ? { level: 'timeSensitive', group: '红利MA30·操作' } : { level: 'passive' }),
+      ...(gBlocked || cBlocked || bBlocked || cashDue ? { level: 'timeSensitive', group: '红利MA30·操作' } : { level: 'passive' }),
     });
   }
   if (late && executed) {

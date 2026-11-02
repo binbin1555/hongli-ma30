@@ -988,3 +988,112 @@ export function chaseBlockedText(b, execDay, today) {
     + `但收盘仍比年线（${int(b.ma250)}）高 ${((b.close / b.ma250 - 1) * 100).toFixed(1)}%，在追高线（${int(b.line)}）上方 —— `
     + `离年线太远不追，追高线拦下了这笔买入。账本不会记它，仓位仍是 ${posPct(b.tierFrom)}。`;
 }
+
+/* ======================================================================
+ * 暴跌刹车：20 日波动率超过 40%、收盘又在年线下方时，不执行买入信号
+ *
+ * MA30 低吸赌的是「跌多了会弹回来」。恐慌式下跌里这个赌注会失灵：大波动扎堆出现，
+ * 被动抛售互相触发，跌了还会再跌（2008 年 10 月、2016 年 1 月）。这时闸门往往没上膛
+ * （红利已经很便宜），追高线也管不到（指数早就跌破了年线）。刹车只管这一件事：
+ *
+ *   波动率  H00922 最近 20 个交易日的日对数收益率（要 21 个收盘），样本标准差 × √250，含当日
+ *   年线    最近 250 个交易日收盘价的算术平均（含当日），和闸门、追高线同一条
+ *   拦截    波动率 > 40% 且 收盘 < 年线：这一天出现的买入信号不执行；卖出信号任何时候都不受影响
+ *
+ * 行情不足 250 个交易日、或窗口里有收盘价缺失，算不出时放行（买入照常）。
+ * 不存任何可变状态，每次从行情现算。
+ *
+ * 熊市回测（中证红利，2007–2026 年沪深300 跌 20% 进、反弹 30% 出的 8 段熊市，
+ * 每段从空仓起跑，叠加在闸门和追高线之上）：
+ *   更早五段（2007–2015）  算到低点：从高点起跑 −14.7% → +14.7%，跌满 20% 才起跑 −18.4% → +9.7%
+ *                          算到反弹 30%：+53.3% → +63.2%，+46.7% → +56.1%
+ *                          最深回撤 −15.1% → −12.4%（2008 年那段 −15.1% → −5.5%，2015–16 年那段 −12.1% → −5.0%）
+ *   近十年三段              一次都没触发：这三段里跌破年线时，20 日波动率最高 34.7%（2018 年 11 月）
+ * 阈值 35%–50%、换成上证红利 / 红利低波、两种起点 × 三种截止，结论方向都不变。
+ *
+ * 弱点：历史上只在两段行情里拦过（2008 年 10–11 月、2016 年 1–2 月），样本很少；
+ * 近十年零触发只说明它不添乱，不能说明它有效。波动率窗口换成 40–60 日太迟钝（反弹期还不让买），
+ * 换成 10 日太灵敏（2022 年会误拦）。慢熊阴跌（2010–2012 年）波动率不高，它管不住。
+ * ====================================================================== */
+export const BRAKE = {
+  maLen: 250,               // 年线
+  volLen: 20,               // 波动率窗口（交易日）
+  volMax: 0.40,             // 年化波动率超过它、收盘又在年线下方，就不买
+  startDate: '2026-11-02',  // 从这一天起拦截（之前的账本不受影响）
+};
+
+/**
+ * 暴跌刹车在某一天的状态。rows 为升序 [{d, c}]，c 是 H00922 收盘；upto 给定时只看这一天及以前。
+ *
+ * @returns {null|{asof:string, close:number|null, ma250:number|null, vol:number|null,
+ *   ok:boolean, problem:string|null, below:boolean, hot:boolean, active:boolean, blocking:boolean}}
+ *   vol 是年化 20 日波动率（0.4 表示 40%）；hot 是波动率超过 40%；below 是收盘在年线下方；
+ *   ok 为 false 时一律放行；active 为 false 表示还没到起用日 —— 照算照显示，只是不拦。
+ */
+export function brakeState(rows, upto = null) {
+  const rs = (rows || []).filter((r) => r && (upto == null || r.d <= upto));
+  const n = rs.length;
+  if (!n) return null;
+  const good = (v) => typeof v === 'number' && isFinite(v) && v > 0;
+  const last = rs[n - 1];
+  let ma250 = null, vol = null, problem = null;
+  if (!good(last.c)) problem = '当天的收盘价取不到，算不出位置';
+  else if (n < BRAKE.maLen) problem = `行情不足 ${BRAKE.maLen} 个交易日，算不出年线`;
+  else {
+    let s = 0;
+    for (let i = n - BRAKE.maLen; i < n; i++) {
+      if (!good(rs[i].c)) { problem = `最近 ${BRAKE.maLen} 个交易日里有收盘价缺失，算不出年线`; break; }
+      s += rs[i].c;
+    }
+    if (!problem) {
+      ma250 = s / BRAKE.maLen;
+      // 年线窗口（250 天）已经把这 21 个收盘都查过了，不会再碰到缺失
+      const L = BRAKE.volLen, x = [];
+      for (let i = n - L; i < n; i++) x.push(Math.log(rs[i].c / rs[i - 1].c));
+      const m = x.reduce((a, b) => a + b, 0) / L;
+      vol = Math.sqrt(x.reduce((a, b) => a + (b - m) ** 2, 0) / (L - 1)) * Math.sqrt(250);
+    }
+  }
+  const ok = !problem;
+  const below = ok && last.c < ma250;
+  const hot = ok && vol > BRAKE.volMax;
+  const active = last.d >= BRAKE.startDate;
+  return {
+    asof: last.d, close: good(last.c) ? last.c : null, ma250, vol,
+    ok, problem, below, hot, active, blocking: active && hot && below,
+  };
+}
+
+/** 暴跌刹车拦不拦这一天的信号：只拦买入，卖出任何时候都放行 */
+export function brakeBlocks(sig, tier, bk) {
+  return sig === 'BUY' && tier < MAX_TIER && !!bk && bk.blocking === true;
+}
+
+/**
+ * 暴跌刹车状态说成一行人话。推送和面板共用这一份，两边一字不差。
+ * 没触发时不再重复年线位置（闸门、追高线那两行已经说了）。
+ */
+export function brakeLine(bk, today) {
+  if (!bk) return '暴跌刹车：没有行情，算不出状态';
+  if (!bk.ok) return `⚠️ 暴跌刹车：${bk.problem}，暂不拦截，买入照常执行`;
+  const int = (x) => Math.round(x).toLocaleString('en-US');
+  const v = `20 日波动率 ${(bk.vol * 100).toFixed(1)}%`;
+  const when = bk.active ? '' : `；${dayLabel(BRAKE.startDate, today).md}起生效`;
+  if (!bk.hot) return `暴跌刹车未触发：${v}，超过 40% 且收盘跌破年线才拦${when}`;
+  const pos = `收盘在年线（${int(bk.ma250)}）${bk.below ? '下方' : '上方'} ${Math.abs((bk.close / bk.ma250 - 1) * 100).toFixed(1)}%`;
+  if (!bk.below) return `暴跌刹车：${v}，已超过 40%，但${pos}，买入信号照常执行${when}`;
+  return `暴跌刹车已踩下：${v}，超过 40%，${pos} —— 这时出现的买入信号不会执行${when}`;
+}
+
+/**
+ * 一笔被暴跌刹车拦下的买入，说成人话（推送正文、面板横幅共用）。
+ * b = { signalDate, tierFrom, tierTo, close, ma250, vol }
+ * execDay 是按原规则本该执行的那天（取不到就传 null）。
+ */
+export function brakeBlockedText(b, execDay, today) {
+  const int = (x) => Math.round(x).toLocaleString('en-US');
+  const when = execDay ? `会在 ${dayLabel(execDay, today).label}` : `会在${NO_EXEC_DATE}`;
+  return `${dayLabel(b.signalDate, today).label}收盘 ${int(b.close)} 跌破了买入线，按原规则${when}买入第 ${b.tierTo} 份；`
+    + `但 20 日波动率 ${(b.vol * 100).toFixed(1)}%，超过 40%，收盘又在年线（${int(b.ma250)}）下方 ${Math.abs((b.close / b.ma250 - 1) * 100).toFixed(1)}% —— `
+    + `正处在恐慌式下跌里，暴跌刹车拦下了这笔买入。账本不会记它，仓位仍是 ${posPct(b.tierFrom)}。`;
+}

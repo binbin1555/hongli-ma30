@@ -99,6 +99,14 @@ const C = (close, { above = false, ok = true, blocked = null, line = null } = {}
     problem: ok ? null : '行情不足 250 个交易日，算不出年线', above: up, active: true, blocking: up, blocked };
 };
 const CB = (close) => ({ signalDate: BASE.asof, tierFrom: 0, tierTo: 1, close, ma250: close / 1.05, line: close / 1.05 * 1.03 });
+/** 暴跌刹车的几种状态：默认波动率 16%、收盘在年线下方 7%；hot 时波动率 52%；below=false 时在年线上方 2% */
+const B = (close, { hot = false, below = true, ok = true, blocked = null } = {}) => {
+  const ma250 = ok ? (below ? close * 1.08 : close / 1.02) : null;
+  return { asof: BASE.asof, close, ma250, vol: ok ? (hot ? 0.52 : 0.16) : null, ok,
+    problem: ok ? null : '行情不足 250 个交易日，算不出年线', below: ok && below, hot: ok && hot, active: true,
+    blocking: ok && hot && below, blocked };
+};
+const BB = (close) => ({ signalDate: BASE.asof, tierFrom: 0, tierTo: 1, close, ma250: close * 1.08, vol: 0.52 });
 const SCEN = [
   ['空仓等待买入', { tier: 0, index: at(M, M) }],
   ['半仓等待（买卖都还远）', { tier: 2, index: at(M, M) }],
@@ -130,6 +138,12 @@ const SCEN = [
   ['追高线算不出·放行', { tier: 0, index: at(M, M), chain: [], chase: C(M, { ok: false }) }],
   ['追高线拦过一笔·旧的还没点', { tier: 0, index: at(M, M), chain: [], chase: C(M),
     chaselog: { entries: [{ ...CB(M * 0.95), signalDate: SIG.past }] } }],
+  ['暴跌刹车拦下了买入', { tier: 0, index: at(M, M * 0.96), chain: [], brake: B(M * 0.96, { hot: true, blocked: BB(M * 0.96) }) }],
+  ['暴跌刹车·波动偏高但在年线上方', { tier: 0, index: at(M, M), chain: [], brake: B(M, { hot: true, below: false }) }],
+  ['暴跌刹车·正在拦截还没出买入信号', { tier: 1, index: at(M, M), chain: [[40, 0, 1]], brake: B(M, { hot: true }) }],
+  ['暴跌刹车算不出·放行', { tier: 0, index: at(M, M), chain: [], brake: B(M, { ok: false }) }],
+  ['暴跌刹车拦过一笔·旧的还没点', { tier: 0, index: at(M, M), chain: [], brake: B(M),
+    brakelog: { entries: [{ ...BB(M * 0.95), signalDate: SIG.past }] } }],
 ];
 
 /* ---------------- 跑 + 断言 ---------------- */
@@ -140,12 +154,15 @@ for (const [name, over] of SCEN) {
   H.renderInputDependent();
   H.renderGate();
   H.renderChase();
+  H.renderBrake();
   const line = el('nextLine').textContent.trim();
   const sub = el('nextSub').textContent.trim();
   // 闸门卡片也过一遍同样的规矩（每个场景都有它：没给闸门状态时页面按行情现算）
   const gcard = `${el('gateStat').textContent}｜${el('gateLine').textContent}｜${el('gateGrid').textContent}｜${el('gateNote').textContent}`;
   // 追高线卡片同上
   const ccard = `${el('chaseStat').textContent}｜${el('chaseLine').textContent}｜${el('chaseGrid').textContent}｜${el('chaseNote').textContent}`;
+  // 暴跌刹车卡片同上
+  const bcard = `${el('brakeStat').textContent}｜${el('brakeLine').textContent}｜${el('brakeGrid').textContent}｜${el('brakeNote').textContent}`;
   const bs = banners();
   const on = bs.length > 0;
   const kick = bs.map((b) => b.kick).join(' ∥ ');
@@ -153,7 +170,7 @@ for (const [name, over] of SCEN) {
   const bsub = bs.map((b) => b.sub).join(' ∥ ');
   const behind = H.behindState();
   // 时点、方向只和买卖红利那几条比；资金上的申赎横幅说的是另一件事（措辞照样全部受检）
-  const tb = bs.filter((b) => !b.cash && !b.catchup && !b.gate && !b.chase);
+  const tb = bs.filter((b) => !b.cash && !b.catchup && !b.gate && !b.chase && !b.brake);
   const tkick = tb.map((b) => b.kick).join(' ∥ ');
   const tbtxt = tb.map((b) => b.text).join(' ∥ ');
 
@@ -164,7 +181,8 @@ for (const [name, over] of SCEN) {
 
   if (over.gate || over.gatelog) console.log(`  闸门  ${el('gateStat').textContent}｜${el('gateLine').textContent}`);
   if (over.chase || over.chaselog) console.log(`  追高线 ${el('chaseStat').textContent}｜${el('chaseLine').textContent}`);
-  const all = `${line}｜${sub}｜${on ? kick + btxt + bsub : ''}｜${gcard}｜${ccard}`;
+  if (over.brake || over.brakelog) console.log(`  刹车  ${el('brakeStat').textContent}｜${el('brakeLine').textContent}`);
+  const all = `${line}｜${sub}｜${on ? kick + btxt + bsub : ''}｜${gcard}｜${ccard}｜${bcard}`;
   if (!line) bad(`${name}：卡片主行是空的`);
   for (const junk of ['undefined', 'NaN', 'null', 'Infinity', '[object']) {
     if (all.includes(junk)) bad(`${name}：文案里漏出了 ${junk}`);
