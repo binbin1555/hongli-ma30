@@ -90,6 +90,8 @@ const amounts = (t) => String(t).match(/万|元|\d{1,3}(,\d{3})+/g) || [];
 const BASE = JSON.parse(JSON.stringify(H.S));
 const CAL = BASE.cal;
 const START = BASE.cfg.start;
+// 场景用固定的测试配置（第 1 笔按 1.075 记），和 tests/rebound.mjs 同一个理由：仓库里记的是真实成交，会变
+const TCFG = { ...JSON.parse(JSON.stringify(BASE.cfg)), fills: [{ k: 1, d: START, p: 1.075 }], exit: null };
 const AFTER = RB.rbTradingDaysAfter(START, 130, CAL).days;
 const BEFORE = BASE.series.rows.filter((r) => r.d < START);
 const day0 = { d: START, c: 1.072, h: 1.077, l: 1.063 };
@@ -98,7 +100,7 @@ const path = (closes) => [...BEFORE, day0, ...closes.map((c, i) => ({ d: AFTER[i
 const W9 = Array(9).fill(1.0);
 const RISE = [...W9, 1.15, 1.18, 1.2, 1.22, 1.24, 1.26];            // 第 14 天赚到 15%，下一天卖出线 1.138
 const DONE = [...W9, 0.944, 1.1, 1.2, 1.24, 1.0];                   // 第 10 天买第 2 笔、第 12 天赚到 15%、第 14 天跌破 10 日线卖出
-function put(rows, { run = null, cfg = BASE.cfg, fund = 0 } = {}) {
+function put(rows, { run = null, cfg = TCFG, fund = 0 } = {}) {
   store.set('hlma30.rbFund', JSON.stringify(fund));
   H.S = { ...BASE, cfg, series: { ...BASE.series, rows, run } };
   H.render();
@@ -109,12 +111,16 @@ console.log('\n● 仓库里的真实数据（第 1 笔已买、当晚还没更�
   H.render();
   const st = H.ST;
   check(st.ok, `rbStatus 正常：${st.ok ? st.phase : st.problem}`);
+  // 这一段看的是仓库里的真实成交：线按真实成本现算，不写死（以后记了第 2 笔、卖出，这里照样对）
+  const cost = RB.p34(st.rp.P1);
   if (st.phase === 'pre') {
-    check(/第 1 笔已买入 @ 1\.075/.test(T('nextKick')) && /21:05 第一次更新/.test(T('nextHead')), `还没更新过：${T('nextKick')}｜${T('nextHead')}`);
+    check(T('nextKick').includes(`第 1 笔已买入 @ ${cost}`) && /21:05 第一次更新/.test(T('nextHead')), `还没更新过：${T('nextKick')}｜${T('nextHead')}`);
   } else {
     check(T('nextHead').length > 0, `已经更新过：${T('nextHead')}`);
   }
-  check(/止盈启动线.*1\.237/.test(T('ladder')) && /0\.946/.test(T('ladder')) && /0\.817/.test(T('ladder')), '梯子上有止盈启动线和两条买入线');
+  const lines = st.rp.armed ? [st.rp.next.line] : [st.rp.arm, ...st.rp.tranches.slice(1).filter((t) => !t.d).map((t) => st.rp.addLines[t.k - 2])];
+  check(st.phase === 'done' || lines.every((v) => T('ladder').includes(RB.p3(v))), `梯子上的线按真实成本算：${lines.map(RB.p3).join(' / ')}`, T('ladder'));
+  check(el('r1').textContent === cost && (st.rp.P1 === 1.075 || cost.length === 6), `规则里的 P1 照真实成交显示：${cost}`);
   check(/还剩 \d+ 个交易日/.test(T('due')), `到期：${T('due').slice(0, 60)}`);
   check(/<svg/.test(el('chart').innerHTML), '走势图画出来了');
 }
@@ -124,7 +130,7 @@ console.log('\n● 平常的日子：大字是「下一步」，下面每一行�
   const rows = path([1.06, 1.081, 1.05]);
   put(rows, { run: { asof: AFTER[2], ranAt: `${AFTER[2]} 21:05:12`, source: '腾讯', delivered: AFTER[2], push: { ok: true, at: `${AFTER[2]} 21:05:14` } } });
   const today = RB.rbBeijingDate();
-  const st = RB.rbStatus({ cfg: BASE.cfg, rows, tradingDays: CAL, since: AFTER[1] });
+  const st = RB.rbStatus({ cfg: TCFG, rows, tradingDays: CAL, since: AFTER[1] });
   const p = RB.rbNightPush(st, { today });
   const lines = p.body.split('\n');
   const i = lines.findIndex((l) => l.startsWith('下一步：'));
@@ -145,7 +151,7 @@ console.log('\n● 收盘到了第 2 笔买入线：卡片变成「要动手」�
   const rows = path([1.0, 0.97, 0.944]);
   put(rows);
   const today = RB.rbBeijingDate();
-  const st = RB.rbStatus({ cfg: BASE.cfg, rows, tradingDays: CAL, since: AFTER[1] });
+  const st = RB.rbStatus({ cfg: TCFG, rows, tradingDays: CAL, since: AFTER[1] });
   const p = RB.rbNightPush(st, { today });
   check(T('nextKick') === '要动手' && el('nextCard').className.includes('act'), `「要动手」：${el('nextCard').className}`);
   check(T('nextHead') === p.title.replace('创业板50 · ', ''), `标题：${T('nextHead')}`);
@@ -191,7 +197,7 @@ console.log('\n● 赚到 15% 之后：梯子只剩卖出线，下一步和推�
   const rows = path(RISE);
   put(rows);
   const today = RB.rbBeijingDate();
-  const st = RB.rbStatus({ cfg: BASE.cfg, rows, tradingDays: CAL, since: rows[rows.length - 2].d });
+  const st = RB.rbStatus({ cfg: TCFG, rows, tradingDays: CAL, since: rows[rows.length - 2].d });
   const p = RB.rbNightPush(st, { today });
   const lines = p.body.split('\n');
   const i = lines.findIndex((l) => l.startsWith('下一步：'));
@@ -228,7 +234,7 @@ console.log('\n● 数据落后、推送没送达：页面顶上说清楚');
 
 console.log('\n● 配置坏了：整页停止显示，不硬画');
 {
-  put(path([1.0]), { cfg: { ...BASE.cfg, weights: [1, 1, 1] } });
+  put(path([1.0]), { cfg: { ...TCFG, weights: [1, 1, 1] } });
   check(/数据异常/.test(T('nextKick')) && /weights/.test(T('nextHead')) && el('ladder').innerHTML === '' && el('chart').innerHTML === '', `报错：${T('nextHead')}`);
 }
 

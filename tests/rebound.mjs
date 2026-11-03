@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   rbReplay, rbStatus, rbNightPush, rbIntradayPush, rbTradingDaysAfter, rbConfigProblems, rbSeriesJSON,
-  tickUp, tickDown, tickBelow, rbDay, rbMd, RB_GROUP, RB_GROUP_ACT,
+  tickUp, tickDown, tickBelow, p34, rbDay, rbMd, RB_GROUP, RB_GROUP_ACT,
 } from '../shared/rebound.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,7 +21,10 @@ const bad = (m) => { fails++; console.log(`    ✗ ${m}`); };
 const ok = (m) => console.log(`    ✓ ${m}`);
 const check = (cond, m, detail = '') => (cond ? ok(m) : bad(`${m}${detail ? `\n      ${detail}` : ''}`));
 
-const CFG = JSON.parse(readFileSync(join(ROOT, 'data', 'rebound.json'), 'utf8'));
+// 仓库里记的是真实成交，以后每买一笔、卖出都会往里记。场景都用一份固定的测试配置：
+// 规则和仓库里一模一样，只是第 1 笔固定按 1.075 记 —— 不然每记一笔真实成交，测试就得跟着改一遍
+const REAL = JSON.parse(readFileSync(join(ROOT, 'data', 'rebound.json'), 'utf8'));
+const CFG = { ...JSON.parse(JSON.stringify(REAL)), fills: [{ k: 1, d: REAL.start, p: 1.075 }], exit: null };
 const SER = JSON.parse(readFileSync(join(ROOT, 'data', 'rebound_series.json'), 'utf8'));
 const CAL = JSON.parse(readFileSync(join(ROOT, 'calendar', '2026.json'), 'utf8')).tradingDays;
 const START = CFG.start;
@@ -48,8 +51,23 @@ const md = (d) => rbMd(d, d);
 console.log('\n【一】规则核心');
 
 {
+  console.log('\n● 仓库里记的真实成交');
+  check(rbConfigProblems(REAL).length === 0, '仓库里的 data/rebound.json 合法', rbConfigProblems(REAL).join('；'));
+  const rp = rbReplay(REAL, path([]));
+  check(rp.ok && rp.P1 === 1.074742, `第 1 笔是同一笔委托的两笔成交（1.075、1.074）按份数加权：P1 = ${rp.ok && rp.P1}`);
+  check(rp.ok && rp.addLines[0] === 0.945 && rp.addLines[1] === 0.816 && rp.arm === 1.236 && rp.floor === 1.096 && rp.sl === 0.806,
+    `线跟着真实成本走：第 2 笔 ${rp.addLines && rp.addLines[0]}、第 3 笔 ${rp.addLines && rp.addLines[1]}、启动 ${rp.arm}、保底 ${rp.floor}、止损 ${rp.sl}`);
+  check(p34(1.074742) === '1.0747' && p34(1.075) === '1.075' && p34(0.5 / (0.5 / 1.075)) === '1.075' && p34(NaN) === '–',
+    '成本价：在格子上照样三位，不在格子上多给一位（浮点误差不算「不在格子上」）');
+  const p = rbNightPush(rbStatus({ cfg: REAL, rows: path([]), tradingDays: CAL }), { today: START });
+  check(p && p.body.includes('第 1 笔：11 月 3 日买入 @ 1.0747') && p.body.includes('成本 1.0747 ·')
+    && p.body.includes('↓ ≤ 0.945：买第 2 笔') && p.body.includes('↑ ≥ 1.236：赚到 15%'),
+  '推送里成本给到 1.0747，和线对得上：1.0747 × 0.88 → 0.945、× 1.15 → 1.236', p && p.body);
+}
+
+{
   console.log('\n● 配置和线');
-  check(rbConfigProblems(CFG).length === 0, '仓库里的 data/rebound.json 合法', rbConfigProblems(CFG).join('；'));
+  check(rbConfigProblems(CFG).length === 0, '测试配置合法', rbConfigProblems(CFG).join('；'));
   const rp = rbReplay(CFG, path([]));
   check(rp.ok && rp.P1 === 1.075, `P1 = 第 1 笔成交价 ${rp.P1}`);
   check(rp.addLines[0] === 0.946 && rp.addLines[1] === 0.817, `买入线 ${rp.addLines.join(' / ')}（P1 × 0.88 / × 0.76）`);

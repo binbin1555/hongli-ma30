@@ -62,6 +62,12 @@ export const tickBelow = (x) => (Math.ceil(x * 1000 - 1e-6) - 1) / 1000;
 export const rbPct = (x) => `${Math.round((x - 1) * 100)}%`;
 
 export const p3 = (x) => (Number.isFinite(x) ? x.toFixed(3) : '–');
+/**
+ * 成本价：落在 0.001 的格子上照样三位；不在格子上（几笔成交按份数加权、加仓后的平均成本）就多给一位。
+ * 只给三位的话，真实成本 1.0747 会显示成 1.075 —— 「1.075 × 0.88」算出来是 0.946，
+ * 可按真实成本触发的是 0.945，页面上自己就对不上了。
+ */
+export const p34 = (x) => (!Number.isFinite(x) ? '–' : Math.abs(x * 1000 - Math.round(x * 1000)) < 1e-6 ? x.toFixed(3) : x.toFixed(4));
 /** 带符号的百分比，负号用 −，和红利面板一致 */
 export const pc1 = (x) => (Number.isFinite(x) ? `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(1)}%` : '–');
 const abs1 = (x) => `${Math.abs(x * 100).toFixed(1)}%`;
@@ -409,7 +415,7 @@ export function rbExpiryText(st, today) {
 
 /** '成本 1.075 · 持仓 −0.7% · 已投入专款的 50%'；知道专款总额时带上金额 */
 export function rbHoldLine(st, { fund = 0 } = {}) {
-  const base = `成本 ${p3(st.rp.avg)} · 持仓 ${pc1(st.pnl)}`;
+  const base = `成本 ${p34(st.rp.avg)} · 持仓 ${pc1(st.pnl)}`;
   if (!(fund > 0)) return `${base} · 已投入专款的 ${share(st.inv)}`;
   return `${base}（约 ${rbMoney(fund * st.inv * st.pnl)}）· 已投入约 ${rbMoney(fund * st.inv)}`;
 }
@@ -456,16 +462,16 @@ export function rbNightPush(st, { today, fund = 0, resent = null } = {}) {
     const L = st.rp.steps[st.rp.steps.length - 1];
     const since = st.rp.armed ? `${rbMd(st.rp.armed.d, today)}起已赚到过 ${rbPct(T.arm)}，` : '';
     const rule = x.why === 'ma' ? `${since}收盘 ≤ ${p3(x.line)}（跌破 ${T.ma} 日线）`
-      : x.why === 'floor' ? `${since}收盘 ≤ ${p3(x.line)}（成本 ${p3(L.avg)} × ${T.floor.toFixed(2)}，只剩 ${rbPct(T.floor)}）`
-        : x.why === 'sl' ? `收盘 ≤ ${p3(L.sl)}（成本 ${p3(L.avg)} × ${st.cfg.sl.toFixed(2)}）`
+      : x.why === 'floor' ? `${since}收盘 ≤ ${p3(x.line)}（成本 ${p34(L.avg)} × ${T.floor.toFixed(2)}，只剩 ${rbPct(T.floor)}）`
+        : x.why === 'sl' ? `收盘 ≤ ${p3(L.sl)}（成本 ${p34(L.avg)} × ${st.cfg.sl.toFixed(2)}）`
           : `第 ${st.cfg.maxDays} 个交易日不论盈亏`;
     const icon = x.why === 'sl' ? '⛔' : x.why === 'exp' ? '⏰' : '🔔';
     const lines = x.model
       ? [`规则：${rule} → 全部卖出，交易结束`, ...didOrNot(st, today, '卖')]
-      : [`已记下实际卖出：${rbMd(x.d, today)} @ ${p3(x.p)}`];
+      : [`已记下实际卖出：${rbMd(x.d, today)} @ ${p34(x.p)}`];
     return {
       title: x.model ? `${icon} 创业板50 · ${rbMd(x.d, today)}收盘 ${p3(st.last.c)}，${rbWhy(x.why, st.cfg)} → 全部卖出`
-        : `${icon} 创业板50 · ${rbMd(x.d, today)}已记下实际卖出 @ ${p3(x.p)}，交易结束`,
+        : `${icon} 创业板50 · ${rbMd(x.d, today)}已记下实际卖出 @ ${p34(x.p)}，交易结束`,
       body: [...lines, `按${x.model ? '收盘' : '成交价'}算：持仓 ${pc1(st.pnl)}，专款整体 ${pc1(st.fundPnl)}`
         + (fund > 0 ? `（约 ${rbMoney(fund * st.fundPnl)}）` : ''), '交易结束后不自动再来一轮'].join('\n') + tail,
       level: 'timeSensitive', group: RB_GROUP_ACT, action: true,
@@ -482,10 +488,10 @@ export function rbNightPush(st, { today, fund = 0, resent = null } = {}) {
     if (model.length) {
       const rule = model.map((b) => `收盘 ≤ ${p3(b.line)} 买第 ${b.k} 笔`).join('、');
       lines.push(`规则：${rule}${model.length > 1 ? ' → 两笔一起买' : ''}（${sizeText(w, st.last.c, fund)}）`, ...didOrNot(st, today, '买'));
-      lines.push(`买入后（按收盘价估）成本约 ${p3(st.rp.avg)} → 止盈启动线 ${p3(st.rp.arm)}、止损线 ${p3(st.rp.sl)}`);
+      lines.push(`买入后（按收盘价估）成本约 ${p34(st.rp.avg)} → 止盈启动线 ${p3(st.rp.arm)}、止损线 ${p3(st.rp.sl)}`);
     } else {
-      lines.push(`已记下实际成交：${buys.map((b) => `第 ${b.k} 笔 ${rbMd(b.d, today)} @ ${p3(b.p)}`).join('、')}`);
-      lines.push(`成本 ${p3(st.rp.avg)} → 止盈启动线 ${p3(st.rp.arm)}、止损线 ${p3(st.rp.sl)}`);
+      lines.push(`已记下实际成交：${buys.map((b) => `第 ${b.k} 笔 ${rbMd(b.d, today)} @ ${p34(b.p)}`).join('、')}`);
+      lines.push(`成本 ${p34(st.rp.avg)} → 止盈启动线 ${p3(st.rp.arm)}、止损线 ${p3(st.rp.sl)}`);
     }
     // 漏推了几晚、中间又赚到了 15%（极少见）：把这件事也说上，不然「接下来」那几行对不上
     const armedLater = st.fresh.find((e) => e.kind === 'arm');
@@ -516,7 +522,7 @@ export function rbNightPush(st, { today, fund = 0, resent = null } = {}) {
     return {
       title: `📈 创业板50 · ${rbMd(arm.d, today)}收盘 ${p3(arm.p)}，赚到 ${rbPct(T.arm)} → 改盯 ${T.ma} 日线`,
       body: [
-        `规则：收盘 ≥ ${p3(arm.line)}（成本 ${p3(st.rp.avg)} × ${T.arm.toFixed(2)}）之后不急着卖；此后收盘跌破 ${T.ma} 日线，或者回落到只赚 ${rbPct(T.floor)}，就全部卖出`,
+        `规则：收盘 ≥ ${p3(arm.line)}（成本 ${p34(st.rp.avg)} × ${T.arm.toFixed(2)}）之后不急着卖；此后收盘跌破 ${T.ma} 日线，或者回落到只赚 ${rbPct(T.floor)}，就全部卖出`,
         `下一步：${ndText}14:50 看一眼价格`,
         ...rbWatchLines(st, { fund }),
         `没跌破就继续拿：涨得越多，这条线跟着往上走`,
@@ -532,7 +538,7 @@ export function rbNightPush(st, { today, fund = 0, resent = null } = {}) {
     // 括号后面直接接「·」，别再空一格：「（−1.6%） · 」在手机上看着像断了
     title: `创业板50 · ${head}${head.endsWith('）') ? '' : ' '}· ${first ? '第 1 笔已买入' : '不用操作'}`,
     body: [
-      ...(first ? [`第 1 笔：${rbMd(st.cfg.start, today)}买入 @ ${p3(st.rp.P1)}（专款的 ${share(st.cfg.weights[0])}）`] : []),
+      ...(first ? [`第 1 笔：${rbMd(st.cfg.start, today)}买入 @ ${p34(st.rp.P1)}（专款的 ${share(st.cfg.weights[0])}）`] : []),
       `下一步：${ndText}14:50 看一眼价格`,
       ...rbWatchLines(st, { fund }),
       st.rp.next ? '没跌破就继续拿' : '都没到就不动',
