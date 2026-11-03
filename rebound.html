@@ -95,6 +95,7 @@ body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-
 #chart .ma{fill:none;stroke:var(--dm);stroke-width:1;stroke-dasharray:4 3;opacity:.75}
 #chart .avg{fill:none;stroke:var(--dm);stroke-width:1.2}
 #chart .tpl{fill:none;stroke:var(--tp);stroke-width:1.3;stroke-dasharray:5 3}
+#chart .ma10{fill:none;stroke:var(--tp);stroke-width:1.5;stroke-linejoin:round}
 #chart .sll{fill:none;stroke:var(--sl);stroke-width:1.3;stroke-dasharray:5 3}
 #chart .addl{fill:none;stroke:var(--buy);stroke-width:1.1;stroke-dasharray:2 3}
 #chart .ahead{opacity:.55}
@@ -120,6 +121,7 @@ body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-
 .legend span{display:inline-flex;align-items:center;gap:5px}
 .legend i{display:inline-block;width:16px;height:0;border-top:2px solid var(--tx)}
 .legend i.ma{border-top:1.5px dashed var(--dm)} .legend i.tp{border-top:2px dashed var(--tp)}
+.legend i.ma10{border-top:2px solid var(--tp)}
 .legend i.sl{border-top:2px dashed var(--sl)} .legend i.add{border-top:2px dotted var(--buy)}
 .legend i.avg{border-top:1.5px solid var(--dm)}
 .legend b{color:var(--buy);font-size:10px}
@@ -185,7 +187,8 @@ details summary{cursor:pointer;color:var(--ac);font-size:13px}
     <div id="chart"></div>
     <div class="legend" id="legend">
       <span><i></i>收盘价</span><span><i class="ma"></i>年线</span><span><i class="avg"></i>平均成本</span>
-      <span><i class="tp"></i>止盈线</span><span><i class="sl"></i>止损线</span><span><i class="add"></i>买入线</span>
+      <span><i class="tp"></i>止盈启动线</span><span><i class="ma10"></i>10 日线（赚到 15% 之后才画）</span>
+      <span><i class="sl"></i>止损线</span><span><i class="add"></i>买入线</span>
       <span><b>▲</b>买入</span>
     </div>
     <p class="note" id="chartNote"></p>
@@ -218,19 +221,22 @@ details summary{cursor:pointer;color:var(--ac);font-size:13px}
       <li>买三笔：专款的 <b>50%</b> 已在 <span id="r0">11 月 3 日</span>以 <span class="mono" id="r1">1.075</span> 买入（P1）；
         收盘 ≤ P1 × 0.88（<span class="mono" id="r2">0.946</span>）买 <b class="buy">25%</b>；
         收盘 ≤ P1 × 0.76（<span class="mono" id="r3">0.817</span>）再买 <b class="buy">25%</b></li>
-      <li>卖：任意一条先发生就全部卖出，交易结束 —— <b class="tp">止盈</b> 收盘 ≥ 平均成本 × 1.20；
+      <li>卖：任意一条先发生就全部卖出，交易结束 —— <b class="tp">止盈</b> 收盘赚到平均成本的 15%（止盈启动线）之后不急着卖，
+        改盯 10 日线：此后收盘跌破 10 日线、或者回落到只赚 2%，就全部卖出；
         <b class="sl">止损</b> 收盘 ≤ 平均成本 × 0.75；<b>到期</b> 第 120 个交易日，不论盈亏</li>
     </ul>
     <details>
       <summary>每个交易日 14:50 左右，按这个顺序检查</summary>
       <ol>
         <li>到止损线 → 全部卖出，结束</li>
-        <li>到止盈线 → 全部卖出，结束</li>
+        <li>还没赚到过 15%：到了止盈启动线 → 记下「赚到 15%」，不用操作；已经赚到过 15%（含当天）：跌破 10 日线或回落到只赚 2% → 全部卖出，结束</li>
         <li>没买第 2 笔，且到第 2 笔买入线 → 买第 2 笔</li>
         <li>没买第 3 笔，且到第 3 笔买入线 → 买第 3 笔</li>
         <li>到期日 → 全部卖出，结束（到期那天只卖不买）</li>
       </ol>
       <ul>
+        <li>「跌破 10 日线」算上当天的收盘：收盘低于前 9 个交易日收盘的平均价，就是跌破。所以这条线前一晚就算得出来，推送里直接给数</li>
+        <li>赚到过 15% 之后不再加仓：价格真跌到买入线之前，早就先碰到卖出线了</li>
         <li>同一天既到止损线又到买入线 → 按止损执行，不再加仓</li>
         <li>只看收盘价，盘中碰一下不算；中途不改规则，不融资、不加杠杆</li>
         <li>剩下的钱放在随时（最晚第二个交易日）就能用的地方；交易结束后不自动再来一轮</li>
@@ -247,8 +253,8 @@ details summary{cursor:pointer;color:var(--ac);font-size:13px}
 <script type="module">
 // 版本号是 shared/rebound.js 的内容哈希，由 npm run stamp 自动写入（理由同红利面板的 CORE_VERSION：
 // 不带版本号，浏览器会一直用缓存里的旧模块，改了规则推上线后页面会因为「找不到导出」白屏）
-const REBOUND_VERSION = '6c88312bb7';
-const { rbStatus, rbNightPush, rbTradingDaysAfter, rbBeijingDate, rbBeijingHM, rbDay, rbMd, rbWd, rbMoney, rbShares, p3, pc1 }
+const REBOUND_VERSION = 'e70042a7d7';
+const { rbStatus, rbNightPush, rbTradingDaysAfter, rbBeijingDate, rbBeijingHM, rbDay, rbMd, rbWd, rbMoney, rbShares, rbWhy, rbPct, p3, pc1 }
   = await import(`./shared/rebound.js?v=${REBOUND_VERSION}`);
 
 const $ = (id) => document.getElementById(id);
@@ -355,7 +361,7 @@ function renderNext() {
     const p = rbNightPush(ST, { today, fund: fund() });
     if (!p) {
       const x = ST.rp.exit;
-      kick = `${rbMd(x.d, today)} · ${({ tp: '止盈', sl: '止损', exp: '到期', manual: '实际卖出' })[x.why]}`;
+      kick = `${rbMd(x.d, today)} · ${rbWhy(x.why, S.cfg)}`;
       head = '交易已结束';
       lines = [`${rbMd(x.d, today)}全部卖出 @ ${p3(x.p)}`, `持仓 ${pc1(ST.pnl)}，专款整体 ${pc1(ST.fundPnl)}`, '交易结束后不自动再来一轮'];
       cls = `card ${x.why === 'sl' ? 'sl' : 'tp'}`;
@@ -402,23 +408,31 @@ function renderLadder() {
     box.innerHTML = `<div class="r done"><span class="dot"></span><span class="nm">交易已结束</span><span class="px">${p3(ST.rp.exit.p)}</span><span class="ds">${pc1(ST.pnl)}</span></div>`;
     return;
   }
-  const c = ST.c, rp = ST.rp;
+  const c = ST.c, rp = ST.rp, T = S.cfg.tp;
   const items = [];
-  items.push({ cls: 'tp', nm: '止盈线', sm: '到了就全部卖出', px: rp.tp });
+  // 赚到过 15% 之后只剩一条卖出线：买入线、止损线都在保底线下面，跌下去先碰到的一定是它
+  if (rp.next) {
+    items.push({ cls: 'tp', nm: '卖出线', sell: true, px: rp.next.line,
+      sm: rp.next.by === 'ma' ? `跌破 ${T.ma} 日线：收盘 ≤ 它就全部卖出（每天跟着 10 日线变）` : `回落到只赚 ${rbPct(T.floor)}：收盘 ≤ 它就全部卖出` });
+  } else {
+    items.push({ cls: 'tp', nm: '止盈启动线', sm: `赚到 ${rbPct(T.arm)}：不急着卖，从这天起改盯 ${T.ma} 日线`, px: rp.arm });
+  }
   for (const t of rp.tranches.slice(1)) {
     const line = rp.addLines[t.k - 2];
     if (t.d) items.push({ cls: 'done', nm: `第 ${t.k} 笔已买`, sm: `${rbMd(t.d, today)}${t.model ? '（按收盘价记）' : ''}`, px: t.p, nodist: true });
-    else items.push({ cls: 'add', nm: `第 ${t.k} 笔买入线`, sm: `买专款的 ${share(t.w)}${fund() ? `，约 ${rbMoney(fund() * t.w)}（约 ${rbShares(fund() * t.w, line).toLocaleString('en-US')} 份）` : ''}`, px: line });
+    else if (!rp.next) items.push({ cls: 'add', nm: `第 ${t.k} 笔买入线`, sm: `买专款的 ${share(t.w)}${fund() ? `，约 ${rbMoney(fund() * t.w)}（约 ${rbShares(fund() * t.w, line).toLocaleString('en-US')} 份）` : ''}`, px: line });
   }
   // 还没有收盘价时，「现价」那格就是第 1 笔成交价，和平均成本是同一个数，不重复列
   if (ST.last) items.push({ cls: 'avg', nm: '平均成本', sm: `第 1 笔 ${p3(rp.P1)}${rp.tranches.some((t) => t.k > 1 && t.d) ? '，加仓后已重算' : ''}`, px: rp.avg, nodist: true });
   const behind = ST.watch.find((x) => x.kind === 'sl');
-  items.push({ cls: 'sl', nm: '止损线', sm: behind && behind.behind ? '在下一笔买入线下面：先碰到的是买入线，买完它会重算' : '到了就全部卖出', px: rp.sl });
+  if (!rp.next) items.push({ cls: 'sl', nm: '止损线', sm: behind && behind.behind ? '在下一笔买入线下面：先碰到的是买入线，买完它会重算' : '到了就全部卖出', px: rp.sl });
   items.push({ cls: 'now', nm: ST.last ? '现价' : '第 1 笔成交价', sm: ST.last ? `${rbMd(ST.last.d, today)}收盘` : `${rbMd(S.cfg.start, today)} 21:05 第一次更新后换成收盘价`, px: c, nodist: true });
   items.sort((a, b) => b.px - a.px || (a.cls === 'now' ? -1 : 1));
   box.innerHTML = items.map((x) => {
     const d = x.px / c - 1;
-    const ds = x.nodist ? (x.cls === 'avg' ? `持仓 ${pc1(c / rp.avg - 1)}` : '') : `${d >= 0 ? '还要涨' : '还要跌'} ${abs1(d)}`;
+    // 卖出线偶尔会比现价还高（价格在 10 日线下方没多远）：那不是「还要涨」，是「收盘涨不过它就卖」
+    const ds = x.nodist ? (x.cls === 'avg' ? `持仓 ${pc1(c / rp.avg - 1)}` : '')
+      : x.sell && d >= 0 ? '涨不过它就卖' : `${d >= 0 ? '还要涨' : '还要跌'} ${abs1(d)}`;
     return `<div class="r ${x.cls}"><span class="dot"></span><span class="nm">${esc(x.nm)}<small>${esc(x.sm)}</small></span>`
       + `<span class="px">${p3(x.px)}</span><span class="ds">${esc(ds)}</span></div>`;
   }).join('');
@@ -448,20 +462,21 @@ function renderRanges() {
   }
 }
 
-/** 年线（250 日均线），和回测图上那条一致 */
-function ma250(rows) {
+/** n 日均线：年线（250）和回测图上那条一致；赚到 15% 之后画的 10 日线也用它（算上当天收盘） */
+function sma(rows, n) {
   const out = new Array(rows.length).fill(null);
   let s = 0;
   for (let i = 0; i < rows.length; i++) {
     s += rows[i].c;
-    if (i >= 250) s -= rows[i - 250].c;
-    if (i >= 249) out[i] = s / 250;
+    if (i >= n) s -= rows[i - n].c;
+    if (i >= n - 1) out[i] = s / n;
   }
   return out;
 }
 
 /**
- * 走势图：横轴是交易日。价格线、年线、平均成本、止盈 / 止损（加仓后会跳一级）、买入线、买点。
+ * 走势图：横轴是交易日。价格线、年线、平均成本、止盈启动线 / 止损线（加仓后会跳一级）、买入线、买点。
+ * 赚到 15% 那天起启动线不再画，改画 10 日线：价格线跌到它下面那天就是卖出的那天。
  * 「近期」看最近三个月、线画到右边；「全程」一直画到第 120 个交易日（到期），
  * 没走完的那段留白 —— 一眼看得出还剩多少时间。
  */
@@ -484,12 +499,15 @@ function drawChart() {
   const iWin = Math.min(iEnd, iDue);                        // 策略窗口在图里画到哪
   const fut = rbTradingDaysAfter(rows[iLast].d, Math.max(0, iEnd - iLast), S.cal).days;
   const dateAt = (i) => (i <= iLast ? rows[i].d : fut[i - iLast - 1] || null);
-  const ma = ma250(rows);
+  const ma = sma(rows, 250);
+  const m10 = sma(rows, cfg.tp.ma);
+  const iArm = rp.armed ? s + rp.armed.day : null;
   const open = ST.phase !== 'done';
 
   const vals = [rp.P1];
-  for (let i = i0; i <= iLast; i++) { vals.push(rows[i].c); if (ma[i]) vals.push(ma[i]); }
-  for (const st of rp.steps) vals.push(st.tp, st.sl);
+  for (let i = i0; i <= iLast; i++) { vals.push(rows[i].c); if (ma[i]) vals.push(ma[i]); if (iArm != null && i >= iArm && m10[i]) vals.push(m10[i]); }
+  for (const st of rp.steps) vals.push(st.arm, st.sl);
+  if (rp.next) vals.push(rp.next.line);
   if (open) for (const t of rp.tranches.slice(1)) if (!t.d) vals.push(rp.addLines[t.k - 2]);
   let lo = Math.min(...vals), hi = Math.max(...vals);
   const pad = (hi - lo) * 0.06 || 0.05; lo -= pad; hi += pad;
@@ -533,26 +551,33 @@ function drawChart() {
   const ppts = []; for (let i = i0; i <= iLast; i++) ppts.push([x(i), y(rows[i].c)]);
   out.push(`<path class="px" d="${poly(ppts)}"/>`);
 
-  // 平均成本、止盈、止损：逐日的阶梯（加仓那天跳一级），没走到的那段用虚一些的线接到到期日
+  // 平均成本、止盈启动线、止损：逐日的阶梯（加仓那天跳一级），没走到的那段用虚一些的线接到到期日。
+  // 启动线只画到赚到 15% 那天，之后换成 10 日线；止盈阶段里止损线用不上，不再往后延
   if (rp.s >= 0) {
-    const step = (key) => {
+    const step = (key, jEnd = rp.steps.length - 1) => {
       let d = `M${f(x(s))},${f(y(rp.steps[0][key]))}`;
-      for (let j = 1; j < rp.steps.length; j++) d += `H${f(x(s + j))}V${f(y(rp.steps[j][key]))}`;
+      for (let j = 1; j <= jEnd; j++) d += `H${f(x(s + j))}V${f(y(rp.steps[j][key]))}`;
       return d;
     };
-    out.push(`<path class="avg" d="${step('avg')}"/>`, `<path class="tpl" d="${step('tp')}"/>`, `<path class="sll" d="${step('sl')}"/>`);
+    out.push(`<path class="avg" d="${step('avg')}"/>`, `<path class="tpl" d="${step('arm', rp.armed ? rp.armed.day : rp.steps.length - 1)}"/>`, `<path class="sll" d="${step('sl')}"/>`);
+    if (iArm != null) {
+      const pts = []; for (let i = iArm; i <= iLast; i++) if (m10[i]) pts.push([x(i), y(m10[i])]);
+      if (pts.length > 1) out.push(`<path class="ma10" d="${poly(pts)}"/>`);
+    }
     if (open) {
-      out.push(`<path class="tpl ahead" d="M${f(x(iLast))},${f(y(rp.tp))}H${f(x(iWin))}"/>`);
-      out.push(`<path class="sll ahead" d="M${f(x(iLast))},${f(y(rp.sl))}H${f(x(iWin))}"/>`);
+      if (!rp.armed) {
+        out.push(`<path class="tpl ahead" d="M${f(x(iLast))},${f(y(rp.arm))}H${f(x(iWin))}"/>`);
+        out.push(`<path class="sll ahead" d="M${f(x(iLast))},${f(y(rp.sl))}H${f(x(iWin))}"/>`);
+      }
       out.push(`<path class="avg ahead" d="M${f(x(iLast))},${f(y(rp.avg))}H${f(x(iWin))}"/>`);
     }
   } else {
-    out.push(`<path class="tpl ahead" d="M${f(x(s))},${f(y(rp.tp))}H${f(x(iWin))}"/>`, `<path class="sll ahead" d="M${f(x(s))},${f(y(rp.sl))}H${f(x(iWin))}"/>`);
+    out.push(`<path class="tpl ahead" d="M${f(x(s))},${f(y(rp.arm))}H${f(x(iWin))}"/>`, `<path class="sll ahead" d="M${f(x(s))},${f(y(rp.sl))}H${f(x(iWin))}"/>`);
   }
-  // 买入线：买了的画到买入那天，没买的一直画下去
+  // 买入线：买了的画到买入那天；没买的一直画下去，赚到 15% 之后不再加仓，就画到那天为止
   for (const t of rp.tranches.slice(1)) {
     const line = rp.addLines[t.k - 2];
-    const end = t.d ? rows.findIndex((r) => r.d === t.d) : open ? iWin : iLast;
+    const end = t.d ? rows.findIndex((r) => r.d === t.d) : iArm != null ? iArm : open ? iWin : iLast;
     if (end > s) out.push(`<path class="addl" d="M${f(x(s))},${f(y(line))}H${f(x(end))}"/>`);
   }
   // 到期日：在图里才画（「近期」那一档离到期还远时看不到它，到期日在下面那张卡里写着）
@@ -586,8 +611,11 @@ function drawChart() {
 
   // 右侧标签：各条线的名字和价格，挤在一起就往下推，用细线连回去
   const labs = [];
-  if (open) {
-    labs.push({ v: rp.tp, t: `止盈 ${p3(rp.tp)}`, c: 'tp' });
+  if (open && rp.next) {
+    labs.push({ v: rp.next.line, t: `卖出 ${p3(rp.next.line)}`, c: 'tp' });
+    labs.push({ v: rp.avg, t: `成本 ${p3(rp.avg)}`, c: 'avgt' });
+  } else if (open) {
+    labs.push({ v: rp.arm, t: `启动 ${p3(rp.arm)}`, c: 'tp' });
     for (const t of rp.tranches.slice(1)) if (!t.d) labs.push({ v: rp.addLines[t.k - 2], t: `第${t.k}笔 ${p3(rp.addLines[t.k - 2])}`, c: 'add' });
     labs.push({ v: rp.avg, t: `成本 ${p3(rp.avg)}`, c: 'avgt' });
     labs.push({ v: rp.sl, t: `止损 ${p3(rp.sl)}`, c: 'sl' });
@@ -607,7 +635,7 @@ function drawChart() {
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="159682 走势和各条线">${out.join('')}`
     + `<line class="cross" id="cross" x1="0" y1="${T}" x2="0" y2="${H - B}" visibility="hidden"/></svg><div id="tip"></div>`;
 
-  // 点一下 / 划一下看某天：收盘价，策略期间再带上当天的成本、止盈、止损
+  // 点一下 / 划一下看某天：收盘价，策略期间再带上当天的成本和线（止盈阶段里是那天定下的卖出线）
   const svg = host.querySelector('svg');
   const tip = $('tip'), cross = $('cross');
   if (!svg || !tip || !cross || typeof svg.getBoundingClientRect !== 'function') return;
@@ -619,7 +647,8 @@ function drawChart() {
     const row = rows[i], j = i - s, stp = j >= 0 && j < rp.steps.length ? rp.steps[j] : null;
     cross.setAttribute('x1', f(x(i))); cross.setAttribute('x2', f(x(i))); cross.setAttribute('visibility', 'visible');
     tip.innerHTML = `<div class="td">${row.d}（${rbWd(row.d)}）${stp ? ` · 第 ${j} 天` : ''}</div>收盘 <b>${p3(row.c)}</b>`
-      + (stp ? `<br>成本 <b>${p3(stp.avg)}</b> · 止盈 <b>${p3(stp.tp)}</b> · 止损 <b>${p3(stp.sl)}</b>` : '');
+      + (stp ? (stp.sell != null ? `<br>成本 <b>${p3(stp.avg)}</b> · 下一天卖出线 <b>${p3(stp.sell)}</b>`
+        : `<br>成本 <b>${p3(stp.avg)}</b> · 止盈启动 <b>${p3(stp.arm)}</b> · 止损 <b>${p3(stp.sl)}</b>`) : '');
     tip.classList.add('on');
     const left = (x(i) / W) * r.width;
     tip.style.left = `${Math.max(0, Math.min(left + 10, r.width - 220))}px`;
@@ -629,7 +658,7 @@ function drawChart() {
   svg.addEventListener('pointerleave', () => { tip.classList.remove('on'); cross.setAttribute('visibility', 'hidden'); });
 
   const firstD = rows[i0].d;
-  const tail = '止盈线、止损线跟着平均成本走，加仓那天会跳一级。';
+  const tail = `止盈启动线、止损线跟着平均成本走，加仓那天会跳一级；赚到 ${rbPct(cfg.tp.arm)} 之后改画 ${cfg.tp.ma} 日线。`;
   $('chartNote').textContent = range === 'recent'
     ? `从 ${rbMd(firstD, today)}起，横轴是交易日；浅色底是策略期间。${tail}切到「全程」能看到离到期还剩多少。`
     : `横轴是交易日，从 ${rbMd(firstD, today)}画到第 ${cfg.maxDays} 个交易日（到期）；浅色底是策略期间，右边还空着的那段就是剩下的时间。${tail}`;
@@ -643,7 +672,8 @@ function renderPos() {
     const amt = F ? `<br><small class="wait">约 ${rbMoney(F * t.w)}</small>` : '';
     const state = t.d
       ? `<span class="ok">✓ ${rbMd(t.d, today)}${t.k === 1 ? '开盘' : t.model ? '（按收盘价记）' : ''}</span>`
-      : `<span class="wait">等收盘 ≤ <span class="mono">${p3(line)}</span></span>`;
+      : rp.armed ? `<span class="wait">不再买（${rbMd(rp.armed.d, today)}已赚到过 ${rbPct(S.cfg.tp.arm)}）</span>`
+        : `<span class="wait">等收盘 ≤ <span class="mono">${p3(line)}</span></span>`;
     return `<tr><td>第 ${t.k} 笔</td><td>${share(t.w)}${amt}</td><td>${state}</td><td class="r"><span class="mono">${t.d ? p3(t.p) : '–'}</span></td></tr>`;
   }).join('');
   const kv = [];

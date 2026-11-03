@@ -22,14 +22,14 @@ import {
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
 import {
-  rbStatus, rbNightPush, rbIntradayPush, rbSeriesJSON, rbBeijingDate, rbMd, p3, RB_GROUP, RB_GROUP_ACT,
+  rbStatus, rbNightPush, rbIntradayPush, rbSeriesJSON, rbBeijingDate, rbMd, rbWhy, rbPct, p3, RB_GROUP, RB_GROUP_ACT,
 } from '../../shared/rebound.js';
 
 // 线上跑的是哪一版代码。由 npm run stamp 按 worker/src/index.js + shared/strategy.js + shared/rebound.js
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = 'ee8937a5b2';
+const BUILD = '6d855ae1a7';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -1584,9 +1584,10 @@ async function runRebound(env, { slot = 'night', force = false } = {}) {
     problem: st.ok ? null : st.problem,
   };
   const msg = !st.ok ? `${today} 规则文件有问题：${st.problem}`
-    : st.exitFresh ? `${today} 收盘 ${p3(st.c)}，${st.exitFresh.why === 'exp' ? '到期' : st.exitFresh.why === 'tp' ? '到了止盈线' : st.exitFresh.why === 'sl' ? '到了止损线' : '记下实际卖出'}，全部卖出`
+    : st.exitFresh ? `${today} 收盘 ${p3(st.c)}，${rbWhy(st.exitFresh.why, cfg)}，全部卖出`
       : st.fresh.some((e) => e.k > 1 && e.model) ? `${today} 收盘 ${p3(st.c)}，到了买入线`
-        : st.phase === 'done' ? `${today} 交易已结束` : `${today} 收盘 ${p3(st.c)}，不用操作`;
+        : st.fresh.some((e) => e.kind === 'arm') ? `${today} 收盘 ${p3(st.c)}，赚到 ${rbPct(cfg.tp.arm)}，改盯 ${cfg.tp.ma} 日线`
+          : st.phase === 'done' ? `${today} 交易已结束` : `${today} 收盘 ${p3(st.c)}，不用操作`;
   const sha = await rbCommit(G, series, `chore(rebound): ${msg}`, today);
   if (sha === null) return { ok: true, today, skipped: `另一轮刚把 ${today} 跑完，这一轮让路` };
 

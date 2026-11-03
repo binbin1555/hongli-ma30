@@ -94,6 +94,10 @@ const AFTER = RB.rbTradingDaysAfter(START, 130, CAL).days;
 const BEFORE = BASE.series.rows.filter((r) => r.d < START);
 const day0 = { d: START, c: 1.072, h: 1.077, l: 1.063 };
 const path = (closes) => [...BEFORE, day0, ...closes.map((c, i) => ({ d: AFTER[i], c, h: +(c * 1.01).toFixed(3), l: +(c * 0.99).toFixed(3) }))];
+// 先垫 9 天 1.000，后面几天的 10 日线就只由这里给的数决定（同 tests/rebound.mjs）
+const W9 = Array(9).fill(1.0);
+const RISE = [...W9, 1.15, 1.18, 1.2, 1.22, 1.24, 1.26];            // 第 14 天赚到 15%，下一天卖出线 1.138
+const DONE = [...W9, 0.944, 1.1, 1.2, 1.24, 1.0];                   // 第 10 天买第 2 笔、第 12 天赚到 15%、第 14 天跌破 10 日线卖出
 function put(rows, { run = null, cfg = BASE.cfg, fund = 0 } = {}) {
   store.set('hlma30.rbFund', JSON.stringify(fund));
   H.S = { ...BASE, cfg, series: { ...BASE.series, rows, run } };
@@ -110,7 +114,7 @@ console.log('\n● 仓库里的真实数据（第 1 笔已买、当晚还没更�
   } else {
     check(T('nextHead').length > 0, `已经更新过：${T('nextHead')}`);
   }
-  check(/0\.946/.test(T('ladder')) && /1\.290/.test(T('ladder')) && /0\.817/.test(T('ladder')), '梯子上有止盈线和两条买入线');
+  check(/止盈启动线.*1\.237/.test(T('ladder')) && /0\.946/.test(T('ladder')) && /0\.817/.test(T('ladder')), '梯子上有止盈启动线和两条买入线');
   check(/还剩 \d+ 个交易日/.test(T('due')), `到期：${T('due').slice(0, 60)}`);
   check(/<svg/.test(el('chart').innerHTML), '走势图画出来了');
 }
@@ -129,7 +133,7 @@ console.log('\n● 平常的日子：大字是「下一步」，下面每一行�
   const got = nextLines();
   check(JSON.stringify(got) === JSON.stringify(want), '下面每一行和推送一字不差', `页面：${got.join(' | ')}\n      推送：${want.join(' | ')}`);
   check(T('nextKick') === p.title.replace(/^创业板50 · /, ''), `小字是推送标题：${T('nextKick')}`);
-  check(/第 2 笔买入线.*0\.946还要跌 9\.9%/.test(T('ladder')) && /止盈线.*1\.290还要涨 22\.9%/.test(T('ladder')), '梯子：收盘 1.050 时第 2 笔还要跌 9.9%，止盈还要涨 22.9%', T('ladder'));
+  check(/第 2 笔买入线.*0\.946还要跌 9\.9%/.test(T('ladder')) && /止盈启动线.*1\.237还要涨 17\.8%/.test(T('ladder')), '梯子：收盘 1.050 时第 2 笔还要跌 9.9%，止盈启动线还要涨 17.8%', T('ladder'));
   check(/还剩 117 个交易日/.test(T('due')) && /约 2027 年 4 月 30 日（周五）到期/.test(T('due')), `到期：${T('due').slice(0, 50)}`);
   check(/推送 21:05 已送达/.test(T('foot')) && /行情来自腾讯/.test(T('foot')), `页脚：${T('foot')}`);
   check(!fractions(visible()).length, '整页不出现「1/4」这类分数', fractions(visible()).join(','));
@@ -165,23 +169,47 @@ console.log('\n● 走势图');
   put(path([1.06, 1.0, 0.97]));
   H.setRange('round'); H.render();
   const svg = el('chart').innerHTML;
-  check(/止盈 1\.290/.test(svg) && /第2笔 0\.946/.test(svg) && /第3笔 0\.817/.test(svg) && /止损 0\.806/.test(svg) && /成本 1\.075/.test(svg), '「全程」：右边标着止盈、两条买入线、止损、成本');
+  check(/启动 1\.237/.test(svg) && /第2笔 0\.946/.test(svg) && /第3笔 0\.817/.test(svg) && /止损 0\.806/.test(svg) && /成本 1\.075/.test(svg), '「全程」：右边标着止盈启动线、两条买入线、止损、成本');
+  check(!/class="ma10"/.test(svg), '还没赚到 15%：不画 10 日线');
   check(/到期 约4\/30/.test(svg), '「全程」：画出到期日（标「约」）');
   check((svg.match(/class="mb"/g) || []).length === 1, '买点：第 1 笔一个红三角');
   H.setRange('recent'); H.render();
   check(!/到期 约/.test(el('chart').innerHTML), '「近期」：离到期还远，不画到期线');
-  put(path([1.0, 0.944, 1.1, 1.24]));
+  put(path(RISE));
+  const s1 = el('chart').innerHTML;
+  check(/class="ma10"/.test(s1) && /卖出 1\.138/.test(s1) && !/启动 1\.237/.test(s1) && !/第2笔 0\.946/.test(s1) && !/止损 /.test(s1),
+    '赚到 15% 之后：画 10 日线，右边只标卖出线和成本');
+  put(path(DONE));
+  check(H.ST.phase === 'done', `这条路走完是卖出：${H.ST.phase}`);
   const s2 = el('chart').innerHTML;
-  check((s2.match(/class="mb"/g) || []).length === 2 && /class="ms"/.test(s2), '止盈之后：两个买点、一个卖点');
-  check(!/第2笔 0\.946/.test(s2) && !/止盈 /.test(s2), '交易结束：右边不再标还没触发的线');
+  check((s2.match(/class="mb"/g) || []).length === 2 && /class="ms"/.test(s2), '跌破 10 日线卖出之后：两个买点、一个卖点');
+  check(!/第2笔 0\.946/.test(s2) && !/启动 /.test(s2) && !/卖出 1/.test(s2), '交易结束：右边不再标还没触发的线');
+}
+
+console.log('\n● 赚到 15% 之后：梯子只剩卖出线，下一步和推送一字不差');
+{
+  const rows = path(RISE);
+  put(rows);
+  const today = RB.rbBeijingDate();
+  const st = RB.rbStatus({ cfg: BASE.cfg, rows, tradingDays: CAL, since: rows[rows.length - 2].d });
+  const p = RB.rbNightPush(st, { today });
+  const lines = p.body.split('\n');
+  const i = lines.findIndex((l) => l.startsWith('下一步：'));
+  const want = lines.filter((_, k) => k !== i).map((l) => (/^[↓↑]/.test(l) ? `${l[0]}${l.slice(1).trim()}` : l));
+  check(JSON.stringify(nextLines()) === JSON.stringify(want), '「下一步」每一行和推送一字不差', `页面：${nextLines().join(' | ')}\n      推送：${want.join(' | ')}`);
+  check(/卖出线.*跌破 10 日线.*1\.138还要跌 9\.7%/.test(T('ladder')) && !/买入线/.test(T('ladder')) && !/止损线/.test(T('ladder')) && !/止盈启动线/.test(T('ladder')),
+    '梯子：卖出线 1.138 还要跌 9.7%；买入线、止损线、启动线都不再列', T('ladder'));
+  check(/第 2 笔.*不再买（11 月 23 日已赚到过 15%）/.test(T('tranches')) && !/等收盘/.test(T('tranches')), '持仓表：没买的那两笔写「不再买」，不再挂着「等收盘 ≤ 0.946」', T('tranches'));
+  put(path([...W9, 1.10, ...Array(8).fill(1.30), 1.29]));
+  check(/卖出线.*1\.298涨不过它就卖/.test(T('ladder')), '卖出线比现价还高：梯子上说「涨不过它就卖」，不说「还要涨」', T('ladder'));
 }
 
 console.log('\n● 交易结束的第二天：说「交易已结束」，不再给下一步');
 {
-  const rows = path([1.0, 0.944, 1.1, 1.24, 1.2]);
-  put(rows);
-  check(T('nextHead') === '交易已结束' && /全部卖出 @ 1\.240/.test(T('nextList')) && /交易结束后不自动再来一轮/.test(T('nextList')), `结束：${T('nextHead')}｜${T('nextList')}`);
-  check(/交易已结束/.test(T('ladder')) && /持有了 4 个交易日/.test(T('due')), `梯子和到期卡：${T('ladder')}｜${T('due')}`);
+  put(path([...DONE, 1.05]));
+  check(T('nextHead') === '交易已结束' && /全部卖出 @ 1\.000/.test(T('nextList')) && /交易结束后不自动再来一轮/.test(T('nextList'))
+    && /跌破 10 日线/.test(T('nextKick')), `结束：${T('nextKick')}｜${T('nextHead')}｜${T('nextList')}`);
+  check(/交易已结束/.test(T('ladder')) && /持有了 14 个交易日/.test(T('due')), `梯子和到期卡：${T('ladder')}｜${T('due')}`);
 }
 
 console.log('\n● 数据落后、推送没送达：页面顶上说清楚');

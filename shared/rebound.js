@@ -9,9 +9,14 @@
  *       第 1 笔 11 月 3 日开盘已买，成交价记作 P1
  *       第 2 笔 收盘 ≤ P1 × 0.88；第 3 笔 收盘 ≤ P1 × 0.76
  *   卖  下面任意一条先发生，全部卖出，交易结束（结束后不自动再来一轮）
- *       止盈 收盘 ≥ 平均成本 × 1.20；止损 收盘 ≤ 平均成本 × 0.75；到期 第 120 个交易日
- *   每个交易日按顺序检查：止损 → 止盈 → 第 2 笔 → 第 3 笔 → 到期；
- *   同一天既到止损线又到买入线，按止损执行，不再加仓；到期那天只卖不买。
+ *       止盈 收盘 ≥ 平均成本 × 1.15（赚到 15%）之后不急着卖，改盯 10 日线：
+ *            此后收盘跌破 10 日线，或者回落到 ≤ 平均成本 × 1.02（只剩 2%），全部卖出
+ *       止损 收盘 ≤ 平均成本 × 0.75；到期 第 120 个交易日
+ *   每个交易日按顺序检查：止损 → 止盈（到没到 15%、跌没跌破 10 日线）→ 第 2 笔 → 第 3 笔 → 到期；
+ *   同一天既到止损线又到买入线，按止损执行，不再加仓；到期那天只卖不买；赚到过 15% 之后不再加仓。
+ *
+ * 止盈原来是「收盘 ≥ 平均成本 × 1.20 全部卖出」，2026-11-03 改成现在这样：回测里平均收益差不多，
+ * 中位数更高，涨到 +15%～+19% 又掉头的行情不会白等一场；代价是碰上一两天的暴涨，卖得比原来晚。
  *
  * 仓库是公开的，这里不出现任何金额：仓位一律说「专款的百分之几」。
  * 金额只在 Worker 密钥 REBOUND_FUND 和手机浏览器的 localStorage 里，各自现算。
@@ -41,13 +46,20 @@ export const RB_HOLIDAY_GUESS = new Set([
 // ---------------------------------------------------------------- 数字和日期
 
 /**
- * 按 0.001 的最小价位取整。止盈线向上取，止损线和买入线向下取。
+ * 按 0.001 的最小价位取整。止盈启动线向上取，止损线、保底线和买入线向下取。
  * 收盘价本身都落在 0.001 的格子上，这样取整之后
- * 「收盘 ≥ 显示出来的止盈线」和「收盘 ≥ 成本 × 1.20」永远同真同假 ——
+ * 「收盘 ≥ 显示出来的启动线」和「收盘 ≥ 成本 × 1.15」永远同真同假 ——
  * 不会出现页面写着 0.771、收盘正好 0.771 却不触发的事。
  */
 export const tickUp = (x) => Math.ceil(x * 1000 - 1e-6) / 1000;
 export const tickDown = (x) => Math.floor(x * 1000 + 1e-6) / 1000;
+/**
+ * 比 x 低的最近一格。10 日线卖出线用它：「收盘 < 均线」换成「收盘 ≤ 显示的线」，
+ * 收盘正好等于均线不算跌破，低一格才算。
+ */
+export const tickBelow = (x) => (Math.ceil(x * 1000 - 1e-6) - 1) / 1000;
+/** 1.15 → '15%'，1.02 → '2%'：规则参数换成「赚到百分之几」的说法 */
+export const rbPct = (x) => `${Math.round((x - 1) * 100)}%`;
 
 export const p3 = (x) => (Number.isFinite(x) ? x.toFixed(3) : '–');
 /** 带符号的百分比，负号用 −，和红利面板一致 */
@@ -134,7 +146,10 @@ export function rbConfigProblems(cfg) {
   }
   const L = cfg.ladder;
   if (!Array.isArray(L) || L.length !== 2 || !(L[0] < 1 && L[1] > 0 && L[1] < L[0])) out.push('ladder 应是两个递减的、介于 0 和 1 之间的数');
-  if (!(cfg.tp > 1)) out.push('tp 应大于 1');
+  const T = cfg.tp;
+  if (!T || typeof T !== 'object' || !(T.arm > 1) || !(T.floor >= 1 && T.floor < T.arm) || !(Number.isInteger(T.ma) && T.ma >= 2)) {
+    out.push('tp 应是 {arm, ma, floor}：arm 大于 1，floor 不小于 1 且小于 arm，ma 是不小于 2 的整数');
+  }
   if (!(cfg.sl > 0 && cfg.sl < 1)) out.push('sl 应介于 0 和 1 之间');
   if (!(Number.isInteger(cfg.maxDays) && cfg.maxDays > 0)) out.push('maxDays 应是正整数');
   if (!Array.isArray(cfg.fills)) out.push('fills 应是数组');
@@ -170,11 +185,18 @@ export function rbConfigProblems(cfg) {
  * 不再按收盘价自动记 —— 晚一天才买到、或者按盘中价买了但收盘又回到了线上方，都靠它校正。
  *
  * rows 是升序的 [{d, c, h?, l?}]，想看哪天就先截到哪天。
+ * 10 日线要用起始日之前的收盘，所以 rows 要从起始日之前至少 9 个交易日开始给。
+ *
+ * 结果里和止盈有关的几样：
+ *   arm    止盈启动线（收盘 ≥ 它就算赚到 15%）；floor 保底线（成本 × 1.02）
+ *   armed  第一次赚到 15% 的那天 {d, day, line}，没到过就是 null
+ *   next   下一个交易日的卖出线 {line, by: 'ma' | 'floor', ma}，只在赚到过 15%、交易还没结束时有
+ *   maNext 下一个交易日的 10 日线卖出线（不管赚没赚到 15% 都算，盘中提醒要用）
  */
 export function rbReplay(cfg, rows) {
   const problems = rbConfigProblems(cfg);
   if (problems.length) return { ok: false, problem: problems[0], problems };
-  const W = cfg.weights;
+  const W = cfg.weights, T = cfg.tp;
   const f1 = cfg.fills.find((f) => f.k === 1);
   const P1 = f1.p;
   const addLines = cfg.ladder.map((x) => tickDown(P1 * x));
@@ -183,32 +205,64 @@ export function rbReplay(cfg, rows) {
   Object.assign(tranches[0], { d: f1.d, p: P1, trig: f1.d });
   // 平均成本 = 投入 ÷ 份数。投入按专款的比例记（0.5、0.25……），份数 = 比例 ÷ 成交价
   let inv = W[0], units = W[0] / P1;
-  const lines = () => { const avg = inv / units; return { avg, tp: tickUp(avg * cfg.tp), sl: tickDown(avg * cfg.sl) }; };
+  const lines = () => {
+    const avg = inv / units;
+    return { avg, arm: tickUp(avg * T.arm), floor: tickDown(avg * T.floor), sl: tickDown(avg * cfg.sl) };
+  };
+  /**
+   * 第 i 根 K 线那天的 10 日线卖出线：那天收盘 ≤ 它，就是跌破了 10 日线。
+   * 「收盘 < 含当天在内的 10 日均线」和「收盘 < 前 9 天收盘的平均」是同一回事（两边同减当天那一份），
+   * 所以这条线前一晚就定了，推送能直接说出明天的数。行情不够 9 天就没有这条线，只剩保底线。
+   */
+  const maLine = (i) => {
+    const n = T.ma - 1;
+    if (i - n < 0) return null;
+    let sum = 0;
+    for (let j = i - n; j < i; j++) sum += rows[j].c;
+    return tickBelow(sum / n);
+  };
+  // 赚到过 15% 之后，第 i 天的卖出线：10 日线那条和保底线取高的 —— 往下跌先碰到的是它
+  const sellAt = (i, L) => {
+    const ma = maLine(i);
+    return ma != null && ma > L.floor ? { line: ma, by: 'ma', ma } : { line: L.floor, by: 'floor', ma };
+  };
   const events = [{ d: f1.d, day: 0, kind: 'buy', k: 1, p: P1, model: false }];
+  let armed = null;
 
   const s = rows.findIndex((r) => r.d >= cfg.start);
   if (s < 0) {
     // 行情还没到起始日（比如开盘买完、当晚 21:05 还没跑）
-    return { ok: true, P1, addLines, tranches, events, exit: null, s: -1, steps: [], day: null, last: null, prev: rows[rows.length - 1] || null, inv, ...lines() };
+    return { ok: true, P1, addLines, tranches, events, exit: null, s: -1, steps: [], day: null, last: null, prev: rows[rows.length - 1] || null, inv,
+      armed: null, next: null, maNext: maLine(rows.length), ...lines() };
   }
   if (rows[s].d !== cfg.start) return { ok: false, problem: `行情里没有起始日 ${cfg.start}`, problems: [`行情里没有起始日 ${cfg.start}`] };
 
-  const steps = [{ d: rows[s].d, day: 0, ...lines() }];
+  // steps[j]：第 j 天收盘、买卖都算完之后的线，也就是下一天生效的那组（sell 只在赚到过 15% 之后才有）
+  const steps = [{ d: rows[s].d, day: 0, ...lines(), sell: null, sellBy: null }];
   let exit = null;
   for (let i = s + 1; i < rows.length; i++) {
     const r = rows[i], day = i - s, L = lines();
     if (cfg.exit) {
       if (cfg.exit.d === r.d) exit = { d: r.d, day, p: cfg.exit.p, why: cfg.exit.why || 'manual', model: false };
     } else if (r.c <= L.sl) exit = { d: r.d, day, p: r.c, why: 'sl', model: true, line: L.sl };
-    else if (r.c >= L.tp) exit = { d: r.d, day, p: r.c, why: 'tp', model: true, line: L.tp };
+    if (!exit && !armed && r.c >= L.arm) {
+      armed = { d: r.d, day, line: L.arm };
+      events.push({ d: r.d, day, kind: 'arm', p: r.c, line: L.arm });
+    }
+    // 赚到 15% 的当天也要看：那天收盘要是已经在 10 日线下方，当天就卖（极少见，但规则如此）
+    if (!exit && !cfg.exit && armed) {
+      const x = sellAt(i, L);
+      if (r.c <= x.line) exit = { d: r.d, day, p: r.c, why: x.by, model: true, line: x.line };
+    }
     if (!exit) {
       for (const t of tranches.slice(1)) {
         if (t.d) continue;
         const line = addLines[t.k - 2];
         if (!t.trig && r.c <= line) t.trig = r.d;
         const a = actual.get(t.k);
-        // 到期那天只卖不买：买进来当天收盘就得全卖，白交两次手续费
-        if (a ? a.d === r.d : day < cfg.maxDays && r.c <= line) {
+        // 到期那天只卖不买：买进来当天收盘就得全卖，白交两次手续费。
+        // 赚到过 15% 之后也不再加仓（真跌到买入线之前，早就先跌破保底线卖掉了）
+        if (a ? a.d === r.d : day < cfg.maxDays && !armed && r.c <= line) {
           Object.assign(t, { d: r.d, p: a ? a.p : r.c, model: !a });
           inv += t.w; units += t.w / t.p;
           events.push({ d: r.d, day, kind: 'buy', k: t.k, p: t.p, model: t.model, line });
@@ -216,7 +270,9 @@ export function rbReplay(cfg, rows) {
       }
       if (!cfg.exit && day >= cfg.maxDays) exit = { d: r.d, day, p: r.c, why: 'exp', model: true };
     }
-    steps.push({ d: r.d, day, ...lines() });
+    const L2 = lines();
+    const nx = armed && !exit ? sellAt(i + 1, L2) : null;
+    steps.push({ d: r.d, day, ...L2, sell: nx ? nx.line : null, sellBy: nx ? nx.by : null });
     if (exit) break;
   }
   const lastIdx = exit ? s + exit.day : rows.length - 1;
@@ -232,9 +288,11 @@ export function rbReplay(cfg, rows) {
     const m = `实际卖出日 ${cfg.exit.d} 不是行情里的交易日`;
     return { ok: false, problem: m, problems: [m] };
   }
+  const Lf = lines();
   return {
     ok: true, P1, addLines, tranches, events, exit, s, steps,
-    day: lastIdx - s, last: rows[lastIdx], prev: rows[lastIdx - 1] || null, inv, ...lines(),
+    day: lastIdx - s, last: rows[lastIdx], prev: rows[lastIdx - 1] || null, inv, ...Lf,
+    armed, next: armed && !exit ? sellAt(lastIdx + 1, Lf) : null, maNext: maLine(lastIdx + 1),
   };
 }
 
@@ -259,12 +317,18 @@ export function rbStatus({ cfg, rows, tradingDays = [], since = null }) {
   const nx = rbTradingDaysAfter(last ? last.d : cfg.start, 1, tradingDays);
   const nextDay = { d: nx.days[0] || null, estimated: nx.estimated };
 
-  const nextAdd = rp.tranches.find((t) => !t.d) || null;
+  // 赚到过 15% 之后不再加仓，也就没有「下一笔」了
+  const nextAdd = rp.armed ? null : rp.tranches.find((t) => !t.d) || null;
   const watch = [];
   if (phase !== 'done') {
-    if (nextAdd) watch.push({ kind: 'add', k: nextAdd.k, w: nextAdd.w, line: rp.addLines[nextAdd.k - 2] });
-    watch.push({ kind: 'tp', line: rp.tp });
-    watch.push({ kind: 'sl', line: rp.sl, behind: !!nextAdd && rp.sl < rp.addLines[nextAdd.k - 2] });
+    if (rp.next) {
+      // 止盈阶段只剩一条线要盯：止损线、买入线都在保底线下面，跌下去先碰到的一定是卖出线
+      watch.push({ kind: 'sell', line: rp.next.line, by: rp.next.by });
+    } else {
+      if (nextAdd) watch.push({ kind: 'add', k: nextAdd.k, w: nextAdd.w, line: rp.addLines[nextAdd.k - 2] });
+      watch.push({ kind: 'arm', line: rp.arm });
+      watch.push({ kind: 'sl', line: rp.sl, behind: !!nextAdd && rp.sl < rp.addLines[nextAdd.k - 2] });
+    }
     for (const x of watch) x.dist = x.line / c - 1;
   }
 
@@ -273,15 +337,18 @@ export function rbStatus({ cfg, rows, tradingDays = [], since = null }) {
 
   // 盘中碰过线、收盘又回去了：按收盘价不算触发，可你 14:50 也许已经照盘中价做了。
   // 拿当天开盘前生效的那组线比（当天有买卖的话，买卖之后的线已经变了）
+  // 赚到 15% 不用动手，所以盘中碰到启动线不提；止盈阶段里要提的是卖出线
   const touches = [];
   if (phase === 'open' && last && day > 0 && last.h > 0 && last.l > 0) {
     const L = rp.steps[rp.steps.length - 2];
     const doneToday = new Set(rp.events.filter((e) => e.d === last.d).map((e) => e.k));
-    for (const t of rp.tranches.slice(1)) {
-      const line = rp.addLines[t.k - 2];
-      if (!t.d && !doneToday.has(t.k) && last.l <= line && last.c > line) touches.push({ kind: 'add', k: t.k, line, ext: last.l });
+    if (L.sell == null) {
+      for (const t of rp.tranches.slice(1)) {
+        const line = rp.addLines[t.k - 2];
+        if (!t.d && !doneToday.has(t.k) && last.l <= line && last.c > line) touches.push({ kind: 'add', k: t.k, line, ext: last.l });
+      }
     }
-    if (last.h >= L.tp && last.c < L.tp) touches.push({ kind: 'tp', line: L.tp, ext: last.h });
+    if (L.sell != null && last.l <= L.sell && last.c > L.sell) touches.push({ kind: 'sell', line: L.sell, by: L.sellBy, ext: last.l });
     if (last.l <= L.sl && last.c > L.sl) touches.push({ kind: 'sl', line: L.sl, ext: last.l });
   }
 
@@ -295,7 +362,13 @@ export function rbStatus({ cfg, rows, tradingDays = [], since = null }) {
 
 // ---------------------------------------------------------------- 文案
 
-const WHY = { tp: '止盈', sl: '止损', exp: '到期', manual: '实际卖出' };
+/** 卖出的原因，一句话：推送标题、页面、提交说明都用它 */
+export function rbWhy(why, cfg) {
+  const T = (cfg && cfg.tp) || {};
+  return ({
+    ma: `跌破 ${T.ma} 日线`, floor: `回落到只赚 ${rbPct(T.floor)}`, sl: '到了止损线', exp: '到期了', manual: '已记下实际卖出',
+  })[why] || String(why);
+}
 
 /** 买第 k 笔要花多少。知道专款总额才说金额和份数，否则只说比例 */
 function sizeText(w, price, fund) {
@@ -307,13 +380,22 @@ function sizeText(w, price, fund) {
 /**
  * 接下来盯的几条线，一行一条，按「先碰到哪条」排：下方先说买入线，止损线在它下面就不提
  * （跌下去先碰到的是买入线，买完止损线还会重算）。
+ * 赚到过 15% 之后只剩卖出线一条。它跟着 10 日线走，偶尔会比现价还高（价格在 10 日线下方没多远时）：
+ * 那就不能说「还要跌多少」，得说「收盘涨不过它就卖」。
  */
 export function rbWatchLines(st, { fund = 0 } = {}) {
+  const T = st.cfg.tp;
   const out = [];
   for (const x of st.watch) {
     if (x.kind === 'add') out.push(`↓ ≤ ${p3(x.line)}：买第 ${x.k} 笔（${sizeText(x.w, x.line, fund)}），还要跌 ${abs1(x.dist)}`);
-    if (x.kind === 'tp') out.push(`↑ ≥ ${p3(x.line)}：全部卖出（止盈），还要涨 ${abs1(x.dist)}`);
+    if (x.kind === 'arm') out.push(`↑ ≥ ${p3(x.line)}：赚到 ${rbPct(T.arm)}，不急着卖，改盯 ${T.ma} 日线，还要涨 ${abs1(x.dist)}`);
     if (x.kind === 'sl' && !x.behind) out.push(`↓ ≤ ${p3(x.line)}：全部卖出（止损），还要跌 ${abs1(x.dist)}`);
+    if (x.kind === 'sell') {
+      const why = rbWhy(x.by, st.cfg);
+      out.push(x.dist < 0
+        ? `↓ ≤ ${p3(x.line)}：全部卖出（${why}），还要跌 ${abs1(x.dist)}`
+        : `↓ ≤ ${p3(x.line)}：全部卖出（${why}），这条线不低于现价：收盘涨不过它就卖`);
+    }
   }
   return out;
 }
@@ -335,10 +417,10 @@ export function rbHoldLine(st, { fund = 0 } = {}) {
 /** 盘中碰线的提醒，一条一行 */
 function touchLines(st) {
   return st.touches.map((t) => {
-    const what = t.kind === 'add' ? `第 ${t.k} 笔买入线 ${p3(t.line)}` : t.kind === 'tp' ? `止盈线 ${p3(t.line)}` : `止损线 ${p3(t.line)}`;
-    const hl = t.kind === 'tp' ? '最高' : '最低';
+    const what = t.kind === 'add' ? `第 ${t.k} 笔买入线 ${p3(t.line)}`
+      : t.kind === 'sell' ? `卖出线 ${p3(t.line)}（${rbWhy(t.by, st.cfg)}）` : `止损线 ${p3(t.line)}`;
     const did = t.kind === 'add' ? '买了' : '卖了';
-    return `⚠️ 盘中${hl} ${p3(t.ext)} 碰到过${what}，收盘 ${p3(st.c)} 又回去了，按收盘价不算。`
+    return `⚠️ 盘中最低 ${p3(t.ext)} 碰到过${what}，收盘 ${p3(st.c)} 又回去了，按收盘价不算。`
       + `若 14:50 已经${did}，请更新成交记录（见页面）`;
   });
 }
@@ -352,7 +434,7 @@ function didOrNot(st, today, verb) {
 
 /**
  * 每晚 21:05 那条推送。返回 null 表示今晚不推（还没开始，或者交易早就结束了）。
- * 先后顺序：刚卖出 > 刚买入 > 明天到期 > 平常。
+ * 先后顺序：刚卖出 > 刚买入 > 明天到期 > 刚赚到 15% > 平常。
  */
 export function rbNightPush(st, { today, fund = 0, resent = null } = {}) {
   if (!st.ok) {
@@ -367,19 +449,23 @@ export function rbNightPush(st, { today, fund = 0, resent = null } = {}) {
   const tail = resent ? `\n↻ 补发：${resent}` : '';
   const head = `${rbMd(st.last.d, today)}收盘 ${p3(st.last.c)}${st.chg != null ? `（${pc1(st.chg)}）` : ''}`;
 
+  const T = st.cfg.tp;
   if (st.exitFresh) {
     const x = st.exitFresh;
     // 卖出那天不会再买，所以最后一组线就是当天生效的那组
     const L = st.rp.steps[st.rp.steps.length - 1];
-    const rule = x.why === 'tp' ? `收盘 ≥ ${p3(L.tp)}（成本 ${p3(L.avg)} × ${st.cfg.tp.toFixed(2)}）`
-      : x.why === 'sl' ? `收盘 ≤ ${p3(L.sl)}（成本 ${p3(L.avg)} × ${st.cfg.sl.toFixed(2)}）`
-        : x.why === 'exp' ? `第 ${st.cfg.maxDays} 个交易日不论盈亏` : '按记下的实际卖出';
+    const since = st.rp.armed ? `${rbMd(st.rp.armed.d, today)}起已赚到过 ${rbPct(T.arm)}，` : '';
+    const rule = x.why === 'ma' ? `${since}收盘 ≤ ${p3(x.line)}（跌破 ${T.ma} 日线）`
+      : x.why === 'floor' ? `${since}收盘 ≤ ${p3(x.line)}（成本 ${p3(L.avg)} × ${T.floor.toFixed(2)}，只剩 ${rbPct(T.floor)}）`
+        : x.why === 'sl' ? `收盘 ≤ ${p3(L.sl)}（成本 ${p3(L.avg)} × ${st.cfg.sl.toFixed(2)}）`
+          : `第 ${st.cfg.maxDays} 个交易日不论盈亏`;
     const icon = x.why === 'sl' ? '⛔' : x.why === 'exp' ? '⏰' : '🔔';
     const lines = x.model
       ? [`规则：${rule} → 全部卖出，交易结束`, ...didOrNot(st, today, '卖')]
       : [`已记下实际卖出：${rbMd(x.d, today)} @ ${p3(x.p)}`];
     return {
-      title: `${icon} 创业板50 · ${rbMd(x.d, today)}收盘 ${p3(st.last.c)}，${x.why === 'exp' ? '到期了' : `到了${WHY[x.why]}线`} → 全部卖出`,
+      title: x.model ? `${icon} 创业板50 · ${rbMd(x.d, today)}收盘 ${p3(st.last.c)}，${rbWhy(x.why, st.cfg)} → 全部卖出`
+        : `${icon} 创业板50 · ${rbMd(x.d, today)}已记下实际卖出 @ ${p3(x.p)}，交易结束`,
       body: [...lines, `按${x.model ? '收盘' : '成交价'}算：持仓 ${pc1(st.pnl)}，专款整体 ${pc1(st.fundPnl)}`
         + (fund > 0 ? `（约 ${rbMoney(fund * st.fundPnl)}）` : ''), '交易结束后不自动再来一轮'].join('\n') + tail,
       level: 'timeSensitive', group: RB_GROUP_ACT, action: true,
@@ -396,11 +482,14 @@ export function rbNightPush(st, { today, fund = 0, resent = null } = {}) {
     if (model.length) {
       const rule = model.map((b) => `收盘 ≤ ${p3(b.line)} 买第 ${b.k} 笔`).join('、');
       lines.push(`规则：${rule}${model.length > 1 ? ' → 两笔一起买' : ''}（${sizeText(w, st.last.c, fund)}）`, ...didOrNot(st, today, '买'));
-      lines.push(`买入后（按收盘价估）成本约 ${p3(st.rp.avg)} → 止盈线 ${p3(st.rp.tp)}、止损线 ${p3(st.rp.sl)}`);
+      lines.push(`买入后（按收盘价估）成本约 ${p3(st.rp.avg)} → 止盈启动线 ${p3(st.rp.arm)}、止损线 ${p3(st.rp.sl)}`);
     } else {
       lines.push(`已记下实际成交：${buys.map((b) => `第 ${b.k} 笔 ${rbMd(b.d, today)} @ ${p3(b.p)}`).join('、')}`);
-      lines.push(`成本 ${p3(st.rp.avg)} → 止盈线 ${p3(st.rp.tp)}、止损线 ${p3(st.rp.sl)}`);
+      lines.push(`成本 ${p3(st.rp.avg)} → 止盈启动线 ${p3(st.rp.arm)}、止损线 ${p3(st.rp.sl)}`);
     }
+    // 漏推了几晚、中间又赚到了 15%（极少见）：把这件事也说上，不然「接下来」那几行对不上
+    const armedLater = st.fresh.find((e) => e.kind === 'arm');
+    if (armedLater) lines.push(`${rbMd(armedLater.d, today)}收盘 ${p3(armedLater.p)} 赚到了 ${rbPct(T.arm)}：不急着卖，已改盯 ${T.ma} 日线`);
     lines.push('接下来：', ...rbWatchLines(st, { fund }), expiryLine);
     return {
       title: `🔔 创业板50 · ${rbMd(buys[buys.length - 1].d, today)}收盘 ${p3(st.last.c)}，`
@@ -421,6 +510,23 @@ export function rbNightPush(st, { today, fund = 0, resent = null } = {}) {
       level: 'timeSensitive', group: RB_GROUP_ACT, action: true,
     };
   }
+  // 刚赚到 15%：当天不用动手，但从这晚起要盯的线换了一条，得响一声说清楚
+  const arm = st.fresh.find((e) => e.kind === 'arm');
+  if (arm && st.rp.next) {
+    return {
+      title: `📈 创业板50 · ${rbMd(arm.d, today)}收盘 ${p3(arm.p)}，赚到 ${rbPct(T.arm)} → 改盯 ${T.ma} 日线`,
+      body: [
+        `规则：收盘 ≥ ${p3(arm.line)}（成本 ${p3(st.rp.avg)} × ${T.arm.toFixed(2)}）之后不急着卖；此后收盘跌破 ${T.ma} 日线，或者回落到只赚 ${rbPct(T.floor)}，就全部卖出`,
+        `下一步：${ndText}14:50 看一眼价格`,
+        ...rbWatchLines(st, { fund }),
+        `没跌破就继续拿：涨得越多，这条线跟着往上走`,
+        expiryLine,
+        rbHoldLine(st, { fund }),
+        ...touch,
+      ].join('\n') + tail,
+      level: 'active', group: RB_GROUP, action: false,
+    };
+  }
   const first = st.fresh.some((e) => e.k === 1);
   return {
     // 括号后面直接接「·」，别再空一格：「（−1.6%） · 」在手机上看着像断了
@@ -429,7 +535,7 @@ export function rbNightPush(st, { today, fund = 0, resent = null } = {}) {
       ...(first ? [`第 1 笔：${rbMd(st.cfg.start, today)}买入 @ ${p3(st.rp.P1)}（专款的 ${share(st.cfg.weights[0])}）`] : []),
       `下一步：${ndText}14:50 看一眼价格`,
       ...rbWatchLines(st, { fund }),
-      '都没到就不动',
+      st.rp.next ? '没跌破就继续拿' : '都没到就不动',
       expiryLine,
       rbHoldLine(st, { fund }),
       ...touch,
@@ -459,7 +565,8 @@ export function rbIntradayPush(st, quote, { today, fund = 0 } = {}) {
       level: 'timeSensitive', group: RB_GROUP_ACT, action: true,
     };
   }
-  const { sl, tp } = st.rp;
+  const { sl } = st.rp;
+  const T = st.cfg.tp;
   if (c <= sl) {
     return {
       title: `⛔ 创业板50 · 现价 ${p3(c)}，已到止损线 ${p3(sl)}`,
@@ -467,10 +574,34 @@ export function rbIntradayPush(st, quote, { today, fund = 0 } = {}) {
       level: 'timeSensitive', group: RB_GROUP_ACT, action: true,
     };
   }
-  if (c >= tp) {
+  // 「只差多少」一律是从现价再走多远才到线，和推送、页面上「还要跌 / 还要涨」同一个口径
+  const gap = (line) => Math.abs(line / c - 1);
+  // 止盈阶段：今天的卖出线前一晚就定了（10 日线那条只用到昨天为止的收盘）
+  const nx = st.rp.next;
+  if (nx) {
+    const why = rbWhy(nx.by, st.cfg);
+    if (c <= nx.line) {
+      return {
+        title: `🔔 创业板50 · 现价 ${p3(c)}，已${why}`,
+        body: `规则：赚到过 ${rbPct(T.arm)} 之后，收盘 ≤ ${p3(nx.line)}（${why}）→ 全部卖出，交易结束\n14:50 之后价格仍 ≤ ${p3(nx.line)}，就全部卖出\n${now}`,
+        level: 'timeSensitive', group: RB_GROUP_ACT, action: true,
+      };
+    }
+    if (gap(nx.line) > RB_NEAR) return null;
     return {
-      title: `🔔 创业板50 · 现价 ${p3(c)}，已到止盈线 ${p3(tp)}`,
-      body: `规则：收盘 ≥ ${p3(tp)} → 全部卖出，交易结束\n14:50 之后价格仍 ≥ ${p3(tp)}，就全部卖出\n${now}`,
+      title: `创业板50 · 现价 ${p3(c)}，快到卖出线了`,
+      body: `离卖出线 ${p3(nx.line)}（${why}）只差 ${abs1(gap(nx.line))}\n收盘前再看一眼：真到了线就全部卖出，没到就继续拿\n${now}`,
+      level: 'active', group: RB_GROUP, action: false,
+    };
+  }
+  // 今天才第一次赚到 15%：当天也要看跌没跌破 10 日线（只有前几天价格比现在还高才会这样，极少见）
+  if (c >= st.rp.arm) {
+    const line = Math.max(st.rp.maNext ?? -Infinity, st.rp.floor);
+    if (c > line) return null;
+    return {
+      title: `🔔 创业板50 · 现价 ${p3(c)}，赚到了 ${rbPct(T.arm)}，却在 ${T.ma} 日线下方`,
+      body: `规则：收盘 ≥ ${p3(st.rp.arm)} 算赚到 ${rbPct(T.arm)}；同一天收盘 ≤ ${p3(line)}（${rbWhy(line === st.rp.floor ? 'floor' : 'ma', st.cfg)}）→ 全部卖出\n`
+        + `14:50 之后价格仍在 ${p3(st.rp.arm)} 到 ${p3(line)} 之间，就全部卖出\n${now}`,
       level: 'timeSensitive', group: RB_GROUP_ACT, action: true,
     };
   }
@@ -486,11 +617,9 @@ export function rbIntradayPush(st, quote, { today, fund = 0 } = {}) {
       level: 'timeSensitive', group: RB_GROUP_ACT, action: true,
     };
   }
-  // 「只差多少」一律是从现价再走多远才到线，和推送、页面上「还要跌 / 还要涨」同一个口径
+  // 启动线不在这里：赚到 15% 当天不用动手，快到了也不必提醒
   const near = [];
-  const gap = (line) => Math.abs(line / c - 1);
   for (const t of open) { const line = st.rp.addLines[t.k - 2]; if (gap(line) <= RB_NEAR) near.push(`第 ${t.k} 笔买入线 ${p3(line)} 只差 ${abs1(gap(line))}`); }
-  if (gap(tp) <= RB_NEAR) near.push(`止盈线 ${p3(tp)} 只差 ${abs1(gap(tp))}`);
   if (gap(sl) <= RB_NEAR) near.push(`止损线 ${p3(sl)} 只差 ${abs1(gap(sl))}`);
   if (!near.length) return null;
   return {
