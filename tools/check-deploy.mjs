@@ -40,6 +40,7 @@ const base = raw.replace(/\/+$/, '').replace(/\/health$/, '');
 const want = buildHash(
   readFileSync(join(ROOT, 'worker', 'src', 'index.js'), 'utf8'),
   readFileSync(join(ROOT, 'shared', 'strategy.js'), 'utf8'),
+  readFileSync(join(ROOT, 'shared', 'rebound.js'), 'utf8'),
 );
 
 let res = null;

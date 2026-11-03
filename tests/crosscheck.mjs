@@ -254,8 +254,19 @@ console.log('\n=== 前端模块版本戳（防止浏览器缓存串版本）==='
 
   // Worker 的构建指纹：/health 返回它，用来从外面确认线上跑的是哪一版。
   // 没盖对章的话，查线上版本时会拿到一个对不上任何提交的值，比没有还误导人。
+  // 创业板50 那页同理：rebound.html 里的 REBOUND_VERSION 必须是 shared/rebound.js 的指纹
+  const rbCore = readFileSync(join(HERE, '..', 'shared', 'rebound.js'), 'utf8');
+  const wantR = coreHash(rbCore);
+  const rhtml = readFileSync(join(HERE, '..', 'rebound.html'), 'utf8');
+  const mR = rhtml.match(/const REBOUND_VERSION = '([^']*)';/);
+  const gotR = mR && mR[1];
+  const okR = gotR === wantR;
+  allOk = allOk && okR;
+  console.log(`  ${okR ? 'OK ' : '!!!'} rebound.html 的 REBOUND_VERSION=${gotR}　rebound.js 实际哈希=${wantR}`);
+  if (!okR) console.log('      → 改过 shared/rebound.js 但忘了跑 `npm run stamp`，线上会因浏览器缓存旧模块而白屏');
+
   const worker = readFileSync(join(HERE, '..', 'worker', 'src', 'index.js'), 'utf8');
-  const wantB = buildHash(worker, core);
+  const wantB = buildHash(worker, core, rbCore);
   const mB = worker.match(/const BUILD = '([^']*)';/);
   const gotB = mB && mB[1];
   const okB = gotB === wantB;

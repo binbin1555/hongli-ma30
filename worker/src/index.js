@@ -4,6 +4,9 @@
  * 由 cron-job.org 在每个交易日北京时间 21:00 触发一次：
  *   查交易日历 → 抓中证数据 → 11 项校验 → 算信号（含闸门、追高线、暴跌刹车）→ 提交 GitHub → 发 Bark 推送
  *
+ * 另有一路「创业板50 超跌反弹」，由 Worker 自己的 Cron Triggers 触发（见 wrangler.toml 和文件末尾那一节），
+ * 和红利各跑各的调用，只写 data/rebound_series.json。
+ *
  * 设计原则：
  *   1. 任何一项校验不过，都要推一条带原因的告警，绝不静默失败。
  *   2. 仓库里不写任何金额。金额由本金（Worker 密钥 / 前端 localStorage）实时推导。
@@ -18,12 +21,15 @@ import {
   brakeState, brakeBlocks, brakeLine, brakeBlockedText,
   WEIGHTS, MA_LEN, BUY_TH, SELL_TH,
 } from '../../shared/strategy.js';
+import {
+  rbStatus, rbNightPush, rbIntradayPush, rbSeriesJSON, rbBeijingDate, rbMd, p3, RB_GROUP, RB_GROUP_ACT,
+} from '../../shared/rebound.js';
 
-// 线上跑的是哪一版代码。由 npm run stamp 按 worker/src/index.js + shared/strategy.js
+// 线上跑的是哪一版代码。由 npm run stamp 按 worker/src/index.js + shared/strategy.js + shared/rebound.js
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '833d075887';
+const BUILD = 'ee8937a5b2';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -475,15 +481,23 @@ export function runChecks(rows, removed, today, etf, tierFrom, tierTo, calendar,
  */
 let lastPush = null;
 
-export async function bark(env, { title, body, level = 'active', group = '红利MA30' }) {
-  if (!env.BARK_KEY) {
-    lastPush = { ok: false, at: beijingStamp(), reason: '未配置 BARK_KEY' };
-    return lastPush;
-  }
+export async function bark(env, opts) {
+  lastPush = await sendBark(env, opts);
+  return lastPush;
+}
+
+/**
+ * 真正发 Bark 的地方，只返回结果、不碰 lastPush。
+ * 创业板50 那一路用它：它自己记自己的推送结果，不能把红利这边的记录冲掉 ——
+ * 同一个 Worker 实例会被复用，模块里的变量会从上一次调用留到下一次。
+ * url 不给就跳红利面板。
+ */
+async function sendBark(env, { title, body, level = 'active', group = '红利MA30', url = null }) {
+  if (!env.BARK_KEY) return { ok: false, at: beijingStamp(), reason: '未配置 BARK_KEY' };
   const payload = {
     device_key: env.BARK_KEY,
     title, body, group, level,
-    url: env.PAGES_URL || undefined,
+    url: url || env.PAGES_URL || undefined,
     icon: env.BARK_ICON || undefined,
   };
   try {
@@ -498,11 +512,9 @@ export async function bark(env, { title, body, level = 'active', group = '红利
     const j = await r.json();
     // Bark 即使 HTTP 200 也可能在 body 里报错，两层都要看
     const ok = j && (j.code === 200 || j.code === undefined);
-    lastPush = { ok, at: beijingStamp(), title, reason: ok ? null : JSON.stringify(j).slice(0, 200) };
-    return lastPush;
+    return { ok, at: beijingStamp(), title, reason: ok ? null : JSON.stringify(j).slice(0, 200) };
   } catch (e) {
-    lastPush = { ok: false, at: beijingStamp(), title, reason: String(e && e.message || e).slice(0, 200) };
-    return lastPush;
+    return { ok: false, at: beijingStamp(), title, reason: String(e && e.message || e).slice(0, 200) };
   }
 }
 
@@ -1355,6 +1367,280 @@ async function refreshCalendar(env) {
   return { ok: true, years: [...byYear.keys()], missing };
 }
 
+// ---------------------------------------------------------------- 创业板50 超跌反弹
+
+/*
+ * 规则在 shared/rebound.js，参数和实际成交在 data/rebound.json（只有价格和比例，没有金额）。
+ *
+ * 和红利完全分开跑：不走 cron-job.org 的 /run，而是 Worker 自己的 Cron Triggers（wrangler.toml）——
+ * 各占一次独立的调用，子请求额度、运行时长、出错都互不牵连；
+ * 写的也只有 data/rebound_series.json 这一个文件，红利的账本和状态一个字节都不碰。
+ * 时间错开红利的 21:00 / 22:30，两边不会同时往仓库提交（提交只接受快进，撞上了后到的会被拒）。
+ *
+ *   14:45  盘中看一眼：现价过线、离线不到 1%、或今天到期才推，其余静默，什么都不写
+ *   21:05  收盘后：抓日 K 线并进行情 → 按规则重放 → 提交 → 推送 → 回填推送结果
+ *   22:35  兜底：21:05 没跑成就补跑；跑成了但推送没送达就照原样补发；都好就什么也不做
+ *
+ * 专款总额可以放在 Worker 密钥 REBOUND_FUND 里（不设也行）：设了推送才说「约多少钱、约多少份」，
+ * 不设就只说「专款的 25%」。它只进推送正文，不进仓库、不进 HTTP 返回。
+ */
+const RB_CRONS = { '45 6 * * *': 'intraday', '5 13 * * *': 'night', '35 14 * * *': 'backup' };
+const RB_SLOT_NAME = { intraday: '14:45 盘中', night: '21:05 收盘后', backup: '22:35 兜底' };
+const RB_SERIES = 'data/rebound_series.json';
+
+/** Bark 点开跳到反弹页。带上日期，免得手机拿缓存里昨天那版页面糊弄你 */
+function rbPageUrl(env, today) {
+  if (!env.PAGES_URL) return undefined;
+  try { return new URL(`rebound.html?d=${today}`, env.PAGES_URL).href; } catch { return undefined; }
+}
+
+/** 一根 K 线像不像样：日期格式对、价格为正、最高 ≥ 收盘 ≥ 最低 */
+const goodBar = (r) => r && /^\d{4}-\d{2}-\d{2}$/.test(r.d) && r.c > 0 && r.l > 0 && r.h >= r.c && r.c >= r.l;
+
+async function klineTencent(code, n) {
+  const sym = `${mktPrefix(code)}${code}`;
+  const r = await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${sym},day,,,${n},`, { headers: { 'User-Agent': UA } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const j = await r.json();
+  const a = j && j.data && j.data[sym] && j.data[sym].day;
+  if (!Array.isArray(a) || !a.length) throw new Error('返回格式异常');
+  return a.map((x) => ({ d: x[0], c: +x[2], h: +x[3], l: +x[4] }));
+}
+async function klineEastmoney(code, n) {
+  const r = await fetch('https://push2his.eastmoney.com/api/qt/stock/kline/get'
+    + `?secid=${emPrefix(code)}.${code}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55&klt=101&fqt=0&lmt=${n}&end=20500101`,
+  { headers: { 'User-Agent': UA } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const j = await r.json();
+  const a = j && j.data && j.data.klines;
+  if (!Array.isArray(a) || !a.length) throw new Error('返回格式异常');
+  return a.map((s) => { const [d, , c, h, l] = String(s).split(','); return { d, c: +c, h: +h, l: +l }; });
+}
+async function klineSina(code, n) {
+  const r = await fetch('https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData'
+    + `?symbol=${mktPrefix(code)}${code}&scale=240&ma=no&datalen=${n}`,
+  { headers: { 'User-Agent': UA, Referer: 'https://finance.sina.com.cn/' } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const a = await r.json();
+  if (!Array.isArray(a) || !a.length) throw new Error('返回格式异常');
+  return a.map((x) => ({ d: x.day, c: +x.close, h: +x.high, l: +x.low }));
+}
+
+/**
+ * 最近 n 根日 K 线（不复权，和券商软件上的价格一致），三个源依次试。
+ * 收盘后才跑，所以最后一根必须正好是今天 —— 某个源还没更新到今天，就当它失败、换下一个。
+ * 每晚都重抓 60 根而不是只要今天那根：哪晚漏跑了，下一晚自己就补齐了。
+ */
+export async function fetchKline(code, n, today) {
+  const sources = [['腾讯', klineTencent], ['东财', klineEastmoney], ['新浪', klineSina]];
+  const tried = [];
+  for (const [name, fn] of sources) {
+    try {
+      const rows = await fn(code, n);
+      if (rows.some((x) => !goodBar(x))) throw new Error('有缺字段或价格对不上的 K 线');
+      for (let i = 1; i < rows.length; i++) if (!(rows[i].d > rows[i - 1].d)) throw new Error('日期没有严格递增');
+      const lastD = rows[rows.length - 1].d;
+      if (lastD !== today) throw new Error(`最新只到 ${lastD}`);
+      return { rows, source: name, tried };
+    } catch (e) {
+      tried.push(`${name}(${e.message})`);
+    }
+  }
+  return { failed: true, tried };
+}
+
+/**
+ * 把新抓的 K 线并进已有行情：同一天以新抓的为准，新的一天追加。
+ * 并完再整条查一遍：日期严格递增、日历覆盖到的月份里只有交易日、单日涨跌不超过 ±21%
+ * （创业板涨跌停是 ±20%，超出去只可能是脏数据）。
+ */
+export function rbMerge(old, fresh, tradingDays) {
+  const by = new Map(old.map((r) => [r.d, r]));
+  for (const r of fresh) by.set(r.d, r.h > 0 ? { d: r.d, c: r.c, h: r.h, l: r.l } : { d: r.d, c: r.c });
+  const rows = [...by.values()].sort((a, b) => (a.d < b.d ? -1 : 1));
+  const set = new Set(tradingDays);
+  const months = new Set(tradingDays.map((d) => d.slice(0, 7)));
+  const problems = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (months.has(r.d.slice(0, 7)) && !set.has(r.d)) problems.push(`${r.d} 不在交易日历里`);
+    if (i && Math.abs(r.c / rows[i - 1].c - 1) > 0.21) problems.push(`${r.d} 单日涨跌 ${((r.c / rows[i - 1].c - 1) * 100).toFixed(1)}%，超过 ±21%`);
+  }
+  return { rows, problems };
+}
+
+/** 今天开不开市：先看仓库里的日历，没有今天再问交易所（和红利那边同一个办法） */
+async function rbTradingDay(G, today) {
+  const cal = await G.readJSON(`calendar/${today.slice(0, 4)}.json`, null);
+  if (cal && cal.tradingDays.includes(today)) return true;
+  const m = await fetchCalendarMonth(today.slice(0, 7)).catch(() => null);
+  return !!(m && m[today] === 1);
+}
+
+/** 算线和到期日要用到的日历：起始那年起到明年，有哪年拿哪年（明年的没发布就是 404，照样往下走） */
+async function rbCalendars(G, start, today) {
+  const years = [];
+  for (let y = +start.slice(0, 4); y <= +today.slice(0, 4) + 1; y++) years.push(y);
+  const cals = await Promise.all(years.map((y) => G.readJSON(`calendar/${y}.json`, null).catch(() => null)));
+  return cals.filter(Boolean).flatMap((c) => c.tradingDays || []).sort();
+}
+
+/**
+ * 提交 rebound_series.json。撞上了别的提交（只接受快进）就重读一次：
+ * 要是另一轮已经把今天跑完了，这一轮就让路，免得同一条推送发两遍；否则重试一次。
+ */
+async function rbCommit(G, series, message, today) {
+  try {
+    return await G.commit([{ path: RB_SERIES, content: rbSeriesJSON(series) }], message);
+  } catch (e) {
+    if (!/另一次运行更新/.test(String(e && e.message))) throw e;
+    const now = await G.readJSON(RB_SERIES, null);
+    if (now && now.run && now.run.asof === today && !(series.run && series.run.push)) return null;
+    return G.commit([{ path: RB_SERIES, content: rbSeriesJSON(series) }], message);
+  }
+}
+
+/** 21:05 / 22:35。force 只给手动 /rebound 用：今天已经跑过也重跑一遍 */
+async function runRebound(env, { slot = 'night', force = false } = {}) {
+  const today = rbBeijingDate();
+  const G = gh(env);
+  if (!(await rbTradingDay(G, today))) return { ok: true, today, skipped: '非交易日（或交易日历取不到），静默' };
+  const cfg = await G.readJSON('data/rebound.json', null);
+  if (!cfg) return { ok: true, today, skipped: '没有 data/rebound.json' };
+  if (!(cfg.start <= today)) return { ok: true, today, skipped: `还没到起始日 ${cfg.start}` };
+  const series = await G.readJSON(RB_SERIES, { schema: 1, code: cfg.code, run: null, rows: [] });
+  const run = series.run || null;
+  const tradingDays = await rbCalendars(G, cfg.start, today);
+  const fund = Number(env.REBOUND_FUND || 0);
+  const url = rbPageUrl(env, today);
+
+  // ---- 今天已经跑过：只看推送送达没有 ----
+  if (run && run.asof === today && !force) {
+    if (run.push && run.push.ok) return { ok: true, today, skipped: `${today} 已经跑过，推送也送达了` };
+    // push 还是 null、而且刚跑完没几分钟：多半是那一轮还在发推送（比如同一个定时被触发了两次）。
+    // 这时补发就重复了。等满 10 分钟还没回填，才认定它丢了 —— 和红利那边同一个规矩
+    if (!run.push) {
+      const toMs = (t) => Date.parse(String(t).replace(' ', 'T') + 'Z');
+      if (!((toMs(beijingStamp()) - toMs(run.ranAt)) / 60000 >= 10)) return { ok: true, today, skipped: '那一轮可能还在发推送，先不补发' };
+    }
+    // 照原样重建：同一份行情、同一个 since，和原本该发的一字不差，只在末尾多一句「补发」
+    const st = rbStatus({ cfg, rows: series.rows.filter((r) => r.d <= today), tradingDays, since: run.since });
+    const why = run.push.reason ? `（${String(run.push.reason).slice(0, 60)}）` : '';
+    const p = rbNightPush(st, { today, fund, resent: `${String(run.ranAt).slice(11, 16)} 那轮的推送没有送达${why}，${beijingStamp().slice(11, 16)} 补发` });
+    if (!p) return { ok: true, today, skipped: `${today} 不用推送` };
+    const res = await sendBark(env, { ...p, url });
+    series.run = { ...run, push: { ...res, resent: true }, delivered: res.ok ? today : run.delivered };
+    let backfillErr = null;
+    await rbCommit(G, series, `chore(rebound): ${today} 推送补发${res.ok ? '成功' : '失败'}`, today)
+      .catch((e) => { backfillErr = String(e && e.message || e); });
+    return { ok: true, today, resent: { ok: res.ok, reason: res.reason || null }, ...(backfillErr ? { backfillErr } : {}) };
+  }
+
+  // ---- 交易早就结束了（结束那晚的推送也送达了）：不抓、不写、不推 ----
+  if (run && run.delivered) {
+    const st0 = rbStatus({ cfg, rows: series.rows || [], tradingDays, since: run.delivered });
+    if (st0.ok && st0.phase === 'done' && !st0.exitFresh) return { ok: true, today, skipped: '交易已经结束' };
+  }
+
+  // ---- 抓今天的收盘 ----
+  let k = await fetchKline(cfg.code, 60, today);
+  if (k.failed) {
+    // 实时报价兜底：收盘后它就是收盘价，只是没有最高最低（盘中碰线的提醒这天就给不了）
+    const q = await fetchETF(cfg.code);
+    if (!q.failed && q.d === today) k = { rows: [{ d: today, c: q.c }], source: `${q.source}实时报价`, tried: k.tried };
+    else {
+      const lastTry = slot !== 'night';
+      await sendBark(env, {
+        title: `⚠️ 创业板50 · ${rbMd(today, today)}收盘价${lastTry ? '取不到' : '还没取到'}`,
+        body: `三个行情源都还没有 ${rbMd(today, today)}的收盘价：${k.tried.join('；').slice(0, 300)}`
+          + (lastTry ? `\n下一个交易日晚上会把 ${rbMd(today, today)}的数据一起补上；这天收盘有没有碰线，到时的推送会说。`
+            : '\n22:35 会再试一次，不用处理。'),
+        level: 'active', group: RB_GROUP, url,
+      });
+      return { ok: false, today, reason: '收盘价取不到', tried: k.tried };
+    }
+  }
+
+  const { rows, problems } = rbMerge(series.rows || [], k.rows, tradingDays);
+  if (problems.length) {
+    await sendBark(env, {
+      title: '⚠️ 创业板50 · 行情数据没通过检查',
+      body: `${problems.slice(0, 4).join('\n')}\n今晚没有写入、没有给操作建议；明晚重抓时会再试。`,
+      level: 'timeSensitive', group: RB_GROUP_ACT, url,
+    });
+    return { ok: false, today, reason: '行情数据没通过检查', problems };
+  }
+
+  // since：上一次送达的推送说到了哪天。某晚推送没送达，这一晚会把那天的事一起补说
+  const since = run ? run.delivered ?? null : null;
+  const st = rbStatus({ cfg, rows, tradingDays, since });
+  const p = rbNightPush(st, { today, fund });
+  series.rows = rows;
+  series.run = {
+    asof: today, ranAt: beijingStamp(), slot, source: k.source, tried: k.tried,
+    since, delivered: run ? run.delivered ?? null : null,
+    // 今晚不用推送（还没开始 / 早就结束了）就直接记成「不用补发」
+    push: p ? null : { ok: true, skipped: true },
+    problem: st.ok ? null : st.problem,
+  };
+  const msg = !st.ok ? `${today} 规则文件有问题：${st.problem}`
+    : st.exitFresh ? `${today} 收盘 ${p3(st.c)}，${st.exitFresh.why === 'exp' ? '到期' : st.exitFresh.why === 'tp' ? '到了止盈线' : st.exitFresh.why === 'sl' ? '到了止损线' : '记下实际卖出'}，全部卖出`
+      : st.fresh.some((e) => e.k > 1 && e.model) ? `${today} 收盘 ${p3(st.c)}，到了买入线`
+        : st.phase === 'done' ? `${today} 交易已结束` : `${today} 收盘 ${p3(st.c)}，不用操作`;
+  const sha = await rbCommit(G, series, `chore(rebound): ${msg}`, today);
+  if (sha === null) return { ok: true, today, skipped: `另一轮刚把 ${today} 跑完，这一轮让路` };
+
+  if (!p) return { ok: true, today, commit: sha.slice(0, 7), phase: st.ok ? st.phase : 'error', pushed: null };
+  const res = await sendBark(env, { ...p, url });
+  series.run = { ...series.run, push: res, delivered: res.ok ? today : series.run.delivered };
+  let backfillErr = null;
+  await rbCommit(G, series, `chore(rebound): ${today} 推送${res.ok ? '已送达' : '失败'}`, today)
+    .catch((e) => { backfillErr = String(e && e.message || e); });
+  // 同红利：HTTP 返回不带金额，也不带推送正文（设了 REBOUND_FUND 时正文里有金额）
+  return {
+    ok: true, today, commit: sha.slice(0, 7), source: k.source, phase: st.ok ? st.phase : 'error',
+    day: st.ok ? st.day : null, action: !!p.action, push: { ok: res.ok, reason: res.reason || null },
+    ...(backfillErr ? { backfillErr } : {}),
+  };
+}
+
+/** 14:45。只读不写：不碰仓库，只在要动手时推一条 */
+async function reboundIntraday(env) {
+  const today = rbBeijingDate();
+  const G = gh(env);
+  if (!(await rbTradingDay(G, today))) return { ok: true, today, skipped: '非交易日（或交易日历取不到），静默' };
+  const cfg = await G.readJSON('data/rebound.json', null);
+  // 起始日当天不看：第 1 笔是那天开盘买的，规则从下一个交易日才开始检查
+  if (!cfg || !(cfg.start < today)) return { ok: true, today, skipped: '还没开始' };
+  const series = await G.readJSON(RB_SERIES, null);
+  if (!series) return { ok: true, today, skipped: `没有 ${RB_SERIES}` };
+  const tradingDays = await rbCalendars(G, cfg.start, today);
+  const st = rbStatus({ cfg, rows: series.rows.filter((r) => r.d < today), tradingDays });
+  if (!st.ok || st.phase !== 'open') return { ok: true, today, skipped: st.ok ? `不在持仓中（${st.phase}）` : st.problem };
+  const q = await fetchETF(cfg.code);
+  // 实时价取不到就算了：21:05 那一轮会按收盘价把今天说清楚
+  if (q.failed || q.d !== today) return { ok: false, today, reason: '实时报价取不到', tried: q.tried };
+  const p = rbIntradayPush(st, { c: q.c, d: q.d }, { today, fund: Number(env.REBOUND_FUND || 0) });
+  if (!p) return { ok: true, today, pushed: false };
+  const res = await sendBark(env, { ...p, url: rbPageUrl(env, today) });
+  return { ok: true, today, pushed: res.ok, action: !!p.action, reason: res.reason || null };
+}
+
+/** 三个定时都从这里进。任何异常都推一条带原因的告警，绝不静默失败 */
+async function reboundJob(env, slot, opts = {}) {
+  try {
+    return slot === 'intraday' ? await reboundIntraday(env) : await runRebound(env, { slot, ...opts });
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    await sendBark(env, {
+      title: '❌ 创业板50 · 运行异常',
+      body: `${beijingStamp()}（${RB_SLOT_NAME[slot] || slot}）\n${msg.slice(0, 300)}`,
+      level: 'timeSensitive', group: RB_GROUP_ACT, url: rbPageUrl(env, rbBeijingDate()),
+    });
+    return { ok: false, slot, error: msg };
+  }
+}
+
 // ---------------------------------------------------------------- 入口
 
 /**
@@ -1444,7 +1730,16 @@ export default {
         if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
         return json(await keepAlive(ctx, refreshCalendar(env)));
       }
-      return json({ ok: false, error: '未知路径', paths: ['/run', '/remind', '/calendar/refresh', '/ping', '/health'] }, 404);
+      /**
+       * 手动跑一次创业板50 那一路（平时由 Cron Triggers 自动跑，用不着它）。
+       * ?slot=intraday 是 14:45 那次盘中检查；默认是收盘后那次。&force=1 今天跑过也重跑、重推一遍。
+       */
+      if (path === '/rebound') {
+        if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
+        const slot = url.searchParams.get('slot') === 'intraday' ? 'intraday' : 'night';
+        return json(await keepAlive(ctx, reboundJob(env, slot, { force: url.searchParams.get('force') === '1' })));
+      }
+      return json({ ok: false, error: '未知路径', paths: ['/run', '/remind', '/calendar/refresh', '/rebound', '/ping', '/health'] }, 404);
     } catch (e) {
       await bark(env, {
         title: '❌ 红利MA30 · 运行异常',
@@ -1453,5 +1748,12 @@ export default {
       });
       return json({ ok: false, error: String(e && e.message || e), stack: String(e && e.stack || '') }, 500);
     }
+  },
+
+  /** Cron Triggers（wrangler.toml）只给创业板50 那一路用；红利仍由 cron-job.org 调 /run */
+  async scheduled(controller, env, ctx) {
+    const slot = RB_CRONS[controller.cron];
+    if (!slot) return;
+    await keepAlive(ctx, reboundJob(env, slot));
   },
 };

@@ -290,7 +290,7 @@ console.log('\n================ 源码里的写死相对词 ================\n')
     .replace(/^\s*(\/\/|\*|\/\*).*$/, '')          // 整行注释
     .replace(/(?<!:)\/\/.*$/, '');                  // 行尾注释（别误伤 https://）
   let scanned = 0;
-  for (const f of ['worker/src/index.js', 'index.html']) {
+  for (const f of ['worker/src/index.js', 'index.html', 'rebound.html']) {
     const lines = readFileSync(join(ROOT, f), 'utf8').split('\n');
     lines.forEach((raw, k) => {
       const ln = stripComment(raw);

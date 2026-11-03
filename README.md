@@ -4,6 +4,8 @@
 
 面板：https://binbin1555.github.io/hongli-ma30/
 
+另有一笔独立的「创业板50 超跌反弹」交易，有自己的页面和推送：https://binbin1555.github.io/hongli-ma30/rebound.html （见下方「创业板50 超跌反弹」一节）
+
 ---
 
 ## 这套系统在做什么
@@ -112,10 +114,50 @@ MA30 低吸赌的是「跌多了会弹回来」。恐慌式下跌里这个赌注
 
 ---
 
+## 创业板50 超跌反弹（2026-11-03 起）
+
+和红利策略完全分开的一笔专款交易，只用价格和专款的比例记录，仓库里没有金额。
+
+| | |
+|---|---|
+| 标的 | 159682 创业板50ETF景顺，一律看它的**收盘价**（不复权，和券商软件上的价格一致） |
+| 第 1 笔 | 2026-11-03 开盘买入专款的 50%，成交价 1.075 记作 P1 |
+| 第 2、3 笔 | 收盘 ≤ P1 × 0.88（0.946）买 25%；收盘 ≤ P1 × 0.76（0.817）再买 25% |
+| 卖出 | 任意一条先发生就全部卖出，交易结束：止盈 收盘 ≥ 平均成本 × 1.20；止损 收盘 ≤ 平均成本 × 0.75；到期 第 120 个交易日 |
+| 检查顺序 | 止损 → 止盈 → 第 2 笔 → 第 3 笔 → 到期。同一天既到止损线又到买入线按止损；到期那天只卖不买 |
+| 线的取整 | 买入线、止损线向下取到 0.001，止盈线向上取：显示出来的那一格就是触发的那一格 |
+
+**提醒**（Worker 自己的 Cron Triggers，见 `wrangler.toml`；不走 cron-job.org，和红利各占一次独立调用）：
+
+| 北京时间 | 做什么 |
+|---|---|
+| 21:05 | 抓 159682 最近 60 根日 K 线（腾讯 → 东财 → 新浪，都没有就用实时报价兜底）并进行情，按规则重放，提交 `data/rebound_series.json`，推一条：今天收盘在哪、下一步盯哪几条线、还差多少、离到期还有几个交易日。点开就是反弹页 |
+| 22:35 | 兜底：21:05 没跑成就补跑；跑成了但推送没送达就照原样补发；都好就什么也不做 |
+| 14:45 | 盘中看一眼实时价：已经过线、离线不到 1%、或者当天就是到期日才推，其余日子静默。只读不写 |
+
+推送是你自己 14:50 检查之外的一道保险，不能代替检查。
+
+**怎么记账**：不存可变状态，每次都从 `data/rebound.json`（规则参数 + 实际成交）和行情重放。
+没记实际成交的那一笔，按「触发当天 14:50 照规则做了、成交价约等于收盘价」自动记（回测也是这个口径）。
+实际成交和它不一样时（比如晚了一天才买到，或者按盘中价买了、收盘又回到线上方），在 `data/rebound.json` 的 `fills` 里补一条
+`{"k": 2, "d": "2026-11-13", "p": 0.951}`（第几笔、日期、成交价），卖出后在 `exit` 里记 `{"d": …, "p": …}`；之后的线按实际成本重算。
+日期写错（比如写成周末）会直接报错、停止给建议，而不是悄悄忽略。
+
+**到期日**：2026 年照交易所日历；2027 年的日历公布前，按「工作日、去掉估计的元旦 / 春节 / 清明」估算，页面和推送都标「约」，
+日历进了仓库（每月 1 日自动刷新）就自动改成精确日期。按现在的估算是 2027 年 4 月 30 日。
+
+**金额**：推送默认只说「专款的 25%」。想让推送直接说「约多少钱、约多少份」，就把专款总额设成 Worker 密钥 `REBOUND_FUND`（可选）；
+它只进推送正文，不进仓库、不进 HTTP 返回、不进推送标题（标题会随推送结果记进公开仓库）。页面上的金额填在本机浏览器里。
+
+**交易结束后**：结束那晚推一条，之后不抓、不写、不推，也不会自动再来一轮。
+
+---
+
 ## 架构
 
 ```
 cron-job.org ──每交易日 21:00 HTTP──> Cloudflare Worker（唯一会跑代码的组件）
+Cron Triggers ──14:45 / 21:05 / 22:35──┘   （创业板50 那一路，只写 data/rebound_series.json）
                                           │
                                           ├─ 深交所日历：今天开市吗？不开市就静默退出
                                           ├─ 中证接口：抓 H00922 和价格指数 000922；东财：抓 008204 净值、10 年国债收益率
@@ -140,7 +182,9 @@ cron-job.org ──每交易日 21:00 HTTP──> Cloudflare Worker（唯一会�
 
 ```
 index.html            面板（纯静态，GitHub Pages 的入口）
+rebound.html          创业板50 超跌反弹那页（Bark 推送点开就是它）
 shared/strategy.js    策略核心纯函数，Worker 和面板共用同一份
+shared/rebound.js     创业板50 那一路的规则核心和推送文案，Worker 和 rebound.html 共用同一份
 worker/src/index.js   Cloudflare Worker
 wrangler.toml         Worker 配置（机密不在这里）
 data/state.json       当前状态：档位、待执行挂单、指数点位、校验结果
@@ -148,6 +192,8 @@ data/ledger.json      账本，只增不改
 data/gatelog.json     被闸门拦下的买入（不进账本；一次都没拦过时 entries 是空的）
 data/chaselog.json    被追高线拦下的买入（同上）
 data/brakelog.json    被暴跌刹车拦下的买入（同上）
+data/rebound.json     创业板50 那笔的规则参数和实际成交（只有价格和比例）
+data/rebound_series.json  159682 日线 + 最近一次运行和推送的结果
 data/series.json      行情序列，供画图、重放和闸门（c 全收益 / m MA30 / b 闲钱净值 / p 价格指数 / y 10 年国债）
 calendar/2026.json    交易日历，每月自动刷新
 audit/YYYY-MM-DD.json 每日运行快照，用于事后追溯
@@ -249,6 +295,7 @@ npm run sweep       # 状态空间穷举（2808 组）
 npm run gate        # 闸门：核心函数 + 走 Worker 的 /run
 npm run chase       # 追高线：核心函数 + 走 Worker 的 /run（chase-panel 测面板）
 npm run brake       # 暴跌刹车：核心函数 + 走 Worker 的 /run（brake-panel 测面板）
+npm run rebound     # 创业板50：规则核心、推送文案 + 走 Worker 的定时入口（rebound-panel 测那页）
 npm run happy:neg   # 反向验证：把关键逻辑逐条改坏，确认测试真的会红
 npm run check:sources   # 三个外部数据源体检
 npm run check:deploy -- <worker 地址>   # 线上跑的是不是本地这一版
@@ -370,9 +417,10 @@ Fetch  →  Pull origin  →  改代码  →  Commit  →  Push origin
 | 目录 | 归谁 |
 |---|---|
 | `data/` `calendar/` `audit/` | Worker 写，只读 |
+| `data/rebound.json` | 例外：Worker 只读不写。创业板50 那笔的实际成交由你（或 Claude）记在这里 |
 | `index.html` `worker/` `shared/` `tests/` | 你改 |
 
-改完 `shared/strategy.js` 要跑两条命令：
+改完 `shared/strategy.js`、`shared/rebound.js` 或 `worker/src/index.js` 要跑两条命令：
 
 ```bash
 npm run stamp   # 更新前端模块的版本指纹，否则浏览器会用缓存的旧模块导致白屏
@@ -390,6 +438,7 @@ npm test        # 和独立的 Python 回测引擎逐笔对账 + 全部单元测
 | 信号与回测 | 中证指数有限公司 `csindex.com.cn/csindex-home/perf/index-perf` |
 | 交易日历 | 深圳证券交易所 `szse.cn/api/report/exchange/onepersistenthour/monthList` |
 | ETF 参考价 | 腾讯 `qt.gtimg.cn` → 新浪 `hq.sinajs.cn` → 东财 `push2.eastmoney.com`，三源依次尝试 |
+| 159682 日 K 线 | 腾讯 `web.ifzq.gtimg.cn` → 东财 `push2his.eastmoney.com` → 新浪 `quotes.sina.cn`，三源依次尝试；实测三源 800 根逐根一致 |
 | 闸门：价格指数 | 中证指数有限公司，同上接口，代码 000922 |
 | 闸门：10 年国债收益率 | 东方财富数据中心 `datacenter-web.eastmoney.com`（`RPTA_WEB_TREASURYYIELD`，中债口径） |
 

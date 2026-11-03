@@ -13,13 +13,17 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const F = { page: join(ROOT, 'index.html'), core: join(ROOT, 'shared', 'strategy.js'), worker: join(ROOT, 'worker', 'src', 'index.js') };
+const F = {
+  page: join(ROOT, 'index.html'), core: join(ROOT, 'shared', 'strategy.js'), worker: join(ROOT, 'worker', 'src', 'index.js'),
+  // 创业板50 那一路
+  rbcore: join(ROOT, 'shared', 'rebound.js'), rbpage: join(ROOT, 'rebound.html'),
+};
 // 行尾一律拉平成 LF 再比对。Windows 上 git 每 checkout 一次就把工作区写成
 // CRLF，而下面那些锚点里带着 \n —— 不拉平的话 git pull 之后整批锚点全部
 // 失配，报「找不到要改的那段」，看着像测试自己坏了。
 // 写回去也用 LF：git 提交时本来就按 LF 存，内容不受影响。
 const flat = (p) => readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
-const clean = { page: flat(F.page), core: flat(F.core), worker: flat(F.worker) };
+const clean = Object.fromEntries(Object.entries(F).map(([k, p]) => [k, flat(p)]));
 const restore = () => { for (const k of Object.keys(F)) writeFileSync(F[k], clean[k], 'utf8'); };
 // 这个脚本会真的改写源码。万一中途被 Ctrl-C 或异常打断，
 // 绝不能把改坏的版本留在硬盘上 —— 所以每条退路都挂上还原。
@@ -175,6 +179,24 @@ const MUTANTS = [
   ['刹车拦下却说没跑完', 'page', '} else if (brakeBlockedNow()) {', '} else if (false) {', 'brake-panel'],
   ['横幅不看 brakelog', 'page', 'for (const b of (S.brakelog && S.brakelog.entries) || []) add(b);', '/* 不看 */', 'brake-panel'],
   ['波动偏高不提醒', 'page', 'const bNote = bk && bk.ok && bk.hot', 'const bNote = false && bk && bk.ok && bk.hot', 'brake-panel'],
+
+  // —— 创业板50 超跌反弹 ——
+  ['止损线四舍五入', 'rbcore', 'sl: tickDown(avg * cfg.sl)', 'sl: Math.round(avg * cfg.sl * 1000) / 1000', 'rebound'],
+  ['到期那天照买', 'rbcore', 'a ? a.d === r.d : day < cfg.maxDays && r.c <= line', 'a ? a.d === r.d : r.c <= line', 'rebound'],
+  ['实际成交被忽略', 'rbcore', 'if (a ? a.d === r.d : day < cfg.maxDays && r.c <= line) {', 'if (day < cfg.maxDays && r.c <= line) {', 'rebound'],
+  ['加仓后不重算成本', 'rbcore', 'inv += t.w; units += t.w / t.p;', '/* 不重算 */', 'rebound'],
+  ['到期日不扣节假日', 'rbcore', "if (wd !== 0 && wd !== 6 && !RB_HOLIDAY_GUESS.has(d))", 'if (wd !== 0 && wd !== 6)', 'rebound'],
+  ['盘中离线一成也响', 'rbcore', 'export const RB_NEAR = 0.01;', 'export const RB_NEAR = 0.1;', 'rebound'],
+  ['没说还没买怎么办', 'rbcore', '`· 还没${verb}：${when} 补上，不论那时价格`', '`· 还没${verb}：自己看着办`', 'rebound'],
+  ['标题带上金额', 'rbcore', "(model.length ? `到了第 ${ks.join('、')} 笔买入线`", "(model.length ? `到了第 ${ks.join('、')} 笔买入线（${sizeText(w, st.last.c, fund)}）`", 'rebound'],
+  ['推送没送达不补发', 'worker', 'if (run.push && run.push.ok) return { ok: true, today, skipped:', 'if (run.push) return { ok: true, today, skipped:', 'rebound'],
+  ['反弹写进红利文件', 'worker', "const RB_SERIES = 'data/rebound_series.json';", "const RB_SERIES = 'data/series.json';", 'rebound'],
+  ['点开跳红利面板', 'worker', 'const res = await sendBark(env, { ...p, url });\n  series.run = { ...series.run, push: res,',
+    'const res = await sendBark(env, { ...p });\n  series.run = { ...series.run, push: res,', 'rebound'],
+  ['结束了还天天写', 'worker', "if (st0.ok && st0.phase === 'done' && !st0.exitFresh) return { ok: true, today, skipped: '交易已经结束' };", '/* 不管 */', 'rebound'],
+  ['页面漏了当天的买点', 'rbpage', 'const p = rbNightPush(ST, { today, fund: fund() });', 'const p = rbNightPush({ ...ST, fresh: [], exitFresh: null }, { today, fund: fund() });', 'rebound-panel'],
+  ['金额漏进页面', 'rbpage', "const fund = () => { const v = Number(LS.get('rbFund', 0)); return v > 0 ? v : 0; };", 'const fund = () => 400000;', 'rebound-panel'],
+  ['不报数据落后', 'rbpage', 'if (back.length) warn.push(', 'if (false) warn.push(', 'rebound-panel'],
 ];
 
 let broken = 0;

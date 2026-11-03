@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#E9EDF1">
+<title>创业板50 超跌反弹</title>
+<style>
+/* 和红利面板同一套颜色；字体只用系统自带的 —— 这页多半是从 Bark 点开的，国内连不上外部字体时别让它干等 */
+:root{
+  --bg:#E9EDF1; --pan:#FFFFFF; --ln:#DCE3EA; --tx:#1B2431; --dm:#5E6B7B; --chip:#F1F5F9;
+  --ac:#2C55C8; --buy:#D63C48; --tp:#0E9B60; --sl:#B4690E; --win:rgba(44,85,200,.06);
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:'PingFang SC','Noto Sans SC','Microsoft YaHei',system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#11151B; --pan:#1A1F27; --ln:#2A323D; --tx:#E3E8EE; --dm:#8D99A8; --chip:#222933;
+  --ac:#6E9BF0; --buy:#F0555F; --tp:#2BB77C; --sl:#D89A3A; --win:rgba(110,155,240,.08);
+}}
+:root[data-theme="dark"]{
+  --bg:#11151B; --pan:#1A1F27; --ln:#2A323D; --tx:#E3E8EE; --dm:#8D99A8; --chip:#222933;
+  --ac:#6E9BF0; --buy:#F0555F; --tp:#2BB77C; --sl:#D89A3A; --win:rgba(110,155,240,.08);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);line-height:1.6;
+  font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.wrap{max-width:760px;margin:0 auto;padding:14px 14px 60px;display:flex;flex-direction:column;gap:14px}
+.card{background:var(--pan);border-radius:12px;padding:20px 20px}
+.k{font-size:11px;letter-spacing:.12em;color:var(--dm);font-weight:600;margin:0 0 10px}
+.note{font-size:12.5px;color:var(--dm);margin:12px 0 0;line-height:1.65}
+.mono{font-family:var(--mono)}
+.nb{white-space:nowrap}
+
+.top{display:flex;align-items:flex-start;gap:10px;padding:2px 4px}
+.top h1{font-size:16px;margin:0;font-weight:700}
+.top .sub{font-size:12px;color:var(--dm);margin:2px 0 0}
+.top a{margin-left:auto;font-size:12px;color:var(--ac);text-decoration:none;white-space:nowrap;padding-top:2px}
+.errbox{background:#FFF4E5;color:#8A4B08;border-radius:10px;padding:12px 14px;font-size:13px;margin:0;line-height:1.6}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .errbox{background:#3A2A12;color:#F2C27B}}
+:root[data-theme="dark"] .errbox{background:#3A2A12;color:#F2C27B}
+
+/* 下一步 —— 这页的主角，内容和当晚的推送一字不差 */
+#nextCard{border-left:7px solid var(--ac);box-shadow:0 3px 18px rgba(0,0,0,.07);padding:24px 22px}
+#nextCard.act{border-left-color:var(--buy)}
+#nextCard.tp{border-left-color:var(--tp)}
+#nextCard.sl{border-left-color:var(--sl)}
+#nextKick{font-size:12.5px;color:var(--dm);margin:0 0 8px}
+#nextHead{font-size:clamp(21px,5.6vw,30px);font-weight:700;margin:0;line-height:1.32;letter-spacing:-.01em}
+#nextList{list-style:none;padding:0;margin:14px 0 0;display:flex;flex-direction:column;gap:7px;font-size:15px}
+#nextList li{line-height:1.55}
+#nextList li.dir{display:flex;gap:9px;align-items:baseline}
+#nextList li.dir .ar{flex:none;font-weight:700;width:1.1em;text-align:center}
+#nextList li.dn .ar{color:var(--buy)} #nextList li.up .ar{color:var(--tp)}
+#nextList li.mut{color:var(--dm);font-size:13.5px}
+#nextList li.warn{color:var(--sl);font-size:13.5px}
+#nextList li.sub{padding-left:1.1em;font-size:14px}
+#nextNote:empty{display:none}
+
+/* 离操作还有多远：按价格从高到低排的一张梯子，现价那一格标出来 */
+.lad{display:flex;flex-direction:column}
+.lad .r{display:grid;grid-template-columns:12px 1fr auto 6.9em;gap:4px 10px;align-items:center;
+  padding:9px 0;border-top:1px dashed var(--ln);font-size:14px}
+.lad .r:first-child{border-top:0}
+.lad .dot{width:10px;height:10px;border-radius:50%;background:var(--dm)}
+.lad .r.tp .dot{background:var(--tp)} .lad .r.add .dot{background:var(--buy)}
+.lad .r.sl .dot{background:var(--sl)} .lad .r.avg .dot{background:transparent;border:2px solid var(--dm)}
+.lad .r.done{color:var(--dm)} .lad .r.done .dot{background:var(--ln)}
+.lad .r.now{background:var(--chip);border-radius:8px;border-top-color:transparent;padding:10px 8px;margin:2px -8px}
+.lad .r.now + .r{border-top-color:transparent}
+.lad .r.now .dot{background:var(--tx)}
+.lad .nm small{display:block;color:var(--dm);font-size:11.5px;line-height:1.35}
+.lad .px{font-family:var(--mono);font-weight:600}
+.lad .ds{font-size:12px;border-radius:999px;padding:2px 8px;background:var(--chip);color:var(--dm);white-space:nowrap;text-align:center}
+.lad .ds:empty{background:transparent}
+.lad .r.tp .ds{color:var(--tp)} .lad .r.add .ds{color:var(--buy)} .lad .r.sl .ds{color:var(--sl)}
+.lad .r.now .ds{background:transparent}
+.due{margin:16px 0 0;padding:14px 0 0;border-top:1px solid var(--ln)}
+.due .t{display:flex;justify-content:space-between;gap:10px;font-size:14px;flex-wrap:wrap}
+.due .t b{font-family:var(--mono)}
+.bar{height:8px;border-radius:999px;background:var(--chip);margin:9px 0 0;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ac);border-radius:999px}
+
+/* 走势 */
+.khead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+.khead .k{margin:0;flex:1 1 auto}
+.seg{display:flex;gap:5px}
+.seg button{font-size:11.5px;padding:5px 11px;border-radius:6px;cursor:pointer;
+  background:var(--pan);border:1px solid var(--ln);color:var(--dm);font-family:inherit}
+.seg button[aria-pressed="true"]{background:var(--ac);border-color:var(--ac);color:#fff}
+.seg button:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+#chart{position:relative;width:100%;touch-action:pan-y;-webkit-user-select:none;user-select:none}
+#chart svg{display:block;width:100%;height:auto;overflow:visible}
+#chart .win{fill:var(--win)} #chart .fut{fill:var(--win)}
+#chart .px{fill:none;stroke:var(--tx);stroke-width:1.6;stroke-linejoin:round}
+#chart .ma{fill:none;stroke:var(--dm);stroke-width:1;stroke-dasharray:4 3;opacity:.75}
+#chart .avg{fill:none;stroke:var(--dm);stroke-width:1.2}
+#chart .tpl{fill:none;stroke:var(--tp);stroke-width:1.3;stroke-dasharray:5 3}
+#chart .sll{fill:none;stroke:var(--sl);stroke-width:1.3;stroke-dasharray:5 3}
+#chart .addl{fill:none;stroke:var(--buy);stroke-width:1.1;stroke-dasharray:2 3}
+#chart .ahead{opacity:.55}
+#chart .dueln{stroke:var(--ac);stroke-width:1.2;stroke-dasharray:3 3}
+#chart .grid{stroke:var(--ln);stroke-width:1}
+#chart .hgrid{stroke:var(--ln);stroke-width:1;opacity:.7}
+#chart text.gl{font-size:9.5px;opacity:.85}
+#chart text{font-family:var(--sans);font-size:10.5px;fill:var(--dm)}
+#chart text.v{font-family:var(--mono)}
+#chart text.tp{fill:var(--tp)} #chart text.sl{fill:var(--sl)} #chart text.add{fill:var(--buy)}
+#chart text.avgt{fill:var(--dm)} #chart text.due{fill:var(--ac)} #chart text.now{fill:var(--tx);font-weight:600}
+#chart .lk{stroke:var(--ln);stroke-width:1}
+#chart .mb{fill:var(--buy)} #chart .ms{fill:var(--tp)} #chart .mx{fill:var(--sl)} #chart .me{fill:var(--ac)}
+#chart .nowdot{fill:var(--tx);stroke:var(--pan);stroke-width:2}
+#chart .cross{stroke:var(--dm);stroke-width:1;stroke-dasharray:2 2}
+#tip{position:absolute;top:0;pointer-events:none;background:var(--pan);border:1px solid var(--ln);border-radius:9px;
+  padding:8px 10px;font-size:12px;line-height:1.6;white-space:nowrap;box-shadow:0 6px 22px rgba(0,0,0,.18);
+  opacity:0;transition:opacity .1s;z-index:5}
+#tip.on{opacity:1}
+#tip .td{font-family:var(--mono);color:var(--dm);font-size:11px}
+#tip b{font-family:var(--mono)}
+.legend{display:flex;gap:6px 14px;flex-wrap:wrap;font-size:11.5px;color:var(--dm);margin:8px 0 0}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{display:inline-block;width:16px;height:0;border-top:2px solid var(--tx)}
+.legend i.ma{border-top:1.5px dashed var(--dm)} .legend i.tp{border-top:2px dashed var(--tp)}
+.legend i.sl{border-top:2px dashed var(--sl)} .legend i.add{border-top:2px dotted var(--buy)}
+.legend i.avg{border-top:1.5px solid var(--dm)}
+.legend b{color:var(--buy);font-size:10px}
+
+/* 持仓 */
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:8px 4px;text-align:left;border-bottom:1px solid var(--ln)}
+th{font-size:11.5px;color:var(--dm);font-weight:600}
+td.r,th.r{text-align:right}
+td .mono{font-weight:600}
+tr:last-child td{border-bottom:0}
+.ok{color:var(--tp)} .wait{color:var(--dm)}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:14px 0 0}
+.kv div{background:var(--chip);border-radius:8px;padding:9px 11px}
+.kv span{display:block;font-size:11.5px;color:var(--dm)}
+.kv b{font-family:var(--mono);font-size:16px}
+.kv small{font-size:12px;color:var(--dm);margin-left:4px}
+details{margin:14px 0 0}
+details summary{cursor:pointer;color:var(--ac);font-size:13px}
+.fund{display:flex;gap:8px;align-items:center;margin:10px 0 0;flex-wrap:wrap}
+.fund input{font-family:var(--mono);font-size:16px;padding:8px 10px;border-radius:8px;border:1px solid var(--ln);
+  background:var(--pan);color:var(--tx);width:11em}
+.fund button{font-family:inherit;font-size:13px;padding:8px 14px;border-radius:8px;border:1px solid var(--ln);
+  background:var(--chip);color:var(--tx);cursor:pointer}
+.rules ol,.rules ul{padding-left:20px;margin:8px 0 0;font-size:14px}
+.rules li{margin:4px 0}
+.rules b.buy{color:var(--buy)} .rules b.tp{color:var(--tp)} .rules b.sl{color:var(--sl)}
+.foot{font-size:11.5px;color:var(--dm);text-align:center;margin:4px 0 0;line-height:1.7}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <h1>创业板50 超跌反弹</h1>
+      <p class="sub" id="sub">159682 创业板50ETF景顺</p>
+    </div>
+    <a href="./">红利面板 →</a>
+  </header>
+
+  <p id="warn" class="errbox" hidden></p>
+
+  <section class="card" id="nextCard">
+    <p class="k">下一步</p>
+    <p id="nextKick">–</p>
+    <p id="nextHead">读取中…</p>
+    <ul id="nextList"></ul>
+    <p class="note" id="nextNote"></p>
+  </section>
+
+  <section class="card" id="distCard">
+    <p class="k">离操作还有多远（159682 价格）</p>
+    <div class="lad" id="ladder"></div>
+    <div class="due" id="due"></div>
+  </section>
+
+  <section class="card">
+    <div class="khead">
+      <p class="k">走势</p>
+      <div class="seg" id="ranges"></div>
+    </div>
+    <div id="chart"></div>
+    <div class="legend" id="legend">
+      <span><i></i>收盘价</span><span><i class="ma"></i>年线</span><span><i class="avg"></i>平均成本</span>
+      <span><i class="tp"></i>止盈线</span><span><i class="sl"></i>止损线</span><span><i class="add"></i>买入线</span>
+      <span><b>▲</b>买入</span>
+    </div>
+    <p class="note" id="chartNote"></p>
+  </section>
+
+  <section class="card" id="posCard">
+    <p class="k">持仓</p>
+    <table>
+      <thead><tr><th>笔</th><th>比例</th><th>状态</th><th class="r">成交价</th></tr></thead>
+      <tbody id="tranches"></tbody>
+    </table>
+    <div class="kv" id="posKv"></div>
+    <details id="fundBox">
+      <summary>填专款总额，显示金额和份数</summary>
+      <div class="fund">
+        <input id="fundIn" inputmode="numeric" placeholder="例如 100000" aria-label="专款总额（元）">
+        <button id="fundSave" type="button">保存</button>
+        <button id="fundClear" type="button">清除</button>
+      </div>
+      <p class="note">金额只存在这台手机的浏览器里，不会发到任何地方。仓库是公开的，里面只记价格和比例。</p>
+    </details>
+    <p class="note" id="fixNote">实际成交和这里记的不一样（比如晚了一天才买到，或者按盘中价买了、收盘又回到线上方）：
+      在仓库 <span class="mono">data/rebound.json</span> 的 fills 里补一条（第几笔、日期、成交价），卖出后在 exit 里记日期和成交价；
+      也可以把成交价告诉 Claude 帮你改。之后的线会按实际成本重算。</p>
+  </section>
+
+  <section class="card rules">
+    <p class="k">规则（策略①，一律看 159682 收盘价）</p>
+    <ul>
+      <li>买三笔：专款的 <b>50%</b> 已在 <span id="r0">11 月 3 日</span>以 <span class="mono" id="r1">1.075</span> 买入（P1）；
+        收盘 ≤ P1 × 0.88（<span class="mono" id="r2">0.946</span>）买 <b class="buy">25%</b>；
+        收盘 ≤ P1 × 0.76（<span class="mono" id="r3">0.817</span>）再买 <b class="buy">25%</b></li>
+      <li>卖：任意一条先发生就全部卖出，交易结束 —— <b class="tp">止盈</b> 收盘 ≥ 平均成本 × 1.20；
+        <b class="sl">止损</b> 收盘 ≤ 平均成本 × 0.75；<b>到期</b> 第 120 个交易日，不论盈亏</li>
+    </ul>
+    <details>
+      <summary>每个交易日 14:50 左右，按这个顺序检查</summary>
+      <ol>
+        <li>到止损线 → 全部卖出，结束</li>
+        <li>到止盈线 → 全部卖出，结束</li>
+        <li>没买第 2 笔，且到第 2 笔买入线 → 买第 2 笔</li>
+        <li>没买第 3 笔，且到第 3 笔买入线 → 买第 3 笔</li>
+        <li>到期日 → 全部卖出，结束（到期那天只卖不买）</li>
+      </ol>
+      <ul>
+        <li>同一天既到止损线又到买入线 → 按止损执行，不再加仓</li>
+        <li>只看收盘价，盘中碰一下不算；中途不改规则，不融资、不加杠杆</li>
+        <li>剩下的钱放在随时（最晚第二个交易日）就能用的地方；交易结束后不自动再来一轮</li>
+        <li>收盘才碰线、14:50 没赶上：紧接着的那个交易日 14:50 补上，不论那时价格</li>
+      </ul>
+    </details>
+    <p class="note">提醒：每晚 21:05 推一条（点开就是这页）；14:45 只有现价到线、离线不到 1%、或当天到期时才推。
+      推送是你自己 14:50 检查之外的一道保险，不能代替检查。</p>
+  </section>
+
+  <p class="foot" id="foot">–</p>
+</div>
+
+<script type="module">
+// 版本号是 shared/rebound.js 的内容哈希，由 npm run stamp 自动写入（理由同红利面板的 CORE_VERSION：
+// 不带版本号，浏览器会一直用缓存里的旧模块，改了规则推上线后页面会因为「找不到导出」白屏）
+const REBOUND_VERSION = '6c88312bb7';
+const { rbStatus, rbNightPush, rbTradingDaysAfter, rbBeijingDate, rbBeijingHM, rbDay, rbMd, rbWd, rbMoney, rbShares, p3, pc1 }
+  = await import(`./shared/rebound.js?v=${REBOUND_VERSION}`);
+
+const $ = (id) => document.getElementById(id);
+const LS = {
+  get: (k, d = null) => { try { const v = localStorage.getItem('hlma30.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem('hlma30.' + k, JSON.stringify(v)); } catch {} },
+};
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const share = (w) => `${Math.round(w * 100)}%`;
+const abs1 = (x) => `${Math.abs(x * 100).toFixed(1)}%`;
+// 主题沿用红利面板里选过的那个（同一个 localStorage 键）
+{
+  const t = LS.get('theme', 'auto');
+  if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+}
+
+// 近期：最近三个月的走势和各条线，看「现在什么样」；全程：一直画到第 120 个交易日，看「还剩多少时间」
+const RANGES = [['近期', 'recent'], ['全程', 'round'], ['近一年', 'year']];
+let S = null;      // { cfg, series, cal }
+let ST = null;     // rbStatus 的结果
+let range = LS.get('rbRange', 'recent');
+if (!RANGES.some((r) => r[1] === range)) range = 'recent';
+const fund = () => { const v = Number(LS.get('rbFund', 0)); return v > 0 ? v : 0; };
+
+async function load() {
+  const bust = '?t=' + Date.now();
+  try {
+    const [cfg, series] = await Promise.all([
+      fetch('./data/rebound.json' + bust).then((r) => r.json()),
+      fetch('./data/rebound_series.json' + bust).then((r) => r.json()),
+    ]);
+    // 到期日落在明年，明年的日历没发布前是 404 —— 那时按工作日估算，页面上标「约」
+    const y0 = +String(cfg.start).slice(0, 4);
+    const cals = await Promise.all([y0, y0 + 1].map((y) =>
+      fetch(`./calendar/${y}.json` + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null)));
+    S = { cfg, series, cal: cals.filter(Boolean).flatMap((c) => c.tradingDays || []).sort() };
+  } catch (e) {
+    showFatal(`数据读不出来：${e && e.message || e}`);
+    return;
+  }
+  render();
+}
+
+function showFatal(msg) {
+  $('nextKick').textContent = '数据异常，已停止显示';
+  $('nextHead').textContent = msg;
+  $('nextList').innerHTML = '';
+  $('nextNote').textContent = '为避免显示出错误的线，下面的内容不再更新。改好 data/rebound.json 后刷新即可。';
+  $('nextCard').className = 'card sl';
+  for (const id of ['ladder', 'due', 'chart', 'tranches', 'posKv']) $(id).innerHTML = '';
+}
+
+function render() {
+  const rows = S.series.rows || [];
+  // 页面上「新出的事」= 最后一根 K 线那天发生的：触发当晚和第二天白天都还挂着「还没买的话今天 14:50 补上」
+  const since = rows.length > 1 ? rows[rows.length - 2].d : null;
+  ST = rbStatus({ cfg: S.cfg, rows, tradingDays: S.cal, since });
+  if (!ST.ok) { showFatal(ST.problem); return; }
+  renderTop();
+  renderNext();
+  renderLadder();
+  renderDue();
+  renderRanges();
+  drawChart();
+  renderPos();
+  renderFoot();
+}
+
+function renderTop() {
+  const today = rbBeijingDate();
+  const last = ST.last;
+  $('sub').textContent = last
+    ? `159682 创业板50ETF景顺 · 数据截至 ${rbMd(last.d, today)}收盘`
+    : `159682 创业板50ETF景顺 · 第 1 笔 ${rbMd(S.cfg.start, today)}已买入`;
+  $('r0').textContent = rbMd(S.cfg.start, today);
+  $('r1').textContent = p3(ST.rp.P1);
+  $('r2').textContent = p3(ST.rp.addLines[0]);
+  $('r3').textContent = p3(ST.rp.addLines[1]);
+  // 数据有没有落后：最近一个该有收盘数据的交易日（今天要等 21:10 之后才算）
+  const warn = [];
+  if (ST.phase !== 'done' && last) {
+    const hm = rbBeijingHM();
+    const back = rbTradingDaysAfter(last.d, 20, S.cal).days.filter((d) => d < today || (d === today && hm >= '21:15'));
+    if (back.length) warn.push(`数据还停在 ${rbMd(last.d, today)}，之后的 ${back.length} 个交易日（${back.slice(0, 3).map((d) => rbMd(d, today)).join('、')}${back.length > 3 ? '…' : ''}）还没进来。可能当晚的更新没跑成，下面的线以 ${rbMd(last.d, today)}收盘为准。`);
+  }
+  const run = S.series.run;
+  if (run && run.push && run.push.ok === false && run.asof === (last && last.d)) {
+    warn.push(`${rbMd(run.asof, today)}晚上那条推送没有送达${run.push.reason ? `（${String(run.push.reason).slice(0, 60)}）` : ''}，22:35 会补发一次。`);
+  }
+  $('warn').hidden = !warn.length;
+  $('warn').textContent = warn.join(' ');
+}
+
+/** 「下一步」卡：和当晚的推送用同一个函数生成，标题、每一行都一样 */
+function renderNext() {
+  const today = rbBeijingDate();
+  const card = $('nextCard');
+  let kick = '', head = '', lines = [], cls = 'card';
+  if (ST.phase === 'pre') {
+    kick = `${rbMd(S.cfg.start, today)}开盘 · 第 1 笔已买入 @ ${p3(ST.rp.P1)}（专款的 ${share(S.cfg.weights[0])}）`;
+    head = `${rbMd(S.cfg.start, today)}晚上 21:05 第一次更新`;
+    lines = ['之后每个交易日晚上推送一次：收盘在哪、下一步盯哪几条线、离到期还有几天'];
+  } else {
+    const p = rbNightPush(ST, { today, fund: fund() });
+    if (!p) {
+      const x = ST.rp.exit;
+      kick = `${rbMd(x.d, today)} · ${({ tp: '止盈', sl: '止损', exp: '到期', manual: '实际卖出' })[x.why]}`;
+      head = '交易已结束';
+      lines = [`${rbMd(x.d, today)}全部卖出 @ ${p3(x.p)}`, `持仓 ${pc1(ST.pnl)}，专款整体 ${pc1(ST.fundPnl)}`, '交易结束后不自动再来一轮'];
+      cls = `card ${x.why === 'sl' ? 'sl' : 'tp'}`;
+    } else {
+      // 推送标题：「🔔 创业板50 · 11 月 12 日收盘 0.944，到了第 2 笔买入线」
+      // 页面上「创业板50」已经是大标题了，拿掉它；图标留着
+      head = p.title.replace(/^(\S+ )?创业板50 · /, (m, ic) => ic || '');
+      lines = p.body.split('\n');
+      if (!p.action) {
+        // 平常的日子：标题只是「收盘多少 · 不用操作」，真正要看的是「下一步」那一行，把它提成大字
+        kick = head;
+        const i = lines.findIndex((l) => l.startsWith('下一步：'));
+        if (i >= 0) { head = lines[i].slice(4); lines.splice(i, 1); }
+      } else {
+        // 要动手的日子：标题本身就是要做的事，上面一行只点明这一点
+        kick = '要动手';
+      }
+      const ex = ST.exitFresh;
+      cls = `card ${ex ? (ex.why === 'sl' ? 'sl' : 'tp') : p.action ? 'act' : ''}`;
+    }
+  }
+  card.className = cls.trim();
+  $('nextKick').textContent = kick;
+  $('nextHead').textContent = head;
+  $('nextList').innerHTML = lines.map((l) => {
+    const c = l.startsWith('↓') ? 'dir dn' : l.startsWith('↑') ? 'dir up' : l.startsWith('⏳') || l.startsWith('成本') || l.startsWith('↻') ? 'mut'
+      : l.startsWith('⚠️') ? 'warn' : l.startsWith('·') ? 'sub' : '';
+    if (c.startsWith('dir')) return `<li class="${c}"><span class="ar">${l[0]}</span><span>${esc(l.slice(1).trim())}</span></li>`;
+    return `<li class="${c}">${esc(l)}</li>`;
+  }).join('');
+  // 下一步落在今天、可今天已经收盘了：这时最需要知道的是「今天已经没机会了，等今晚的更新」
+  let note = '';
+  const nd = ST.nextDay && ST.nextDay.d;
+  if (ST.phase === 'open' && nd === today && rbBeijingHM() >= '15:00') note = `${rbMd(today, today)}已经收盘，21:05 更新之后这里会换成下一步。`;
+  if (ST.nextDay && ST.nextDay.estimated && ST.phase === 'open') note += `${note ? ' ' : ''}下一个交易日是按工作日估的（交易日历还没覆盖到），节假日前后以交易所安排为准。`;
+  $('nextNote').textContent = note;
+}
+
+/** 梯子：按价格从高到低，每一格写清是哪条线、离现价多远 */
+function renderLadder() {
+  const today = rbBeijingDate();
+  const box = $('ladder');
+  if (ST.phase === 'done') {
+    box.innerHTML = `<div class="r done"><span class="dot"></span><span class="nm">交易已结束</span><span class="px">${p3(ST.rp.exit.p)}</span><span class="ds">${pc1(ST.pnl)}</span></div>`;
+    return;
+  }
+  const c = ST.c, rp = ST.rp;
+  const items = [];
+  items.push({ cls: 'tp', nm: '止盈线', sm: '到了就全部卖出', px: rp.tp });
+  for (const t of rp.tranches.slice(1)) {
+    const line = rp.addLines[t.k - 2];
+    if (t.d) items.push({ cls: 'done', nm: `第 ${t.k} 笔已买`, sm: `${rbMd(t.d, today)}${t.model ? '（按收盘价记）' : ''}`, px: t.p, nodist: true });
+    else items.push({ cls: 'add', nm: `第 ${t.k} 笔买入线`, sm: `买专款的 ${share(t.w)}${fund() ? `，约 ${rbMoney(fund() * t.w)}（约 ${rbShares(fund() * t.w, line).toLocaleString('en-US')} 份）` : ''}`, px: line });
+  }
+  // 还没有收盘价时，「现价」那格就是第 1 笔成交价，和平均成本是同一个数，不重复列
+  if (ST.last) items.push({ cls: 'avg', nm: '平均成本', sm: `第 1 笔 ${p3(rp.P1)}${rp.tranches.some((t) => t.k > 1 && t.d) ? '，加仓后已重算' : ''}`, px: rp.avg, nodist: true });
+  const behind = ST.watch.find((x) => x.kind === 'sl');
+  items.push({ cls: 'sl', nm: '止损线', sm: behind && behind.behind ? '在下一笔买入线下面：先碰到的是买入线，买完它会重算' : '到了就全部卖出', px: rp.sl });
+  items.push({ cls: 'now', nm: ST.last ? '现价' : '第 1 笔成交价', sm: ST.last ? `${rbMd(ST.last.d, today)}收盘` : `${rbMd(S.cfg.start, today)} 21:05 第一次更新后换成收盘价`, px: c, nodist: true });
+  items.sort((a, b) => b.px - a.px || (a.cls === 'now' ? -1 : 1));
+  box.innerHTML = items.map((x) => {
+    const d = x.px / c - 1;
+    const ds = x.nodist ? (x.cls === 'avg' ? `持仓 ${pc1(c / rp.avg - 1)}` : '') : `${d >= 0 ? '还要涨' : '还要跌'} ${abs1(d)}`;
+    return `<div class="r ${x.cls}"><span class="dot"></span><span class="nm">${esc(x.nm)}<small>${esc(x.sm)}</small></span>`
+      + `<span class="px">${p3(x.px)}</span><span class="ds">${esc(ds)}</span></div>`;
+  }).join('');
+}
+
+function renderDue() {
+  const today = rbBeijingDate();
+  const e = ST.expiry, n = S.cfg.maxDays;
+  if (ST.phase === 'done') {
+    const x = ST.rp.exit;
+    $('due').innerHTML = `<div class="t"><span>持有了 <b>${x.day}</b> 个交易日</span><span>${rbMd(x.d, today)}结束</span></div>`
+      + `<div class="bar"><i style="width:${Math.min(100, x.day / n * 100).toFixed(1)}%"></i></div>`;
+    return;
+  }
+  const passed = n - e.left;
+  const when = e.d ? `${e.estimated ? '约 ' : ''}${rbMd(e.d, today)}（${rbWd(e.d)}）到期` : '到期日暂时算不出';
+  $('due').innerHTML = `<div class="t"><span>⏳ 还剩 <b>${e.left}</b> 个交易日</span><span>${esc(when)}</span></div>`
+    + `<div class="bar"><i style="width:${Math.min(100, passed / n * 100).toFixed(1)}%"></i></div>`
+    + `<p class="note">已过 ${passed} 个交易日，共 ${n} 个。到期那天不论盈亏，14:50 全部卖出。`
+    + (e.estimated ? '明年的交易日历还没公布，到期日先按工作日估（春节按往年惯例），日历公布后自动校准。' : '') + '</p>';
+}
+
+function renderRanges() {
+  $('ranges').innerHTML = RANGES.map(([nm, key]) => `<button type="button" data-k="${key}" aria-pressed="${key === range}">${nm}</button>`).join('');
+  for (const b of $('ranges').querySelectorAll('button')) {
+    b.addEventListener('click', () => { range = b.dataset.k; LS.set('rbRange', range); renderRanges(); drawChart(); });
+  }
+}
+
+/** 年线（250 日均线），和回测图上那条一致 */
+function ma250(rows) {
+  const out = new Array(rows.length).fill(null);
+  let s = 0;
+  for (let i = 0; i < rows.length; i++) {
+    s += rows[i].c;
+    if (i >= 250) s -= rows[i - 250].c;
+    if (i >= 249) out[i] = s / 250;
+  }
+  return out;
+}
+
+/**
+ * 走势图：横轴是交易日。价格线、年线、平均成本、止盈 / 止损（加仓后会跳一级）、买入线、买点。
+ * 「近期」看最近三个月、线画到右边；「全程」一直画到第 120 个交易日（到期），
+ * 没走完的那段留白 —— 一眼看得出还剩多少时间。
+ */
+function drawChart() {
+  const host = $('chart');
+  const rows = S.series.rows || [];
+  if (!rows.length) { host.innerHTML = ''; return; }
+  const today = rbBeijingDate();
+  const rp = ST.rp, cfg = S.cfg;
+  const W = Math.round(Math.max(300, Math.min(760, host.clientWidth || 360)));
+  const H = W < 520 ? 270 : 310;
+  const L = 6, R = 84, T = 22, B = 24;
+  const s = rp.s >= 0 ? rp.s : rows.length;                // 起始日的位置（还没进行情时就是下一根）
+  const iLast = rp.s >= 0 ? rp.s + rp.day : rows.length - 1; // 卖出那天之后不画
+  const iDue = s + cfg.maxDays;                             // 到期那一根，多半还在未来
+  let i0, iEnd;
+  if (range === 'round') { i0 = Math.max(0, s - 30); iEnd = Math.max(iDue, iLast + 1); }
+  else if (range === 'year') { i0 = Math.max(0, iLast - 250); iEnd = Math.max(iDue, iLast + 1); }
+  else { i0 = Math.max(0, Math.min(s - 20, iLast - 62)); iEnd = iLast + 8; }
+  const iWin = Math.min(iEnd, iDue);                        // 策略窗口在图里画到哪
+  const fut = rbTradingDaysAfter(rows[iLast].d, Math.max(0, iEnd - iLast), S.cal).days;
+  const dateAt = (i) => (i <= iLast ? rows[i].d : fut[i - iLast - 1] || null);
+  const ma = ma250(rows);
+  const open = ST.phase !== 'done';
+
+  const vals = [rp.P1];
+  for (let i = i0; i <= iLast; i++) { vals.push(rows[i].c); if (ma[i]) vals.push(ma[i]); }
+  for (const st of rp.steps) vals.push(st.tp, st.sl);
+  if (open) for (const t of rp.tranches.slice(1)) if (!t.d) vals.push(rp.addLines[t.k - 2]);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = (hi - lo) * 0.06 || 0.05; lo -= pad; hi += pad;
+  const x = (i) => L + (i - i0) / Math.max(1, iEnd - i0) * (W - L - R);
+  const y = (v) => T + (hi - v) / (hi - lo) * (H - T - B);
+  const f = (n) => n.toFixed(1);
+  const out = [];
+
+  // 价格刻度：几条淡淡的横线，左边标价格（各条线的价格在右边）
+  {
+    const raw = (hi - lo) / 4, p10 = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p10;
+    const stp = (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p10;
+    for (let v = Math.ceil(lo / stp) * stp; v <= hi; v += stp) {
+      out.push(`<line class="hgrid" x1="${L}" y1="${f(y(v))}" x2="${f(x(iEnd))}" y2="${f(y(v))}"/>`);
+      out.push(`<text class="v gl" x="${L + 2}" y="${f(y(v) - 3)}">${v.toFixed(stp >= 0.1 ? 1 : 2)}</text>`);
+    }
+  }
+
+  // 策略窗口：起始日起；还没走到的那段再叠一层
+  out.push(`<rect class="win" x="${f(x(s))}" y="${T}" width="${f(Math.max(0, x(iWin) - x(s)))}" height="${H - T - B}"/>`);
+  if (open && iLast < iWin) out.push(`<rect class="fut" x="${f(x(iLast))}" y="${T}" width="${f(x(iWin) - x(iLast))}" height="${H - T - B}"/>`);
+
+  // 月份刻度：每个月第一个交易日一根，字挨太近就跳过
+  let lastTx = -1e9, prevM = null;
+  for (let i = i0; i <= iEnd; i++) {
+    const d = dateAt(i); if (!d) continue;
+    const m = d.slice(0, 7);
+    if (m !== prevM && prevM !== null && x(i) - lastTx >= 34) {
+      out.push(`<line class="grid" x1="${f(x(i))}" y1="${H - B}" x2="${f(x(i))}" y2="${H - B + 4}"/>`);
+      out.push(`<text x="${f(x(i))}" y="${H - 6}" text-anchor="middle">${+m.slice(5)}月</text>`);
+      lastTx = x(i);
+    }
+    prevM = m;
+  }
+  out.push(`<line class="grid" x1="${L}" y1="${H - B}" x2="${f(x(iEnd))}" y2="${H - B}"/>`);
+
+  // 年线、价格
+  const poly = (pts) => pts.map(([a, b], k) => `${k ? 'L' : 'M'}${f(a)},${f(b)}`).join('');
+  const mpts = []; for (let i = i0; i <= iLast; i++) if (ma[i]) mpts.push([x(i), y(ma[i])]);
+  if (mpts.length > 1) out.push(`<path class="ma" d="${poly(mpts)}"/>`);
+  const ppts = []; for (let i = i0; i <= iLast; i++) ppts.push([x(i), y(rows[i].c)]);
+  out.push(`<path class="px" d="${poly(ppts)}"/>`);
+
+  // 平均成本、止盈、止损：逐日的阶梯（加仓那天跳一级），没走到的那段用虚一些的线接到到期日
+  if (rp.s >= 0) {
+    const step = (key) => {
+      let d = `M${f(x(s))},${f(y(rp.steps[0][key]))}`;
+      for (let j = 1; j < rp.steps.length; j++) d += `H${f(x(s + j))}V${f(y(rp.steps[j][key]))}`;
+      return d;
+    };
+    out.push(`<path class="avg" d="${step('avg')}"/>`, `<path class="tpl" d="${step('tp')}"/>`, `<path class="sll" d="${step('sl')}"/>`);
+    if (open) {
+      out.push(`<path class="tpl ahead" d="M${f(x(iLast))},${f(y(rp.tp))}H${f(x(iWin))}"/>`);
+      out.push(`<path class="sll ahead" d="M${f(x(iLast))},${f(y(rp.sl))}H${f(x(iWin))}"/>`);
+      out.push(`<path class="avg ahead" d="M${f(x(iLast))},${f(y(rp.avg))}H${f(x(iWin))}"/>`);
+    }
+  } else {
+    out.push(`<path class="tpl ahead" d="M${f(x(s))},${f(y(rp.tp))}H${f(x(iWin))}"/>`, `<path class="sll ahead" d="M${f(x(s))},${f(y(rp.sl))}H${f(x(iWin))}"/>`);
+  }
+  // 买入线：买了的画到买入那天，没买的一直画下去
+  for (const t of rp.tranches.slice(1)) {
+    const line = rp.addLines[t.k - 2];
+    const end = t.d ? rows.findIndex((r) => r.d === t.d) : open ? iWin : iLast;
+    if (end > s) out.push(`<path class="addl" d="M${f(x(s))},${f(y(line))}H${f(x(end))}"/>`);
+  }
+  // 到期日：在图里才画（「近期」那一档离到期还远时看不到它，到期日在下面那张卡里写着）
+  if (iDue <= iEnd) {
+    out.push(`<line class="dueln" x1="${f(x(iDue))}" y1="${T - 4}" x2="${f(x(iDue))}" y2="${H - B}"/>`);
+    const ed = ST.expiry.d;
+    out.push(`<text class="due" x="${f(x(iDue) - 4)}" y="${T - 8}" text-anchor="end">到期${ed ? ` ${ST.expiry.estimated ? '约' : ''}${+ed.slice(5, 7)}/${+ed.slice(8, 10)}` : ''}</text>`);
+  }
+
+  // 买卖点
+  const tri = (cx, cy, up, cls) => {
+    const a = 5.5;
+    return up ? `<path class="${cls}" d="M${f(cx)},${f(cy + 3)}l${-a},${a * 1.6}h${2 * a}z"/>`
+      : `<path class="${cls}" d="M${f(cx)},${f(cy - 3)}l${-a},${-a * 1.6}h${2 * a}z"/>`;
+  };
+  for (const t of rp.tranches) {
+    if (!t.d) continue;
+    const i = t.d === cfg.start ? s : rows.findIndex((r) => r.d === t.d);
+    if (i >= i0 && i >= 0) out.push(tri(x(i), y(t.p), true, 'mb'));
+  }
+  if (rp.exit) {
+    const i = s + rp.exit.day;
+    out.push(tri(x(i), y(rp.exit.p), false, rp.exit.why === 'sl' ? 'mx' : rp.exit.why === 'exp' ? 'me' : 'ms'));
+  }
+  // 现价
+  if (rp.s >= 0) {
+    const cx = x(iLast), cy = y(rows[iLast].c);
+    out.push(`<circle class="nowdot" cx="${f(cx)}" cy="${f(cy)}" r="4"/>`);
+    out.push(`<text class="v now" x="${f(Math.min(cx + 7, x(iEnd) - 40))}" y="${f(cy < T + 20 ? cy + 16 : cy - 9)}">${p3(rows[iLast].c)}</text>`);
+  }
+
+  // 右侧标签：各条线的名字和价格，挤在一起就往下推，用细线连回去
+  const labs = [];
+  if (open) {
+    labs.push({ v: rp.tp, t: `止盈 ${p3(rp.tp)}`, c: 'tp' });
+    for (const t of rp.tranches.slice(1)) if (!t.d) labs.push({ v: rp.addLines[t.k - 2], t: `第${t.k}笔 ${p3(rp.addLines[t.k - 2])}`, c: 'add' });
+    labs.push({ v: rp.avg, t: `成本 ${p3(rp.avg)}`, c: 'avgt' });
+    labs.push({ v: rp.sl, t: `止损 ${p3(rp.sl)}`, c: 'sl' });
+  }
+  labs.sort((a, b) => b.v - a.v);
+  let prevY = -1e9;
+  const gap = 13;
+  for (const l of labs) { l.y0 = y(l.v); l.y = Math.max(l.y0, prevY + gap); prevY = l.y; }
+  const over = prevY - (H - B);
+  if (over > 0) for (let k = labs.length - 1, lim = H - B; k >= 0; k--) { labs[k].y = Math.min(labs[k].y, lim); lim = labs[k].y - gap; }
+  const xl = x(iEnd) + 6;
+  for (const l of labs) {
+    out.push(`<line class="lk" x1="${f(x(iEnd))}" y1="${f(l.y0)}" x2="${f(xl - 2)}" y2="${f(l.y)}"/>`);
+    out.push(`<text class="v ${l.c}" x="${f(xl)}" y="${f(l.y + 3.5)}">${l.t}</text>`);
+  }
+
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="159682 走势和各条线">${out.join('')}`
+    + `<line class="cross" id="cross" x1="0" y1="${T}" x2="0" y2="${H - B}" visibility="hidden"/></svg><div id="tip"></div>`;
+
+  // 点一下 / 划一下看某天：收盘价，策略期间再带上当天的成本、止盈、止损
+  const svg = host.querySelector('svg');
+  const tip = $('tip'), cross = $('cross');
+  if (!svg || !tip || !cross || typeof svg.getBoundingClientRect !== 'function') return;
+  const pick = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((ev.clientX - r.left) / r.width) * W;
+    const i = Math.round(i0 + (px - L) / (W - L - R) * (iEnd - i0));
+    if (!(i >= i0 && i <= iLast)) { tip.classList.remove('on'); cross.setAttribute('visibility', 'hidden'); return; }
+    const row = rows[i], j = i - s, stp = j >= 0 && j < rp.steps.length ? rp.steps[j] : null;
+    cross.setAttribute('x1', f(x(i))); cross.setAttribute('x2', f(x(i))); cross.setAttribute('visibility', 'visible');
+    tip.innerHTML = `<div class="td">${row.d}（${rbWd(row.d)}）${stp ? ` · 第 ${j} 天` : ''}</div>收盘 <b>${p3(row.c)}</b>`
+      + (stp ? `<br>成本 <b>${p3(stp.avg)}</b> · 止盈 <b>${p3(stp.tp)}</b> · 止损 <b>${p3(stp.sl)}</b>` : '');
+    tip.classList.add('on');
+    const left = (x(i) / W) * r.width;
+    tip.style.left = `${Math.max(0, Math.min(left + 10, r.width - 220))}px`;
+  };
+  svg.addEventListener('pointermove', pick);
+  svg.addEventListener('pointerdown', pick);
+  svg.addEventListener('pointerleave', () => { tip.classList.remove('on'); cross.setAttribute('visibility', 'hidden'); });
+
+  const firstD = rows[i0].d;
+  const tail = '止盈线、止损线跟着平均成本走，加仓那天会跳一级。';
+  $('chartNote').textContent = range === 'recent'
+    ? `从 ${rbMd(firstD, today)}起，横轴是交易日；浅色底是策略期间。${tail}切到「全程」能看到离到期还剩多少。`
+    : `横轴是交易日，从 ${rbMd(firstD, today)}画到第 ${cfg.maxDays} 个交易日（到期）；浅色底是策略期间，右边还空着的那段就是剩下的时间。${tail}`;
+}
+
+function renderPos() {
+  const today = rbBeijingDate();
+  const rp = ST.rp, F = fund();
+  $('tranches').innerHTML = rp.tranches.map((t) => {
+    const line = t.k > 1 ? rp.addLines[t.k - 2] : null;
+    const amt = F ? `<br><small class="wait">约 ${rbMoney(F * t.w)}</small>` : '';
+    const state = t.d
+      ? `<span class="ok">✓ ${rbMd(t.d, today)}${t.k === 1 ? '开盘' : t.model ? '（按收盘价记）' : ''}</span>`
+      : `<span class="wait">等收盘 ≤ <span class="mono">${p3(line)}</span></span>`;
+    return `<tr><td>第 ${t.k} 笔</td><td>${share(t.w)}${amt}</td><td>${state}</td><td class="r"><span class="mono">${t.d ? p3(t.p) : '–'}</span></td></tr>`;
+  }).join('');
+  const kv = [];
+  kv.push(['平均成本', p3(rp.avg), '']);
+  kv.push(['已投入', `专款的 ${share(ST.inv)}`, F ? `约 ${rbMoney(F * ST.inv)}` : '']);
+  kv.push([ST.phase === 'done' ? '持仓收益' : '持仓浮动', pc1(ST.pnl), F ? `约 ${rbMoney(F * ST.fundPnl)}` : '']);
+  kv.push(['专款整体', pc1(ST.fundPnl), '没投进去的钱按 0 计']);
+  $('posKv').innerHTML = kv.map(([a, b, c]) => `<div><span>${a}</span><b>${esc(b)}</b>${c ? `<small>${esc(c)}</small>` : ''}</div>`).join('');
+  $('fundIn').value = F ? String(F) : '';
+}
+
+function renderFoot() {
+  const run = S.series.run;
+  const parts = [];
+  if (run && run.asof) {
+    parts.push(`最近一次更新 ${run.ranAt || run.asof}${run.source ? `（行情来自${run.source}）` : ''}`);
+    if (run.push) parts.push(run.push.skipped ? '当晚不用推送' : run.push.ok ? `推送 ${String(run.push.at || '').slice(11, 16)} 已送达` : '推送没有送达');
+  } else parts.push('还没有自动更新过（每个交易日 21:05 更新）');
+  parts.push('个人交易规则记录，不构成投资建议');
+  $('foot').innerHTML = parts.map(esc).join('<br>');
+}
+
+$('fundSave').addEventListener('click', () => {
+  const v = Number(String($('fundIn').value).replace(/[^\d.]/g, ''));
+  LS.set('rbFund', v > 0 ? v : 0);
+  if (S) render();
+});
+$('fundClear').addEventListener('click', () => { LS.set('rbFund', 0); $('fundIn').value = ''; if (S) render(); });
+window.addEventListener('resize', () => { if (S && ST && ST.ok) drawChart(); });
+
+await load();
+</script>
+</body>
+</html>

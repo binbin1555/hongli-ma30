@@ -11,8 +11,18 @@ GH_REPO   = "hongli-ma30"
 ETF_CODE  = "515180"                                     # 红利ETF易方达，跟踪中证红利 000922
 PAGES_URL = "https://binbin1555.github.io/hongli-ma30/"  # Bark 点击后跳转的地址
 
+# ---- 创业板50 超跌反弹那一路的定时（UTC，北京时间减 8 小时）----
+# 红利仍由 cron-job.org 每晚 21:00 调 /run；这一路用 Worker 自己的定时，各占一次独立调用，互不牵连。
+# 每天都触发，开不开市由交易日历判断（调休上班的日子日历会标成交易日）。
+#   06:45 = 北京 14:45 盘中检查（只在要动手时推送）
+#   13:05 = 北京 21:05 收盘后更新并推送
+#   14:35 = 北京 22:35 兜底（没跑成补跑，推送没送达补发）
+[triggers]
+crons = ["45 6 * * *", "5 13 * * *", "35 14 * * *"]
+
 # ---- 机密（绝不写进这个文件，用命令行或控制台单独设置）----
 #   npx wrangler secret put GITHUB_TOKEN   GitHub 细粒度 PAT，只给本仓库 Contents 读写权限
 #   npx wrangler secret put BARK_KEY       Bark App 里的设备 key
 #   npx wrangler secret put RUN_TOKEN      自己随便编一串长口令，用来保护 /run 端点
 #   npx wrangler secret put PRINCIPAL      本金，例如 1000000。只有 Worker 知道，不进仓库。
+#   npx wrangler secret put REBOUND_FUND   （可选）创业板50 那笔专款的总额。设了推送才说「约多少钱、约多少份」
