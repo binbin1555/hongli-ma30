@@ -12,8 +12,13 @@
       "东财(HTTP 520)"
     ],
     "since": "2026-11-03",
-    "delivered": "2026-11-03",
-    "push": null,
+    "delivered": "2026-11-04",
+    "push": {
+      "ok": true,
+      "at": "2026-11-04 21:05:28",
+      "title": "创业板50 · 11 月 4 日收盘 1.124（+6.6%）· 不用操作",
+      "reason": null
+    },
     "problem": null
   },
   "rows": [
