@@ -1,41 +1,42 @@
 {
   "schema": 1,
   "launchDate": "2026-09-10",
-  "asof": "2026-11-04",
-  "lastRun": "2026-11-04 21:00:44",
+  "asof": "2026-11-05",
+  "lastRun": "2026-11-05 21:00:44",
   "tier": 0,
   "pending": null,
   "index": {
     "code": "H00922",
-    "close": 12189.99,
-    "ma30": 12025.19,
-    "ratio": 1.0137,
-    "changePct": -0.07,
-    "buyTrigger": 11664.43,
-    "sellTrigger": 12265.69,
-    "pctToBuy": -4.31,
-    "pctToSell": 0.62
+    "close": 12030.78,
+    "ma30": 12028.26,
+    "ratio": 1.0002,
+    "changePct": -1.31,
+    "buyTrigger": 11667.41,
+    "sellTrigger": 12268.82,
+    "pctToBuy": -3.02,
+    "pctToSell": 1.98
   },
   "bond": {
     "code": "008204",
     "name": "交银稳利中短债债券A",
-    "close": 1.2393
+    "close": 1.2392
   },
   "etf": {
     "code": "515180",
-    "close": 1.382,
-    "asof": "2026-11-04",
+    "close": 1.365,
+    "asof": "2026-11-05",
     "stale": false
   },
   "checks": {
     "passed": 11,
     "total": 11,
     "failed": [],
-    "ranAt": "2026-11-04 21:00:44"
+    "ranAt": "2026-11-05 21:00:44"
   },
   "consecutiveTradingDays": 0,
   "lastExecuted": null,
-  "push": {
+  "push": null,
+  "prevPush": {
     "ok": true,
     "at": "2026-11-04 21:00:49",
     "elapsedMs": 14488,
@@ -51,25 +52,9 @@
       "推送": 953
     }
   },
-  "prevPush": {
-    "ok": true,
-    "at": "2026-11-03 21:00:55",
-    "elapsedMs": 21452,
-    "steps": {
-      "读日历": 752,
-      "价格指数": 1847,
-      "中证指数": 1912,
-      "基金净值": 3497,
-      "国债收益率": 3990,
-      "ETF报价": 1814,
-      "读行情": 274,
-      "提交": 4719,
-      "推送": 1098
-    }
-  },
   "gate": {
-    "asof": "2026-11-04",
-    "close": 12189.99,
+    "asof": "2026-11-05",
+    "close": 12030.78,
     "active": true,
     "dataOk": true,
     "problem": null,
@@ -77,22 +62,22 @@
     "memArmed": false,
     "below": false,
     "blocking": false,
-    "ma250": 11871.89,
-    "dy": 0.043902,
-    "y10": 0.016077,
-    "spread": 0.027825,
-    "pDate": "2026-11-04",
-    "yDate": "2026-11-04",
+    "ma250": 11872.78,
+    "dy": 0.04315,
+    "y10": 0.016038,
+    "spread": 0.027112,
+    "pDate": "2026-11-05",
+    "yDate": "2026-11-05",
     "staleP": 0,
     "staleY": 0,
     "blocked": null
   },
   "chase": {
-    "asof": "2026-11-04",
-    "close": 12189.99,
-    "ma250": 11871.89,
-    "line": 12228.04,
-    "dev": 0.026795,
+    "asof": "2026-11-05",
+    "close": 12030.78,
+    "ma250": 11872.78,
+    "line": 12228.97,
+    "dev": 0.013307,
     "ok": true,
     "problem": null,
     "above": false,
@@ -101,10 +86,10 @@
     "blocked": null
   },
   "brake": {
-    "asof": "2026-11-04",
-    "close": 12189.99,
-    "ma250": 11871.89,
-    "vol": 0.155562,
+    "asof": "2026-11-05",
+    "close": 12030.78,
+    "ma250": 11872.78,
+    "vol": 0.158325,
     "ok": true,
     "problem": null,
     "below": false,
