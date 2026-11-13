@@ -29,7 +29,7 @@ import {
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '06a636687a';
+const BUILD = '2d588f09a9';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -42,6 +42,16 @@ const PRICE_INDEX = '000922';
 // 换基准必须连同 series.json 的 b 列整列重建，见 tools/migrate-cash-benchmark.mjs。
 const CASH_FUND = '008204';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+// 备用源：雪球。中证官网的日终数据停更时（2026-11-12、13 两天就是这样），
+// 当天的 H00922 收盘价从这里取。雪球的中证红利全收益（CSIH00922）就是中证发布的那条行情：
+// 2023-07-26 → 2026-11-11 共 798 个交易日和中证官网逐日一致（含 102 个分红日）。
+const XQ_HOME = 'https://xueqiu.com/hq';
+const XQ_KLINE = 'https://stock.xueqiu.com/v5/stock/chart/kline.json';
+const XQ_TR = 'CSIH00922';      // 中证红利全收益
+const XQ_PRICE = 'SH000922';    // 中证红利价格指数（闸门算股息率用）
+// 备用源合格线：和中证正式数据重叠的日子至少这么多天，而且每天的偏差都不超过这么多
+const BACKUP_MIN_OVERLAP = 20;
+const BACKUP_MAX_DIFF = 0.0001;   // 0.01%
 
 // ---------------------------------------------------------------- 基础工具
 
@@ -318,6 +328,212 @@ export async function fetchCGB10() {
   rows.sort((a, b) => (a.d < b.d ? -1 : 1));
   if (!rows.length) throw new Error('10 年国债收益率：接口返回空');
   return { rows };
+}
+
+// ---------------------------------------------------------------- 备用源（雪球）
+
+/** 取出响应里的 Set-Cookie，拼成请求用的 Cookie 头。Worker 和 Node 都有 getSetCookie */
+function cookieFrom(res) {
+  const list = typeof res.headers.getSetCookie === 'function'
+    ? res.headers.getSetCookie()
+    : String(res.headers.get('set-cookie') || '').split(/,(?=\s*[A-Za-z0-9_.-]+=)/);
+  return list.map((c) => String(c).split(';')[0].trim()).filter((c) => c.includes('=')).join('; ');
+}
+
+/** 先访问雪球首页拿到游客 cookie（xq_a_token），后面取 K 线要带上它 */
+export async function xueqiuSession() {
+  const r = await retryFetch(XQ_HOME, { headers: { Accept: 'text/html' } }, 2, '雪球首页', 8000);
+  const cookie = cookieFrom(r);
+  if (!/xq_a_token=/.test(cookie)) throw new Error('雪球首页没有给出访问 cookie');
+  return cookie;
+}
+
+/**
+ * 雪球日 K 线，升序 [{d, c, pct}]。d 是北京日期，pct 是雪球给的涨跌幅（%，两位小数）。
+ * count 取最近多少根。
+ */
+export async function fetchXueqiu(symbol, count, cookie) {
+  const url = `${XQ_KLINE}?symbol=${symbol}&begin=${Date.now()}&period=day&type=before&count=-${count}&indicator=kline`;
+  const r = await retryFetch(url, { headers: { Cookie: cookie, Referer: 'https://xueqiu.com/', Accept: 'application/json' } },
+    2, `雪球 ${symbol}`, 8000);
+  const j = await r.json();
+  const col = j && j.data && j.data.column;
+  const items = j && j.data && j.data.item;
+  if (!Array.isArray(col) || !Array.isArray(items)) throw new Error(`雪球 ${symbol} 返回格式变了`);
+  const it = col.indexOf('timestamp'), ic = col.indexOf('close'), ip = col.indexOf('percent');
+  if (it < 0 || ic < 0) throw new Error(`雪球 ${symbol} 缺少 timestamp 或 close 字段`);
+  const seen = new Set();
+  const rows = [];
+  for (const x of items) {
+    const c = Number(x[ic]);
+    if (!(c > 0)) continue;
+    const d = new Date(Number(x[it]) + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    if (seen.has(d)) continue;
+    seen.add(d);
+    rows.push({ d, c, pct: ip >= 0 && x[ip] != null ? Number(x[ip]) : null });
+  }
+  rows.sort((a, b) => (a.d < b.d ? -1 : 1));
+  if (!rows.length) throw new Error(`雪球 ${symbol} 返回空`);
+  return rows;
+}
+
+/**
+ * 中证官网缺了某几天的 H00922 时，用雪球补上 —— 只补中证缺的那几天，而且要先过三道关：
+ *
+ *   1. 对得上：和中证正式数据重叠的日子不少于 20 天，每天偏差都不超过 0.01%。
+ *      正式数据取「这次从中证抓到的」加上「仓库里本来就是中证给的」（series 里没有 s 标记的行）——
+ *      中证整个接口挂掉、一行都抓不到时，也有东西可比。
+ *   2. 是新的：雪球必须已经有今天的收盘；补上的每一天都要在交易所日历里。
+ *   3. 合情理：补上的每一天，全收益涨幅减去价格指数涨幅（差额就是当天分红）要落在 −0.3%～+3% 之间，
+ *      和闸门算股息率时的那道把关一样 —— 防止两边不是同一天的数。
+ *
+ * 任何一关不过就整体不用（返回 ok:false 和原因），绝不拿一半可信的数去记账。
+ * 中证恢复后，下一轮抓到的正式数据会按日期覆盖这里补上的行（见 runDaily 的合并）。
+ *
+ * official：Map<日期, 中证收盘>。fetchers 只在测试里替换。
+ */
+export async function backupIndexRows({ official, today, tradingCal = null, fetchers = null }) {
+  const F = fetchers || {
+    session: xueqiuSession,
+    tr: (cookie) => fetchXueqiu(XQ_TR, 160, cookie),
+    price: (cookie) => fetchXueqiu(XQ_PRICE, 160, cookie),
+  };
+  const fail = (reason) => ({ ok: false, source: '雪球', reason });
+
+  let cookie, tr;
+  try {
+    cookie = await F.session();
+    tr = await F.tr(cookie);
+  } catch (e) {
+    return fail(`雪球取不到：${String(e && e.message || e).slice(0, 80)}`);
+  }
+  if (tradingCal) tr = tr.filter((r) => !tradingCal.covers(r.d) || tradingCal.has(r.d));
+
+  // 1. 和中证正式数据对账
+  let n = 0, maxDiff = 0, worst = null;
+  for (const r of tr) {
+    const o = official.get(r.d);
+    if (o == null) continue;
+    n++;
+    const diff = Math.abs(r.c / o - 1);
+    if (diff > maxDiff) { maxDiff = diff; worst = `${r.d} 雪球 ${r.c} / 中证 ${o}`; }
+  }
+  if (n < BACKUP_MIN_OVERLAP) return fail(`雪球和中证重叠的日子只有 ${n} 天，不够核对`);
+  if (maxDiff > BACKUP_MAX_DIFF) return fail(`雪球和中证对不上：${worst}（偏差 ${(maxDiff * 100).toFixed(3)}%）`);
+
+  // 2. 只补中证缺的日子，而且必须补到今天
+  const lastOfficial = [...official.keys()].sort().pop() || '';
+  const fill = tr.filter((r) => r.d > lastOfficial && r.d <= today);
+  if (!fill.length || fill[fill.length - 1].d !== today) {
+    return fail(`雪球也还没有 ${today} 的收盘（最新 ${tr.length ? tr[tr.length - 1].d : '无'}）`);
+  }
+
+  // 3. 和价格指数比一比：差额就是分红，不该是负的，也不该大得离谱
+  let price = null;
+  try { price = await F.price(cookie); } catch { price = null; }
+  const pMap = new Map((price || []).map((x) => [x.d, x.c]));
+  const trMap = new Map(tr.map((x) => [x.d, x.c]));
+  for (const r of official.keys()) if (!trMap.has(r)) trMap.set(r, official.get(r));
+  const trDays = [...trMap.keys()].sort();
+  let checked = 0;
+  for (const r of fill) {
+    const i = trDays.indexOf(r.d);
+    const prev = i > 0 ? trDays[i - 1] : null;
+    if (!prev || !pMap.has(r.d) || !pMap.has(prev)) continue;
+    const raw = (trMap.get(r.d) / trMap.get(prev)) / (pMap.get(r.d) / pMap.get(prev)) - 1;
+    if (!(raw > -0.003 && raw < 0.03)) {
+      return fail(`雪球 ${r.d} 的全收益涨幅和价格指数对不上（差 ${(raw * 100).toFixed(2)}%）`);
+    }
+    checked++;
+  }
+
+  return {
+    ok: true, source: '雪球', lastOfficial,
+    rows: fill.map((r) => ({ d: r.d, c: r.c, pct: r.pct, src: 'xq' })),
+    // 价格指数（闸门用）：只给补上的那几天
+    priceRows: fill.filter((r) => pMap.has(r.d)).map((r) => ({ d: r.d, c: pMap.get(r.d) })),
+    verified: { days: n, maxDiff, priceChecked: checked },
+  };
+}
+
+/**
+ * 两个源都没有今天的数时，给一个估算：中证最后一个正式收盘 × 价格指数从那天到今天的涨幅。
+ * 只用来在「数据未到」的提醒里说清楚离买卖线大概多远 —— 不记账、不出信号。
+ * 价格指数取交易所实时行情（腾讯），它就是中证盘中发布的那条。
+ */
+async function estimateToday(series, today) {
+  const rows = series.rows.filter((r) => !r.s);
+  const last = rows[rows.length - 1];
+  if (!last || last.p == null) return null;
+  const q = await fetch('https://qt.gtimg.cn/q=sh000922', { headers: { 'User-Agent': UA } })
+    .then((r) => (r.ok ? r.text() : null)).catch(() => null);
+  const f = q ? (q.split('"')[1] || '').split('~') : [];
+  const p = Number(f[3]);
+  const ts = String(f[30] || '');
+  const d = ts.length >= 8 ? `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)}` : null;
+  if (!(p > 0) || d !== today) return null;
+  const est = last.c * (p / last.p);
+  const closes = rows.slice(-(MA_LEN - 1)).map((r) => r.c).concat([est]);
+  const m = closes.length === MA_LEN ? closes.reduce((a, b) => a + b, 0) / MA_LEN : null;
+  return m ? { est, ma30: m, buyAt: m * BUY_TH, sellAt: m * SELL_TH, since: last.d } : null;
+}
+
+/** /probe 用：中证最新到哪天、雪球拿不拿得到、和中证对不对得上。不写仓库、不推送、不带金额 */
+async function probeSources(env) {
+  const G = gh(env);
+  const today = beijingDate();
+  const series = await G.readJSON('data/series.json');
+  const out = { now: beijingStamp(), today };
+  try {
+    const r = await fetchCSI('H00922', shiftDays(today, -30), today);
+    out.csi = { ok: true, last: r.rows.length ? r.rows[r.rows.length - 1].d : null };
+  } catch (e) { out.csi = { ok: false, error: String(e && e.message || e).slice(0, 120) }; }
+  const official = new Map(series.rows.filter((r) => !r.s).map((r) => [r.d, r.c]));
+  try {
+    const cookie = await xueqiuSession();
+    const tr = await fetchXueqiu(XQ_TR, 160, cookie);
+    const latest = tr[tr.length - 1].d;
+    // 拿雪球自己的最新一天当「今天」来走一遍完整的三道关，看备用源在线上能不能用
+    const lastOff = [...official.keys()].sort().pop();
+    const b = latest > lastOff
+      ? await backupIndexRows({ official, today: latest })
+      : { ok: true, note: '雪球和中证一样新，备用源这时用不上，只核对历史', verified: null };
+    let n = 0, maxDiff = 0;
+    for (const x of tr) { const o = official.get(x.d); if (o != null) { n++; maxDiff = Math.max(maxDiff, Math.abs(x.c / o - 1)); } }
+    out.xueqiu = { ok: true, last: latest, overlapDays: n, maxDiffPct: +(maxDiff * 100).toFixed(4), backupUsable: !!b.ok, reason: b.reason || b.note || null };
+  } catch (e) { out.xueqiu = { ok: false, error: String(e && e.message || e).slice(0, 120) }; }
+  out.ok = !!(out.csi && out.csi.ok) || !!(out.xueqiu && out.xueqiu.ok);
+  return out;
+}
+
+/**
+ * 把这次抓到的指数行并进 series（升序）。和原来写在 runDaily 里的那段循环逻辑一样，多两件事：
+ *   - 备用源补上的行带 s 标记（'xq' = 雪球），面板、推送和下一轮都靠它认出这一天不是中证给的；
+ *   - 中证给的行一律覆盖同一天的旧行。旧行要是备用源补的，记进 recovered（附两边的偏差）——
+ *     这就是「中证恢复后自动换回」：不需要任何开关，下一轮抓到正式数据就按日期换掉。
+ */
+export function mergeIndexRows(oldRows, idx, { bondByDate, pxByDate, yByDate }) {
+  const known = new Map(oldRows.map((r) => [r.d, r]));
+  const recovered = [];
+  const closes = idx.map((r) => r.c);
+  for (let i = 0; i < idx.length; i++) {
+    const r = idx[i];
+    const window = closes.slice(Math.max(0, i - MA_LEN + 1), i + 1);
+    const m = window.length === MA_LEN ? window.reduce((a, b2) => a + b2, 0) / MA_LEN : null;
+    const prev = known.get(r.d);
+    const c = +r.c.toFixed(2);
+    if (prev && prev.s && !r.src) recovered.push({ d: r.d, src: prev.s, backup: prev.c, official: c, diff: Math.abs(c / prev.c - 1) });
+    known.set(r.d, {
+      d: r.d,
+      c,
+      m: m != null ? +m.toFixed(2) : (prev ? prev.m : null),
+      b: bondByDate.has(r.d) ? +bondByDate.get(r.d).toFixed(4) : (prev ? prev.b : null),
+      p: pxByDate.has(r.d) ? +pxByDate.get(r.d).toFixed(2) : (prev && prev.p != null ? prev.p : null),
+      y: yByDate.has(r.d) ? +yByDate.get(r.d).toFixed(4) : (prev && prev.y != null ? prev.y : null),
+      ...(r.src ? { s: r.src } : {}),
+    });
+  }
+  return { rows: [...known.values()].sort((a, b2) => (a.d < b2.d ? -1 : 1)), recovered };
 }
 
 /**
@@ -728,7 +944,11 @@ async function runDaily(env, { force = false } = {}) {
   const calMonths = new Set([...calDays].map((d) => d.slice(0, 7)));
   const tradingCal = { covers: (d) => calMonths.has(d.slice(0, 7)), has: (d) => calDays.has(d) };
   const [idxRes, bondRes, pxRes, cgbRes] = await Promise.all([
-    timed('中证指数', fetchCSI('H00922', from, today, tradingCal)),
+    // 中证整个接口挂掉时不再直接报「运行异常」：先记下原因，交给下面的备用源接手
+    timed('中证指数', fetchCSI('H00922', from, today, tradingCal).catch((e) => ({
+      rows: [], rawCount: 0, err: String(e && e.message || e),
+      removed: { dup: [], weekend: [], newyear: [], ghost: [], offCalendar: [], startFake: [] },
+    }))),
     // 闲钱腿：交银稳利中短债债券A。取不到就让下面沿用 series 里已有的值，
     // 下一轮再抓一次就补上了 —— 绝不能因为净值晚发就中断整轮运行。
     timed('基金净值', fetchFundNAV(env.CASH_FUND || CASH_FUND).catch(() => ({ rows: [], name: null }))),
@@ -737,26 +957,56 @@ async function runDaily(env, { force = false } = {}) {
     timed('价格指数', fetchCSI(PRICE_INDEX, from, today, tradingCal).catch((e) => ({ rows: [], err: String(e && e.message || e) }))),
     timed('国债收益率', fetchCGB10().catch((e) => ({ rows: [], err: String(e && e.message || e) }))),
   ]);
-  const idx = idxRes.rows;
+  let idx = idxRes.rows;
   const removed = idxRes.removed;
   const fakes = [...removed.offCalendar, ...removed.startFake];
   if (fakes.length) log.push(`中证数据里混进了非交易日 ${fakes.join('、')}，已按官方日历剔除`);
+  if (idxRes.err) log.push(`中证接口出错：${idxRes.err.slice(0, 80)}`);
   const bond = bondRes.rows;
+  const series = await timed('读行情', G.readJSON('data/series.json'));
 
-  // ---- 校验 2：今天的数据到位了吗 ----
-  const lastRow = idx[idx.length - 1];
+  // ---- 校验 2：今天的数据到位了吗？中证没有就试备用源 ----
+  let lastRow = idx[idx.length - 1];
+  const csiLast = lastRow ? lastRow.d : null;
+  let backup = null;
   if (!lastRow || lastRow.d !== today) {
+    // 正式数据 = 这次从中证抓到的 + 仓库里本来就是中证给的（没有 s 标记的行）
+    const official = new Map(series.rows.filter((r) => !r.s && r.d >= from).map((r) => [r.d, r.c]));
+    for (const r of idx) official.set(r.d, r.c);
+    backup = await timed('备用源', backupIndexRows({ official, today, tradingCal })
+      .catch((e) => ({ ok: false, source: '雪球', reason: String(e && e.message || e) })));
+    if (backup.ok) {
+      // 中证这次一行都没给时，用仓库里的正式行情垫底，均线和各项校验才有足够的天数
+      const base = idx.length ? idx
+        : series.rows.filter((r) => !r.s && r.d >= from).map((r) => ({ d: r.d, c: r.c, pct: null }));
+      idx = base.filter((r) => r.d < backup.rows[0].d).concat(backup.rows);
+      lastRow = idx[idx.length - 1];
+      log.push(`中证官网最新只到 ${csiLast || '无'}，${backup.rows.map((r) => r.d).join('、')} 的收盘取自${backup.source}`
+        + `（与中证正式数据重叠 ${backup.verified.days} 天，最大偏差 ${(backup.verified.maxDiff * 100).toFixed(4)}%）`);
+    } else {
+      log.push(`备用源没用上：${backup.reason}`);
+    }
+  }
+  if (!lastRow || lastRow.d !== today) {
+    const est = await estimateToday(series, today).catch(() => null);
+    const estTxt = est
+      ? `\n按交易所的中证红利价格指数估算（未计分红）：今天 H00922 约 ${est.est.toFixed(0)}，`
+        + `买入线约 ${est.buyAt.toFixed(0)}（${est.est <= est.buyAt ? '已在线下' : `还差 ${((1 - est.buyAt / est.est) * 100).toFixed(2)}%`}）、`
+        + `卖出线约 ${est.sellAt.toFixed(0)}。这只是估算，不记账、不出信号。`
+      : '';
     await bark(env, {
       title: `⚠️ 红利MA30 · ${dayLabel(today, today).md}数据未到`,
-      body: `交易日历显示 ${today} 开市，但中证接口最新数据只到 ${lastRow ? lastRow.d : '无'}。`
-        + `本次未写入。若此刻尚未到 17:00，属正常；若已过 18:00 仍如此，请检查数据源。`,
+      body: `交易日历显示 ${today} 开市，但中证接口最新数据只到 ${csiLast || '无'}`
+        + `${idxRes.err ? `（${idxRes.err.slice(0, 40)}）` : ''}，`
+        + `备用源${backup && backup.reason ? `也没用上：${backup.reason}` : '没有试'}。`
+        + `本次未写入。若此刻尚未到 17:00，属正常；若已过 18:00 仍如此，请检查数据源。${estTxt}`,
       level: 'timeSensitive',
     });
     // 带上时点：一眼能分清是「收盘前跑早了」还是「数据源真的坏了」
     const hh = +beijingStamp().slice(11, 13);
     const why = hh < 17 ? '当前还未到中证发布时间（一般 17:00–18:00），属正常' : '已过通常发布时间，请留意数据源';
-    return { ok: false, today, now: beijingStamp(), latest: lastRow ? lastRow.d : null,
-      reason: `数据未到位，最新 ${lastRow ? lastRow.d : '无'}`, hint: why };
+    return { ok: false, today, now: beijingStamp(), latest: csiLast,
+      reason: `数据未到位，最新 ${csiLast || '无'}`, hint: why, backup: backup ? backup.reason || 'ok' : null };
   }
 
   // ---- ETF 报价 ----
@@ -770,7 +1020,6 @@ async function runDaily(env, { force = false } = {}) {
   }
 
   // ---- 合并进 series ----
-  const series = await timed('读行情', G.readJSON('data/series.json'));
   const bondByDate = new Map(bond.map((b) => [b.d, b.c]));
   // 场外基金的净值通常 20:00 之后才陆续发布，而这一轮跑在 21:00 ——
   // 偶尔会赶上还没出。那样今天的 b 是空的、当天不计息，下一轮重抓 150 天
@@ -781,26 +1030,16 @@ async function runDaily(env, { force = false } = {}) {
   }
   // 闸门的两列：当天没取到就沿用已有的值（下一轮窗口重抓会补上），绝不拿 null 盖掉已有的数
   const pxByDate = new Map((pxRes.rows || []).map((x) => [x.d, x.c]));
+  // 中证的价格指数同样缺了那几天时，用备用源给的价格指数补上（只补缺的，不覆盖中证的）
+  if (backup && backup.ok) for (const x of backup.priceRows) if (!pxByDate.has(x.d)) pxByDate.set(x.d, x.c);
   const yByDate = new Map((cgbRes.rows || []).map((x) => [x.d, x.y]));
   if (!pxByDate.has(today)) log.push(`价格指数 ${PRICE_INDEX} 今天的收盘没取到${pxRes.err ? `（${pxRes.err.slice(0, 60)}）` : ''}，闸门沿用最近一次的值`);
   if (cgbRes.err) log.push(`10 年国债收益率没取到（${cgbRes.err.slice(0, 60)}），闸门沿用最近一次的值`);
-  const known = new Map(series.rows.map((r) => [r.d, r]));
-  const closes = idx.map((r) => r.c);
-  for (let i = 0; i < idx.length; i++) {
-    const r = idx[i];
-    const window = closes.slice(Math.max(0, i - MA_LEN + 1), i + 1);
-    const m = window.length === MA_LEN ? window.reduce((a, b2) => a + b2, 0) / MA_LEN : null;
-    const prev = known.get(r.d);
-    known.set(r.d, {
-      d: r.d,
-      c: +r.c.toFixed(2),
-      m: m != null ? +m.toFixed(2) : (prev ? prev.m : null),
-      b: bondByDate.has(r.d) ? +bondByDate.get(r.d).toFixed(4) : (prev ? prev.b : null),
-      p: pxByDate.has(r.d) ? +pxByDate.get(r.d).toFixed(2) : (prev && prev.p != null ? prev.p : null),
-      y: yByDate.has(r.d) ? +yByDate.get(r.d).toFixed(4) : (prev && prev.y != null ? prev.y : null),
-    });
+  const { rows, recovered } = mergeIndexRows(series.rows, idx, { bondByDate, pxByDate, yByDate });
+  if (recovered.length) {
+    const worst = Math.max(...recovered.map((x) => x.diff));
+    log.push(`中证已补上 ${recovered.map((x) => x.d).join('、')}，换回正式数据（与备用源最大偏差 ${(worst * 100).toFixed(4)}%）`);
   }
-  const rows = [...known.values()].sort((a, b2) => (a.d < b2.d ? -1 : 1));
   series.rows = rows;
   series.updated = today;
 
@@ -884,6 +1123,12 @@ async function runDaily(env, { force = false } = {}) {
 
   // ---- 10 项校验 ----
   const checks = runChecks(idx, removed, today, etf, tier, want, cal.tradingDays, ledger.entries);
+  // 第 2 项：今天的收盘是备用源给的，就把来源和核对结果写进说明
+  if (backup && backup.ok) {
+    const c2 = checks.find((c) => c.id === 2);
+    if (c2) c2.detail = `中证官网最新只到 ${csiLast || '无'}，${backup.rows.map((r) => r.d.slice(5)).join('、')} 的收盘取自${backup.source}`
+      + `（和中证正式数据逐日核对 ${backup.verified.days} 天，最大偏差 ${(backup.verified.maxDiff * 100).toFixed(4)}%）；中证恢复后自动换回`;
+  }
 
   // 10 账本自审：每笔记录的日期都要落在行情序列里、档位要逐笔连得上。
   //    这一项防的是"算得出结果但结果是错的"——比直接报错危险得多。
@@ -961,6 +1206,21 @@ async function runDaily(env, { force = false } = {}) {
       ranAt: beijingStamp(),
     },
     lastExecuted: executed ? { date: executed.date, side: executed.side, tierTo: executed.tierTo } : state.lastExecuted || null,
+    // 今天的指数从哪来：平时是中证；中证停更、用了备用源时写明来源和核对结果。
+    // recovered 只在「这一轮把之前备用源补的日子换回中证正式数据」时才有
+    source: {
+      index: backup && backup.ok ? 'xueqiu' : 'csi',
+      csiLast,
+      ...(backup && backup.ok ? {
+        filled: backup.rows.map((r) => r.d),
+        verifiedDays: backup.verified.days,
+        maxDiffPct: +(backup.verified.maxDiff * 100).toFixed(4),
+      } : {}),
+      ...(recovered.length ? {
+        recovered: recovered.map((x) => x.d),
+        recoveredMaxDiffPct: +(Math.max(...recovered.map((x) => x.diff)) * 100).toFixed(4),
+      } : {}),
+    },
     // 闸门这一天的状态（只有指数层面的数，没有金额）。blocked 只在这一天拦下了买入时才有
     gate: gate ? {
       asof: gate.asof, close: +gate.close.toFixed(2), active: gate.active, dataOk: gate.dataOk, problem: gate.problem,
@@ -1011,6 +1271,8 @@ async function runDaily(env, { force = false } = {}) {
         cleaning: { rawCount: idxRes.rawCount, removed },
         rawTail: idx.slice(-5), etf, ma30: +ma30.toFixed(4), signal: sig,
         tierBefore: state.tier, tierAfter: tier, pending, executed, gate: newState.gate, chase: newState.chase, brake: newState.brake, log,
+        source: newState.source, backup: backup ? { ok: backup.ok, reason: backup.reason || null, verified: backup.verified || null } : null,
+        recovered,
       }, null, 2),
     },
   ];
@@ -1041,7 +1303,8 @@ async function runDaily(env, { force = false } = {}) {
         : chased ? `${today} 买入信号被追高线拦下`
           : braked ? `${today} 买入信号被暴跌刹车拦下`
             : `${today} 无操作`;
-  const sha = await timed('提交', G.commit(files, `chore(daily): ${msg}`));
+  const srcTag = backup && backup.ok ? '（收盘取自雪球，中证停更）' : recovered.length ? '（中证已恢复，换回正式数据）' : '';
+  const sha = await timed('提交', G.commit(files, `chore(daily): ${msg}${srcTag}`));
 
   // ---- 推送 ----
   await timed('推送', pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late, cash }));
@@ -1069,6 +1332,7 @@ async function runDaily(env, { force = false } = {}) {
   // 自己服务器上。金额只走 Bark 推送到本人手机，不经过第三方。
   return {
     ok: true, today, commit: sha.slice(0, 7), tier, pending, executed, checks,
+    source: newState.source,
     push: lastPush ? { ok: lastPush.ok, reason: lastPush.reason } : null,
     backfillErr,
     elapsedMs: Date.now() - t0,
@@ -1109,9 +1373,19 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
   // 检查名现在是肯定句（「ETF 报价和指数是同一天的」），光列名字会被读成
   // 在陈述事实。面板上有 ✕ 图标撑着，推送里没有 —— 必须把「没通过」说出来。
   const failedChecks = checks.filter((c) => !c.ok);
-  const warn = failedChecks.length
-    ? `\n⚠️ 有 ${failedChecks.length} 项检查没通过：${failedChecks.map((c) => c.name).join('、')}`
+  // 今天的收盘要是备用源给的，每条推送都说一句；中证恢复、换回正式数据的那天也说一句
+  const src = newState.source || null;
+  const srcLine = src && src.index === 'xueqiu'
+    ? `\nℹ️ 中证官网数据停在 ${src.csiLast ? dayLabel(src.csiLast, today).md : '—'}，今天的收盘取自雪球`
+      + `（和中证正式数据逐日核对 ${src.verifiedDays} 天一致）；中证恢复后自动换回`
     : '';
+  const recLine = src && src.recovered && src.recovered.length
+    ? `\n✓ 中证已恢复：${src.recovered.map((d) => dayLabel(d, today).md).join('、')}换回正式数据`
+      + `（和备用源最大偏差 ${src.recoveredMaxDiffPct}%）`
+    : '';
+  const warn = (failedChecks.length
+    ? `\n⚠️ 有 ${failedChecks.length} 项检查没通过：${failedChecks.map((c) => c.name).join('、')}`
+    : '') + srcLine + recLine;
   // 上一次没留下推送成功的记录 —— 那多半意味着你漏收过一条通知。
   // 这件事没法由「上一次的推送」告诉你（它就是没发出去），只能由下一次补说。
   // 你不会注意到一条从没来过的通知，所以必须有人主动提起。
@@ -1723,6 +1997,14 @@ export default {
         const r = await keepAlive(ctx, p);
         return json({ ok: !!(r && r.ok), waited: wait, startedAt: started, reason: r && r.reason });
       }
+      /**
+       * 数据源体检：从 Cloudflare 这边试一次中证和备用源（雪球），只读不写、不推送。
+       * 用来确认「中证停更时备用源在线上真的拿得到」—— 本机能访问不代表 Cloudflare 的出口也能。
+       */
+      if (path === '/probe') {
+        if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
+        return json(await keepAlive(ctx, probeSources(env)));
+      }
       if (path === '/remind') {
         if (!env.RUN_TOKEN || token !== env.RUN_TOKEN) return json({ ok: false, error: 'token 不正确' }, 401);
         return json(await keepAlive(ctx, remind(env)));
@@ -1740,7 +2022,7 @@ export default {
         const slot = url.searchParams.get('slot') === 'intraday' ? 'intraday' : 'night';
         return json(await keepAlive(ctx, reboundJob(env, slot, { force: url.searchParams.get('force') === '1' })));
       }
-      return json({ ok: false, error: '未知路径', paths: ['/run', '/remind', '/calendar/refresh', '/rebound', '/ping', '/health'] }, 404);
+      return json({ ok: false, error: '未知路径', paths: ['/run', '/remind', '/calendar/refresh', '/rebound', '/ping', '/probe', '/health'] }, 404);
     } catch (e) {
       await bark(env, {
         title: '❌ 红利MA30 · 运行异常',

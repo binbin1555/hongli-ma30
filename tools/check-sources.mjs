@@ -1,5 +1,5 @@
 /**
- * 数据源体检：三个外部接口都还活着吗、返回的东西还是原来的形状吗。
+ * 数据源体检：外部接口（含中证停更时用的备用源雪球）都还活着吗、返回的东西还是原来的形状吗。
  *
  * 存在的理由：2026-09-10 首次真实运行时，东财 K 线接口悄悄返回 HTTP 520，
  * 股数提示直接失效，而系统只在审计快照里留了一行日志。
@@ -7,7 +7,8 @@
  *
  *   npm run check:sources
  */
-import { fetchETF, fetchCGB10 } from '../worker/src/index.js';
+import { readFileSync } from 'node:fs';
+import { fetchETF, fetchCGB10, xueqiuSession, fetchXueqiu } from '../worker/src/index.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36';
 const pad = (s, n) => String(s).padEnd(n);
@@ -61,6 +62,23 @@ try {
   const last = rows[rows.length - 1];
   ok('10 年国债收益率', `${rows.length} 天，最新 ${last.d} ${last.y}%`);
 } catch (e) { err('10 年国债收益率', e.message); }
+
+// 5) 备用源：雪球（中证官网停更时用）。和仓库里的中证正式数据逐日比一遍
+try {
+  const series = JSON.parse(readFileSync(new URL('../data/series.json', import.meta.url), 'utf8'));
+  const official = new Map(series.rows.filter((r) => !r.s).map((r) => [r.d, r.c]));
+  const cookie = await xueqiuSession();
+  for (const sym of ['CSIH00922', 'SH000922']) {
+    const rows = await fetchXueqiu(sym, 160, cookie);
+    const last = rows[rows.length - 1];
+    if (sym === 'CSIH00922') {
+      let n = 0, mx = 0;
+      for (const r of rows) { const o = official.get(r.d); if (o != null) { n++; mx = Math.max(mx, Math.abs(r.c / o - 1)); } }
+      if (n < 20 || mx > 0.0001) throw new Error(`和中证对不上：重叠 ${n} 天，最大偏差 ${(mx * 100).toFixed(4)}%`);
+      ok('备用源 雪球 全收益', `${rows.length} 行，最新 ${last.d} 收 ${last.c}；和中证重叠 ${n} 天，最大偏差 ${(mx * 100).toFixed(4)}%`);
+    } else ok('备用源 雪球 价格指数', `${rows.length} 行，最新 ${last.d} 收 ${last.c}`);
+  }
+} catch (e) { err('备用源 雪球', e.message); }
 
 console.log(bad === 0 ? '\n  数据源全部正常 ✓' : `\n  有 ${bad} 项异常 ✗`);
 process.exit(bad === 0 ? 0 : 1);

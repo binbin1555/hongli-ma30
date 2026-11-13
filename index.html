@@ -882,6 +882,25 @@ function renderBrake() {
  * 你完全看不出系统其实已经死了。推送也不会来，但「没收到」这件事
  * 人是不会主动察觉的。
  */
+/**
+ * 「设置与数据健康」里的一句来源说明：
+ * 中证官网停更、今天的收盘取自备用源雪球时，说清楚停在哪天、补了哪几天、核对结果；
+ * 中证恢复、把备用源补的日子换回正式数据的那一轮，也说一句。平时什么都不加。
+ */
+function sourceNote(src) {
+  if (!src) return '';
+  const md = (d) => `${+d.slice(5, 7)} 月 ${+d.slice(8, 10)} 日`;
+  let s = '';
+  if (src.index === 'xueqiu') {
+    s += `<br><b>中证官网的数据停在 ${src.csiLast ? md(src.csiLast) : '—'}</b>，`
+      + `${(src.filled || []).map(md).join('、')}的收盘取自备用源雪球（中证红利全收益 CSIH00922）。`
+      + `用之前和中证正式数据逐日核对了 ${src.verifiedDays} 天，最大偏差 ${src.maxDiffPct}%。中证恢复后会自动换回。`;
+  }
+  if (src.recovered && src.recovered.length) {
+    s += `<br>中证已恢复：${src.recovered.map(md).join('、')}已换回正式数据（和备用源最大偏差 ${src.recoveredMaxDiffPct}%）。`;
+  }
+  return s;
+}
 function staleDays() {
   if (!S.cal || !S.cal.length || !S.state.asof) return 0;
   const today = bjToday();
@@ -1668,7 +1687,8 @@ function render() {
 
   // ---- 指数与均线（显示取整；后台计算仍用原值）----
   $('idxClose').textContent = int(i.close);
-  $('idxSub').textContent = `${st.asof} 收盘` + (i.changePct != null ? `　${pct(i.changePct)}` : '');
+  $('idxSub').textContent = `${st.asof} 收盘` + (i.changePct != null ? `　${pct(i.changePct)}` : '')
+    + (st.source && st.source.index === 'xueqiu' ? '　（中证停更，取自备用源雪球）' : '');
   $('maVal').textContent = int(i.ma30);
   const gap = (i.close / i.ma30 - 1) * 100;
   // 四舍五入后是 0.00% 时不能写「高 0.00%」，那是句自相矛盾的话
@@ -2316,7 +2336,7 @@ function renderHealth() {
     sw.hidden = false;
     sw.innerHTML = `<b>数据已经 ${stale} 个交易日没有更新了。</b>`
       + `面板上的指数、仓位、触发点位全部停在 ${S.state.asof}，不是最新的。<br>`
-      + `这通常意味着每日运行没跑成（Cloudflare 的 cron 停了、GitHub 令牌过期、或数据源持续失败）。`
+      + `这通常意味着每日运行没跑成（Cloudflare 的 cron 停了、GitHub 令牌过期），或者中证官网停更、备用源雪球也没拿到数据（这时每晚的推送里会写明原因）。`
       + `在修好之前，<b>不要照这个页面下单</b> —— 信号可能早就变了。`;
   } else sw.hidden = true;
 
@@ -2351,6 +2371,7 @@ function renderHealth() {
     + (push ? `　推送 <b style="color:${push.ok ? 'var(--dn)' : 'var(--up)'}">${push.ok ? '已送达' : '失败'}</b>。` : '')
     + `　行情 ${S.series.rows.length} 个交易日。`
     + `<br>信号源 中证指数 H00922（全收益）／ 闲钱基准 ${S.state.bond?.name || '交银稳利中短债债券A'}（${S.state.bond?.code || '008204'}）累计净值 ／ 交易日历 深交所官方接口 ／ ETF 报价 ${S.state.etf?.code || '—'}。`
+    + sourceNote(S.state.source)
     + '<br>闸门数据 中证红利价格指数 000922（和全收益指数的差就是分红，用来推算股息率）／ 10 年期国债收益率 中债口径（东方财富数据中心）。'
     + '<br>追高线只用 H00922 自己的收盘价（年线 × 1.03），不需要额外数据。'
     + '<br>暴跌刹车同样只用 H00922 的收盘价（最近 20 个交易日的波动率 + 年线），不需要额外数据。'
