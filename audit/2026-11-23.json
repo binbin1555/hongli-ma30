@@ -1,0 +1,196 @@
+{
+  "today": "2026-11-23",
+  "ranAt": "2026-11-23 21:00:42",
+  "checks": [
+    {
+      "id": 1,
+      "name": "这一天确实是交易日",
+      "ok": true,
+      "detail": "2026-11-23 在交易所日历里",
+      "fatal": true
+    },
+    {
+      "id": 2,
+      "name": "当天的中证红利收盘价已经拿到",
+      "ok": true,
+      "detail": "最新数据日期 2026-11-23",
+      "fatal": true
+    },
+    {
+      "id": 3,
+      "name": "行情日期没有乱序，也没有混进非交易日",
+      "ok": true,
+      "detail": "101 行，逐日核对交易所日历一致",
+      "fatal": true
+    },
+    {
+      "id": 4,
+      "name": "没有混进重复抄来的假数据",
+      "ok": true,
+      "detail": "剔除 0 行（非交易日 0／幽灵 0／周末 0／元旦 0／重复 0）",
+      "fatal": true
+    },
+    {
+      "id": 5,
+      "name": "涨跌幅和收盘价能对得上",
+      "ok": true,
+      "detail": "逐行一致",
+      "fatal": true
+    },
+    {
+      "id": 6,
+      "name": "没有异常的单日暴涨暴跌（超过 ±11% 视为数据出错）",
+      "ok": true,
+      "detail": "通过",
+      "fatal": true
+    },
+    {
+      "id": 7,
+      "name": "算均线要的 30 天行情是齐的",
+      "ok": true,
+      "detail": "101 / 30",
+      "fatal": true
+    },
+    {
+      "id": 8,
+      "name": "ETF 报价和指数是同一天的",
+      "ok": true,
+      "detail": "ETF 2026-11-23 vs 指数 2026-11-23",
+      "fatal": false
+    },
+    {
+      "id": 9,
+      "name": "当前仓位和交易记录对得上",
+      "ok": true,
+      "detail": "0 → 0，与账本最后一笔（无记录，应为 0 档）吻合",
+      "fatal": true
+    },
+    {
+      "id": 10,
+      "name": "交易记录前后连得上",
+      "ok": true,
+      "detail": "0 笔全部自洽",
+      "fatal": true
+    },
+    {
+      "id": 11,
+      "name": "闸门要用的数据是新的",
+      "ok": true,
+      "detail": "价格指数 2026-11-23、10 年国债 2026-11-23（1.59%）　股息率 4.31%，利差 2.72%",
+      "fatal": false
+    }
+  ],
+  "timing": {
+    "读日历": 806,
+    "国债收益率": 1548,
+    "基金净值": 1564,
+    "中证指数": 1933,
+    "价格指数": 2078,
+    "读行情": 478,
+    "ETF报价": 2061,
+    "数据就绪": 6613
+  },
+  "cleaning": {
+    "rawCount": 101,
+    "removed": {
+      "dup": [],
+      "weekend": [],
+      "newyear": [],
+      "ghost": [],
+      "offCalendar": [],
+      "startFake": []
+    }
+  },
+  "rawTail": [
+    {
+      "d": "2026-11-17",
+      "c": 12141.55,
+      "pct": -0.37
+    },
+    {
+      "d": "2026-11-18",
+      "c": 12152.46,
+      "pct": 0.09
+    },
+    {
+      "d": "2026-11-19",
+      "c": 12096.72,
+      "pct": -0.46
+    },
+    {
+      "d": "2026-11-20",
+      "c": 12059.91,
+      "pct": -0.3
+    },
+    {
+      "d": "2026-11-23",
+      "c": 11978.18,
+      "pct": -0.68
+    }
+  ],
+  "etf": {
+    "c": 1.357,
+    "d": "2026-11-23",
+    "source": "腾讯",
+    "tried": []
+  },
+  "ma30": 12074.8703,
+  "signal": null,
+  "tierBefore": 0,
+  "tierAfter": 0,
+  "pending": null,
+  "executed": null,
+  "gate": {
+    "asof": "2026-11-23",
+    "close": 11978.18,
+    "active": true,
+    "dataOk": true,
+    "problem": null,
+    "armed": false,
+    "memArmed": false,
+    "below": false,
+    "blocking": false,
+    "ma250": 11880.9,
+    "dy": 0.043099,
+    "y10": 0.015861,
+    "spread": 0.027238,
+    "pDate": "2026-11-23",
+    "yDate": "2026-11-23",
+    "staleP": 0,
+    "staleY": 0,
+    "blocked": null
+  },
+  "chase": {
+    "asof": "2026-11-23",
+    "close": 11978.18,
+    "ma250": 11880.9,
+    "line": 12237.33,
+    "dev": 0.008188,
+    "ok": true,
+    "problem": null,
+    "above": false,
+    "active": true,
+    "blocking": false,
+    "blocked": null
+  },
+  "brake": {
+    "asof": "2026-11-23",
+    "close": 11978.18,
+    "ma250": 11880.9,
+    "vol": 0.100242,
+    "ok": true,
+    "problem": null,
+    "below": false,
+    "hot": false,
+    "active": true,
+    "blocking": false,
+    "blocked": null
+  },
+  "log": [],
+  "source": {
+    "index": "csi",
+    "csiLast": "2026-11-23"
+  },
+  "backup": null,
+  "recovered": []
+}
