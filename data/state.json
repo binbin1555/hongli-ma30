@@ -1,41 +1,42 @@
 {
   "schema": 1,
   "launchDate": "2026-09-10",
-  "asof": "2026-11-24",
-  "lastRun": "2026-11-24 21:00:51",
+  "asof": "2026-11-25",
+  "lastRun": "2026-11-25 21:00:40",
   "tier": 0,
   "pending": null,
   "index": {
     "code": "H00922",
-    "close": 11881.59,
-    "ma30": 12062.79,
-    "ratio": 0.985,
-    "changePct": -0.81,
-    "buyTrigger": 11700.9,
-    "sellTrigger": 12304.04,
-    "pctToBuy": -1.52,
-    "pctToSell": 3.56
+    "close": 11832.44,
+    "ma30": 12046.11,
+    "ratio": 0.9823,
+    "changePct": -0.41,
+    "buyTrigger": 11684.73,
+    "sellTrigger": 12287.03,
+    "pctToBuy": -1.25,
+    "pctToSell": 3.84
   },
   "bond": {
     "code": "008204",
     "name": "交银稳利中短债债券A",
-    "close": 1.2372
+    "close": 1.236
   },
   "etf": {
     "code": "515180",
-    "close": 1.35,
-    "asof": "2026-11-24",
+    "close": 1.345,
+    "asof": "2026-11-25",
     "stale": false
   },
   "checks": {
     "passed": 11,
     "total": 11,
     "failed": [],
-    "ranAt": "2026-11-24 21:00:51"
+    "ranAt": "2026-11-25 21:00:40"
   },
   "consecutiveTradingDays": 0,
   "lastExecuted": null,
-  "push": {
+  "push": null,
+  "prevPush": {
     "ok": true,
     "at": "2026-11-24 21:00:57",
     "elapsedMs": 23835,
@@ -51,48 +52,32 @@
       "推送": 956
     }
   },
-  "prevPush": {
-    "ok": true,
-    "at": "2026-11-23 21:00:48",
-    "elapsedMs": 12242,
-    "steps": {
-      "读日历": 806,
-      "国债收益率": 1548,
-      "基金净值": 1564,
-      "中证指数": 1933,
-      "价格指数": 2078,
-      "读行情": 478,
-      "ETF报价": 2061,
-      "提交": 4629,
-      "推送": 1000
-    }
-  },
   "gate": {
-    "asof": "2026-11-24",
-    "close": 11881.59,
+    "asof": "2026-11-25",
+    "close": 11832.44,
     "active": true,
     "dataOk": true,
     "problem": null,
     "armed": false,
     "memArmed": false,
-    "below": false,
+    "below": true,
     "blocking": false,
-    "ma250": 11880.08,
-    "dy": 0.043099,
-    "y10": 0.015853,
-    "spread": 0.027246,
-    "pDate": "2026-11-23",
-    "yDate": "2026-11-24",
-    "staleP": 1,
+    "ma250": 11878.93,
+    "dy": 0.043939,
+    "y10": 0.015914,
+    "spread": 0.028025,
+    "pDate": "2026-11-25",
+    "yDate": "2026-11-25",
+    "staleP": 0,
     "staleY": 0,
     "blocked": null
   },
   "chase": {
-    "asof": "2026-11-24",
-    "close": 11881.59,
-    "ma250": 11880.08,
-    "line": 12236.48,
-    "dev": 0.000127,
+    "asof": "2026-11-25",
+    "close": 11832.44,
+    "ma250": 11878.93,
+    "line": 12235.3,
+    "dev": -0.003914,
     "ok": true,
     "problem": null,
     "above": false,
@@ -101,13 +86,13 @@
     "blocked": null
   },
   "brake": {
-    "asof": "2026-11-24",
-    "close": 11881.59,
-    "ma250": 11880.08,
-    "vol": 0.101757,
+    "asof": "2026-11-25",
+    "close": 11832.44,
+    "ma250": 11878.93,
+    "vol": 0.102542,
     "ok": true,
     "problem": null,
-    "below": false,
+    "below": true,
     "hot": false,
     "active": true,
     "blocking": false,
@@ -115,6 +100,6 @@
   },
   "source": {
     "index": "csi",
-    "csiLast": "2026-11-24"
+    "csiLast": "2026-11-25"
   }
 }
