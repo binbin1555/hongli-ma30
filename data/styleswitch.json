@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "rule": "510300/510880 前复权 MA120 ±1% 滞回带",
+  "asOfDate": "2026-11-27",
+  "mode": "hongli",
+  "modeLabel": "防守·红利MA30",
+  "switchedToday": false,
+  "prevMode": "hongli",
+  "lastSwitchDate": "2026-07-17",
+  "close300": 3.97,
+  "closeHl": 3.37,
+  "rs": 1.178,
+  "ma120": 1.3804,
+  "upperBand": 1.3942,
+  "lowerBand": 1.3666,
+  "deviationPct": -14.66,
+  "toSwitchPct": 18.35,
+  "distText": "距切进攻上轨(1.3942)还差 +18.35%",
+  "barkLine": "🧭 风格总开关：防守·红利MA30（300/红利 1.1780，偏离MA120 -14.66%，距切进攻上轨(1.3942)还差 +18.35%，仅提醒）",
+  "switchAlert": "",
+  "source": "腾讯前复权"
+}

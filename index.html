@@ -240,6 +240,17 @@ tr:last-child td{border-bottom:none}
   <!-- 每一笔没确认的操作各占一条，上下排开，各有各的按钮 -->
   <div id="banners"></div>
 
+  <!-- 风格总开关（300/红利 MA120 ±1% 滞回带）：纯只读提醒，不干扰下方红利 MA30 任何数据 -->
+  <div class="card cashcard gatecard" id="styleSwitchCard" hidden>
+    <div class="cashhead">
+      <p class="k">🧭 风格总开关 · 300/红利 MA120 ±1%（仅提醒）</p>
+      <span class="cstat" id="styleSwitchStat">–</span>
+    </div>
+    <p class="gateline" id="styleSwitchLine">–</p>
+    <div class="cashgrid" id="styleSwitchGrid"></div>
+    <p class="note" id="styleSwitchFoot" style="margin:8px 0 0"></p>
+  </div>
+
   <div id="nextCard">
     <p class="k">下一次操作</p>
     <p id="nextLine">加载中…</p>
@@ -517,8 +528,10 @@ async function load() {
   const chaselog = await fetch('./data/chaselog.json' + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null);
   // 被暴跌刹车拦下的买入，同样单独记一份
   const brakelog = await fetch('./data/brakelog.json' + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  // 风格总开关（独立只读提醒，404 静默隐藏，不影响红利主页面）
+  const styleSwitch = await fetch('./data/styleswitch.json' + bust).then((r) => (r.ok ? r.json() : null)).catch(() => null);
   S = { state, ledger, series, cal: [], cashcfg, gatelog: gatelog || { entries: [] }, chaselog: chaselog || { entries: [] },
-    brakelog: brakelog || { entries: [] } };
+    brakelog: brakelog || { entries: [] }, styleSwitch };
   // 交易日历用来把「下一个交易日」算成具体日期（周五出信号要到下周一）
   // 次年日历只在临近年底才取：平时它必然 404，白发一次请求还在控制台留红字
   const nearYearEnd = +state.asof.slice(5, 7) >= 11;
@@ -725,6 +738,34 @@ function gateNow() {
 function gateBlockedNow() {
   const g = S.state.gate;
   return g && g.blocked && g.blocked.signalDate === S.state.asof ? g.blocked : null;
+}
+
+function renderStyleSwitch() {
+  const card = $('styleSwitchCard');
+  if (!card) return;
+  const sw = S.styleSwitch;
+  if (!sw || !sw.ok) { card.hidden = true; return; }
+  card.hidden = false;
+  const isTrend = sw.mode === 'trend';
+  card.classList.remove('warn', 'act');
+  if (sw.switchedToday) card.classList.add('act');
+  else if (isTrend) card.classList.add('warn');
+  const stat = $('styleSwitchStat');
+  stat.textContent = (sw.switchedToday ? '刚切换 · ' : '') + (sw.modeLabel || (isTrend ? '进攻·趋势' : '防守·红利MA30'));
+  stat.className = 'cstat ' + (sw.switchedToday ? 'act' : (isTrend ? 'warn' : 'ok'));
+  const devStr = `${Number(sw.deviationPct) >= 0 ? '+' : ''}${Number(sw.deviationPct).toFixed(2)}%`;
+  $('styleSwitchLine').textContent = sw.switchedToday && sw.switchAlert
+    ? sw.switchAlert
+    : `当前宏观风格偏向「${sw.modeLabel}」：510300/510880 比值 ${sw.rs}（偏离 MA120 ${devStr}），${sw.distText}。此开关仅作跨策略提醒，不干扰下方红利信号。`;
+  $('styleSwitchGrid').innerHTML = [
+    ['300/红利 (RS)', `${sw.rs}（${devStr}）`],
+    ['MA120 (±1%轨)', `${sw.ma120}（${sw.lowerBand}~${sw.upperBand}）`],
+    ['上次切换日', sw.lastSwitchDate || '区间内未切换'],
+    ['数据日 / 来源', `${sw.asOfDate || '–'} · ${sw.source || '前复权'}`],
+  ].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+  $('styleSwitchFoot').innerHTML = isTrend
+    ? '当前偏向成长趋势风格 · <a href="https://binbin1555.github.io/trendtrader-board/" target="_blank" rel="noopener">打开趋势动物纪律看板 →</a>'
+    : '当前偏向红利防守风格，可照常按下方红利 MA30 面板执行（<a href="https://binbin1555.github.io/trendtrader-board/" target="_blank" rel="noopener">查看趋势看板</a>）。';
 }
 
 function renderGate() {
@@ -1738,6 +1779,7 @@ function render() {
   renderInputDependent();
 
   renderCash(M);
+  renderStyleSwitch();
   renderGate();
   renderChase();
   renderBrake();

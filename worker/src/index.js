@@ -24,12 +24,15 @@ import {
 import {
   rbStatus, rbNightPush, rbIntradayPush, rbSeriesJSON, rbBeijingDate, rbMd, rbWhy, rbPct, p3, RB_GROUP, RB_GROUP_ACT,
 } from '../../shared/rebound.js';
+import {
+  evaluateStyleSwitch, styleSwitchBarkLine,
+} from '../../shared/styleswitch.js';
 
 // 线上跑的是哪一版代码。由 npm run stamp 按 worker/src/index.js + shared/strategy.js + shared/rebound.js
 // 的内容算出并写回这一行，/health 会把它原样返回。
 // 有了它才能从外面确认「推上去的改动到底部署了没有」——
 // 否则只能去翻 Cloudflare 的构建记录，而构建成功不等于你想要的那版真的在跑。
-const BUILD = '2d588f09a9';
+const BUILD = '1b043c2b56';
 
 const CSI = 'https://www.csindex.com.cn/csindex-home/perf/index-perf';
 const SZSE = 'https://www.szse.cn/api/report/exchange/onepersistenthour/monthList';
@@ -597,6 +600,58 @@ export async function fetchETF(code) {
   return { failed: true, tried };
 }
 
+/**
+ * 风格总开关专用：拉取前复权日收盘价（510300 / 510880，约 320 根），三源依次兜底。
+ * 完全独立于红利 MA30 的不复权行情抓取，绝不互相干扰。
+ */
+async function klineEastmoneyQfq(code, n) {
+  const r = await fetch('https://push2his.eastmoney.com/api/qt/stock/kline/get'
+    + `?secid=${emPrefix(code)}.${code}&fields1=f1,f2,f3&fields2=f51,f53&klt=101&fqt=1&lmt=${n}&end=20500101`,
+  { headers: { 'User-Agent': UA, Referer: 'https://quote.eastmoney.com/' } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const j = await r.json();
+  const a = j && j.data && j.data.klines;
+  if (!Array.isArray(a) || !a.length) throw new Error('返回格式异常');
+  return a.map((s) => { const [d, c] = String(s).split(','); return { d, c: +c }; }).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.d) && x.c > 0);
+}
+async function klineTencentQfq(code, n) {
+  const sym = `${mktPrefix(code)}${code}`;
+  const r = await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${sym},day,,,${n},qfq`, { headers: { 'User-Agent': UA } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const j = await r.json();
+  const node = j && j.data && j.data[sym];
+  const a = node && (node.qfqday || node.day);
+  if (!Array.isArray(a) || !a.length) throw new Error('返回格式异常');
+  return a.map((x) => ({ d: String(x[0]), c: +x[2] })).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.d) && x.c > 0);
+}
+async function fetchQfqCloses(code, n = 320) {
+  const tried = [];
+  for (const [name, fn] of [['东财前复权', klineEastmoneyQfq], ['腾讯前复权', klineTencentQfq]]) {
+    try {
+      const rows = await fn(code, n);
+      if (rows.length >= 125) return { rows, source: name };
+      tried.push(`${name}(仅${rows.length}根)`);
+    } catch (e) {
+      tried.push(`${name}(${e.message})`);
+    }
+  }
+  throw new Error(`${code} 前复权K线获取失败: ${tried.join('、')}`);
+}
+async function computeStyleSwitchSafe(G) {
+  try {
+    const prev = await G.readJSON('data/styleswitch.json', null).catch(() => null);
+    const [r300, rHl] = await Promise.all([fetchQfqCloses('510300', 320), fetchQfqCloses('510880', 320)]);
+    const sw = evaluateStyleSwitch(r300.rows, rHl.rows, prev);
+    if (sw && sw.ok) {
+      sw.source = r300.source === rHl.source ? r300.source : `${r300.source}/${rHl.source}`;
+      return sw;
+    }
+    return prev && prev.ok ? prev : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------- 校验
 
 /**
@@ -849,10 +904,11 @@ async function resendPush(env, G, state, today) {
     calDays: cal ? cal.tradingDays : [],
   });
 
+  const styleSwitch = await G.readJSON('data/styleswitch.json', null).catch(() => null);
   const why = prev && prev.reason ? `（${prev.reason}）` : '';
   lastPush = null;
   await pushDaily(env, {
-    today, newState: state, pending, execDay, plan, etf, cash,
+    today, newState: state, pending, execDay, plan, etf, cash, styleSwitch,
     executed: audit.executed || null,
     checks: audit.checks,
     late: !!(audit.executed && audit.executed.late),
@@ -1296,6 +1352,12 @@ async function runDaily(env, { force = false } = {}) {
     files.push({ path: 'data/brakelog.json', content: JSON.stringify(blog, null, 2) });
   }
 
+  // 风格总开关（300/红利 MA120 ±1%）：完全独立只读提醒，任何异常均静默跳过，绝不干扰红利主账本
+  const styleSwitch = await timed('风格总开关', computeStyleSwitchSafe(G));
+  if (styleSwitch && styleSwitch.ok) {
+    files.push({ path: 'data/styleswitch.json', content: JSON.stringify(styleSwitch, null, 2) });
+  }
+
   const msg = executed
     ? `${today} 成交 ${executed.side === 'BUY' ? '买入' : '卖出'} 至 ${posPct(executed.tierTo)}`
     : pending ? `${today} 出信号 ${pending.side === 'BUY' ? '买入' : '卖出'} → ${execDay || '下一交易日'} 执行`
@@ -1307,7 +1369,7 @@ async function runDaily(env, { force = false } = {}) {
   const sha = await timed('提交', G.commit(files, `chore(daily): ${msg}${srcTag}`));
 
   // ---- 推送 ----
-  await timed('推送', pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late, cash }));
+  await timed('推送', pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late, cash, styleSwitch }));
 
   // 推送结果补记一次：失败时面板上要看得见，否则你不会知道自己漏收了通知。
   // 这次补记失败也不影响主流程 —— 账本已经提交好了。
@@ -1367,7 +1429,7 @@ export function execWording(today, execDay) {
   };
 }
 
-export async function pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late, resent = null, cash = null }) {
+export async function pushDaily(env, { today, newState, pending, execDay, executed, plan, etf, checks, late, resent = null, cash = null, styleSwitch = null }) {
   const i = newState.index;
   const chg = i.changePct != null ? `${i.changePct > 0 ? '+' : ''}${i.changePct}%` : '';
   // 检查名现在是肯定句（「ETF 报价和指数是同一天的」），光列名字会被读成
@@ -1414,6 +1476,8 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
   const bk = newState.brake || null;
   const bkLine = bk ? `\n${brakeLine(bk, today)}` : '';
   const bBlocked = bk && bk.blocked && bk.blocked.signalDate === today ? bk.blocked : null;
+  // 风格总开关（仅提醒，不干扰红利 MA30 买卖决策与标题级别）
+  const swLine = styleSwitchBarkLine(styleSwitch);
 
   if (pending) {
     // 方向以公式实际算出来的为准，不按档位方向假设
@@ -1431,7 +1495,7 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
         + `\n${w.long}`
         + `\n${CLOSE_TIP}`
         + cashBlock(cash, today)
-        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${gLine}${chLine}${bkLine}${doneLine}${warn}${missed}${resentLine}`,
+        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${gLine}${chLine}${bkLine}${swLine}${doneLine}${warn}${missed}${resentLine}`,
       level: 'timeSensitive',
       group: '红利MA30·操作',
     });
@@ -1481,14 +1545,14 @@ export async function pushDaily(env, { today, newState, pending, execDay, execut
       : `\n${NO_EXEC_DATE}${idle}`;
     const body = gBlocked
       ? `${gateBlockedText(gBlocked, execDay, today)}${nextLine}`
-        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${cashTxt}${doneLine}${warn}${missed}${resentLine}`
+        + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${swLine}${cashTxt}${doneLine}${warn}${missed}${resentLine}`
       : cBlocked
         ? `${chaseBlockedText(cBlocked, execDay, today)}${nextLine}`
-          + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${cashTxt}${doneLine}${warn}${missed}${resentLine}`
+          + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${swLine}${cashTxt}${doneLine}${warn}${missed}${resentLine}`
         : bBlocked
           ? `${brakeBlockedText(bBlocked, execDay, today)}${nextLine}`
-            + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${cashTxt}${doneLine}${warn}${missed}${resentLine}`
-          : `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${gLine}${chLine}${bkLine}${cashTxt}${doneLine}${warn}${missed}${resentLine}`;
+            + `\n指数 ${i.close}（${chg}）　MA30 ${i.ma30}${swLine}${cashTxt}${doneLine}${warn}${missed}${resentLine}`
+          : `指数 ${i.close}（${chg}）　MA30 ${i.ma30}\n${dist}${dist2}${nextLine}${gLine}${chLine}${bkLine}${swLine}${cashTxt}${doneLine}${warn}${missed}${resentLine}`;
     await bark(env, {
       title,
       body,
