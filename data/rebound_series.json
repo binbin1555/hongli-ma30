@@ -9,8 +9,13 @@
     "source": "腾讯",
     "tried": [],
     "since": "2026-11-26",
-    "delivered": "2026-11-26",
-    "push": null,
+    "delivered": "2026-11-27",
+    "push": {
+      "ok": true,
+      "at": "2026-11-27 21:05:29",
+      "title": "创业板50 · 11 月 27 日收盘 1.082（+12.8%）· 不用操作",
+      "reason": null
+    },
     "problem": null
   },
   "rows": [
